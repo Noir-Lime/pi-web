@@ -73,6 +73,7 @@ export interface SubsessionReadQuery {
 }
 
 export interface SubsessionToolDeps {
+  stop(parentSessionId: string, sessionId: string, parentSessionFile?: string): Promise<void>;
   send(parentSessionId: string, sessionId: string, message: string, parentSessionFile?: string): Promise<void>;
   spawn(input: SpawnSubsessionInvocation): Promise<SpawnSubsessionResult>;
   list(parentSessionId: string, parentSessionFile?: string): Promise<SubsessionSummary[]>;
@@ -328,5 +329,19 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
     },
   });
 
-  return [spawnTool, listTool, checkTool, readTool, sendTool, yieldTool];
+  const stopTool = defineTool<typeof CheckSubsessionParams, { sessionId: string }>({
+    name: "stop_subsession",
+    label: "Stop subsession",
+    description: "Interrupt a tracked child's current work and clear its queued prompts. Preserves its history and model so send_subsession_message can resume it later. Only stops your own direct child, not its descendants. Does not undo completed tool actions.",
+    parameters: CheckSubsessionParams,
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      await deps.stop(ctx.sessionManager.getSessionId(), params.sessionId, ctx.sessionManager.getSessionFile() ?? undefined);
+      return {
+        content: [{ type: "text", text: `Subsession ${params.sessionId} stopped. History preserved; use send_subsession_message to resume it.` }],
+        details: { sessionId: params.sessionId },
+      };
+    },
+  });
+
+  return [spawnTool, listTool, checkTool, readTool, sendTool, stopTool, yieldTool];
 }

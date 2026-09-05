@@ -1241,6 +1241,7 @@ export class PiSessionService implements SessionRouteService {
       !subsessionsActive ? undefined : {
         spawn: (input) => this.spawnSubsession(input),
         send: (parentSessionId, sessionId, message, parentSessionFile) => this.sendSubsessionMessage(parentSessionId, sessionId, message, parentSessionFile),
+        stop: (parentSessionId, sessionId, parentSessionFile) => this.stopSubsession(parentSessionId, sessionId, parentSessionFile),
         list: (parentSessionId, parentSessionFile) => this.listSubsessions(parentSessionId, parentSessionFile),
         check: (parentSessionId, sessionId, parentSessionFile) => this.checkSubsession(parentSessionId, sessionId, parentSessionFile),
         read: (parentSessionId, sessionId, query, parentSessionFile) => this.readSubsession(parentSessionId, sessionId, query, parentSessionFile),
@@ -1965,6 +1966,11 @@ export class PiSessionService implements SessionRouteService {
     if (text.trim() === "") throw new Error("Subsession message must not be empty");
     const session = await this.openSubsession(parentSessionId, sessionId, parentSessionFile);
     await this.prompt({ id: sessionId, cwd: session.sessionManager.getCwd() }, text, "followUp");
+  }
+
+  async stopSubsession(parentSessionId: string, sessionId: string, parentSessionFile?: string): Promise<void> {
+    const session = await this.openSubsession(parentSessionId, sessionId, parentSessionFile);
+    await this.abort({ id: sessionId, cwd: session.sessionManager.getCwd() });
   }
 
   /** Open a session after verifying it is one of the caller's tracked children. */
