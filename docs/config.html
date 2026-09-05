@@ -886,7 +886,7 @@ PI_CODING_AGENT_SESSION_DIR=/opt/pi-profiles/lab-sessions</code></pre>
               <p>
                 Boolean. Controls whether agents receive the tracked-subsession tools:
                 <code>spawn_subsession</code>, <code>list_subsessions</code>, <code>check_subsession</code>,
-                <code>read_subsession</code>, and <code>yield_to_subsessions</code>. Defaults to <code>true</code> and also
+                <code>read_subsession</code>, <code>send_subsession_message</code>, and <code>yield_to_subsessions</code>. Defaults to <code>true</code> and also
                 requires <code>spawnSessions</code> to be enabled.
               </p>
               <p>
@@ -915,6 +915,9 @@ PI_CODING_AGENT_SESSION_DIR=/opt/pi-profiles/lab-sessions</code></pre>
                 not poll. The notice includes the child's final output when it fits. If that output is too long, PI WEB
                 omits it entirely instead of adding a truncated duplicate to the parent's context and directs the parent
                 to retrieve it with <code>check_subsession</code>.
+              </p>
+              <p>
+                Use <code>send_subsession_message({ sessionId, message })</code> to continue a tracked child's conversation with its history and model preserved. Idle children resume; busy children receive a queued follow-up. Completion notices wake the parent again. Only the verified parent can use this tool for its child.
               </p>
               <p>
                 <code>list_subsessions</code>, <code>check_subsession</code>, and <code>read_subsession</code> never yield

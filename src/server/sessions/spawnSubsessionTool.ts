@@ -73,6 +73,7 @@ export interface SubsessionReadQuery {
 }
 
 export interface SubsessionToolDeps {
+  send(parentSessionId: string, sessionId: string, message: string, parentSessionFile?: string): Promise<void>;
   spawn(input: SpawnSubsessionInvocation): Promise<SpawnSubsessionResult>;
   list(parentSessionId: string, parentSessionFile?: string): Promise<SubsessionSummary[]>;
   check(parentSessionId: string, sessionId: string, parentSessionFile?: string): Promise<SubsessionCheckResult>;
@@ -89,6 +90,10 @@ const SpawnSubsessionParams = Type.Object({
 });
 
 const ListSubsessionsParams = Type.Object({});
+const SendSubsessionMessageParams = Type.Object({
+  sessionId: Type.String({ description: "Tracked child id from spawn_subsession or list_subsessions." }),
+  message: Type.String({ minLength: 1, description: "Follow-up instruction or question for the existing child conversation." }),
+});
 const YieldToSubsessionsParams = Type.Object({});
 
 const CheckSubsessionParams = Type.Object({
@@ -308,5 +313,20 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
     },
   });
 
-  return [spawnTool, listTool, checkTool, readTool, yieldTool];
+  const sendTool = defineTool<typeof SendSubsessionMessageParams, { sessionId: string }>({
+    name: "send_subsession_message",
+    label: "Message subsession",
+    description: "Send a follow-up to an existing tracked child, preserving its conversation and model. Resumes a finished child; queues a follow-up when it is busy. Completion notices wake you again. Returns immediately; use yield_to_subsessions at the join point.",
+    promptSnippet: "send_subsession_message: continue an existing child's conversation by sessionId",
+    parameters: SendSubsessionMessageParams,
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      await deps.send(ctx.sessionManager.getSessionId(), params.sessionId, params.message, ctx.sessionManager.getSessionFile() ?? undefined);
+      return {
+        content: [{ type: "text", text: `Follow-up accepted for subsession ${params.sessionId}. Continue other work, then join with yield_to_subsessions; do not poll.` }],
+        details: { sessionId: params.sessionId },
+      };
+    },
+  });
+
+  return [spawnTool, listTool, checkTool, readTool, sendTool, yieldTool];
 }
