@@ -1262,6 +1262,7 @@ export class PiSessionService implements SessionRouteService {
       this.spawnTargets === undefined ? undefined : (input) => this.spawnSession(input),
       !subsessionsActive ? undefined : {
         spawn: (input) => this.spawnSubsession(input),
+        send: (parentSessionId, sessionId, message, parentSessionFile) => this.sendSubsessionMessage(parentSessionId, sessionId, message, parentSessionFile),
         list: (parentSessionId, parentSessionFile) => this.listSubsessions(parentSessionId, parentSessionFile),
         check: (parentSessionId, sessionId, parentSessionFile) => this.checkSubsession(parentSessionId, sessionId, parentSessionFile),
         read: (parentSessionId, sessionId, query, parentSessionFile) => this.readSubsession(parentSessionId, sessionId, query, parentSessionFile),
@@ -2046,6 +2047,13 @@ export class PiSessionService implements SessionRouteService {
       status: this.subsessionStatus(session),
       ...view,
     };
+  }
+
+  async sendSubsessionMessage(parentSessionId: string, sessionId: string, message: string, parentSessionFile?: string): Promise<void> {
+    const text = requirePromptText(message);
+    if (text.trim() === "") throw new Error("Subsession message must not be empty");
+    const session = await this.openSubsession(parentSessionId, sessionId, parentSessionFile);
+    await this.prompt({ id: sessionId, cwd: session.sessionManager.getCwd() }, text, "followUp");
   }
 
   /** Open a session after verifying it is one of the caller's tracked children. */

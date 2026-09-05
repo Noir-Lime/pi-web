@@ -683,6 +683,9 @@ describe("PiSessionService", () => {
         await new Promise<void>((resolve) => setImmediate(resolve));
         expect(parent.calls.sendCustomMessage).toHaveLength(0);
 
+        await service.sendSubsessionMessage("parent-1", "child-1", "Review the original conclusion", parentFile);
+        expect(originalChild.calls.prompt.at(-1)?.text).toBe("Review the original conclusion");
+        expect(copiedChild.calls.prompt).toHaveLength(0);
         await expect(service.checkSubsession("parent-1", "child-1", parentFile)).resolves.toMatchObject({
           sessionId: "child-1",
           cwd: "/workspace-feature",
@@ -925,6 +928,43 @@ describe("PiSessionService", () => {
 
       expect(open).not.toHaveBeenCalledWith(parentFile);
       await expect(service.listSubsessions("parent-1")).resolves.toEqual([]);
+      await service.dispose();
+    });
+
+    it("resumes the same child and notifies the parent after each follow-up", async () => {
+      const { parent, child, service } = subsessionService({ allowed: true, cwd: "/workspace" });
+      const branch = [{ type: "message", message: { role: "assistant", content: "original conclusion" } }];
+      child.session.sessionManager.getBranch = () => branch;
+      await service.start("/workspace");
+      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "review" });
+      for (let turn = 1; turn <= 2; turn++) {
+        child.session.isStreaming = true;
+        child.emit({ type: "agent_start" });
+        child.session.isStreaming = false;
+        child.emit({ type: "agent_end" });
+        await vi.waitFor(() => { expect(parent.calls.sendCustomMessage).toHaveLength(turn); });
+        if (turn === 1) {
+          await service.sendSubsessionMessage("parent-1", "child-1", "Reconsider the edge case", "/tmp/parent-1.jsonl");
+          expect(child.calls.prompt.at(-1)).toEqual({ text: "Reconsider the edge case", options: undefined });
+          expect(child.session.sessionManager.getBranch()).toBe(branch);
+          await expect(service.listSubsessions("parent-1")).resolves.toHaveLength(1);
+        }
+      }
+      await expect(service.sendSubsessionMessage("someone-else", "child-1", "hello")).rejects.toThrow("not one of your subsessions");
+      await expect(service.sendSubsessionMessage("parent-1", "child-1", "hello", "/tmp/copied-parent.jsonl")).rejects.toThrow("not one of your subsessions");
+      await expect(service.sendSubsessionMessage("parent-1", "child-1", "   ")).rejects.toThrow();
+      expect(child.calls.prompt).toHaveLength(2);
+      await service.dispose();
+    });
+
+    it("queues a follow-up to a busy child without replacing its current task", async () => {
+      const { child, service } = subsessionService({ allowed: true, cwd: "/workspace" });
+      await service.start("/workspace");
+      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "review" });
+      child.session.isStreaming = true;
+      await service.sendSubsessionMessage("parent-1", "child-1", "Then check the tests");
+      expect(child.calls.prompt.at(-1)).toEqual({ text: "Then check the tests", options: { streamingBehavior: "followUp" } });
+      child.session.isStreaming = false;
       await service.dispose();
     });
 

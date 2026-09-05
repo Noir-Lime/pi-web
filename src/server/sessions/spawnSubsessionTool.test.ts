@@ -14,6 +14,7 @@ function ctxFor(sessionId: string, sessionFile: string | undefined, model?: unkn
 
 function tools(deps: Partial<SubsessionToolDeps>) {
   const full: SubsessionToolDeps = {
+    send: deps.send ?? vi.fn(() => Promise.resolve()),
     spawn: deps.spawn ?? vi.fn(() => Promise.resolve({ sessionId: "x", cwd: "/repos/a" })),
     list: deps.list ?? vi.fn(() => Promise.resolve([])),
     check: deps.check ?? vi.fn(() => Promise.resolve({ sessionId: "x", cwd: "/repos/a", status: "idle" as const, finalText: "", messageCount: 0 })),
@@ -27,6 +28,7 @@ function tools(deps: Partial<SubsessionToolDeps>) {
   };
   return {
     spawn: find("spawn_subsession"),
+    send: find("send_subsession_message"),
     list: find("list_subsessions"),
     check: find("check_subsession"),
     read: find("read_subsession"),
@@ -44,6 +46,17 @@ function firstText(content: readonly (TextContent | ImageContent)[]): string {
 }
 
 describe("createSubsessionToolDefinitions", () => {
+  it("sends follow-ups with the live parent identity and propagates rejection", async () => {
+    const send = vi.fn(() => Promise.resolve());
+    const tool = tools({ send }).send;
+    const ctx = ctxFor("parent-1", "/sessions/parent-1.jsonl");
+    const result = await tool.execute("send-1", { sessionId: "child-1", message: "Check your conclusion" }, undefined, undefined, ctx);
+    expect(send).toHaveBeenCalledWith("parent-1", "child-1", "Check your conclusion", "/sessions/parent-1.jsonl");
+    expect(result.details).toEqual({ sessionId: "child-1" });
+    send.mockRejectedValueOnce(new Error("not one of your subsessions"));
+    await expect(tool.execute("send-2", { sessionId: "other", message: "hello" }, undefined, undefined, ctx)).rejects.toThrow("not one of your subsessions");
+  });
+
   it("spawn_subsession forwards parent identity and params from the live context", async () => {
     const spawn = vi.fn(() => Promise.resolve({ sessionId: "child-1", cwd: "/repos/a" }));
     const { spawn: spawnTool } = tools({ spawn });
