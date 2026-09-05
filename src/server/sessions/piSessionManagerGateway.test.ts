@@ -204,6 +204,24 @@ describe("Pi session manager gateway", () => {
     await expect(gateway.readBranch(path)).resolves.toHaveLength(2);
   });
 
+  it("streams large lines and UTF-8 across read boundaries for full and appended snapshots", async () => {
+    const path = await writeNamedSessionFile(join(tempDir, "streaming"), "large.jsonl", { id: "streaming", cwd });
+    const gateway = createPiSessionManagerGateway(piProfileOptions());
+    if (gateway.readBranch === undefined) throw new Error("Expected transcript snapshot reader");
+    // Three-byte characters straddle the fixed-size read buffers.
+    const text = "\u20ac".repeat(100_000);
+    const entry = (id: string, parentId: string) => ({ type: "message", id, parentId, message: { role: "user", content: text } });
+    await appendFile(path, `${JSON.stringify(entry("m1", "root"))}\r\ninvalid\n`);
+    const before = await readFile(path);
+    await expect(gateway.readBranch(path)).resolves.toEqual([entry("m1", "root")]);
+    await expect(readFile(path)).resolves.toEqual(before);
+    await appendFile(path, JSON.stringify(entry("m2", "m1")));
+    await expect(gateway.readBranch(path)).resolves.toEqual([entry("m1", "root"), entry("m2", "m1")]);
+    // Re-open without the memo to cover a full read with no final newline.
+    const fresh = createPiSessionManagerGateway(piProfileOptions());
+    await expect(fresh.readBranch?.(path)).resolves.toEqual([entry("m1", "root"), entry("m2", "m1")]);
+  });
+
   it("serves repeated snapshots of an unchanged file from the memo", async () => {
     const sharedSessionDir = join(tempDir, "memoized-snapshots");
     const path = await writeNamedSessionFile(sharedSessionDir, "memoized.jsonl", { id: "memoized-session", cwd });

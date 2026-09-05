@@ -1,5 +1,6 @@
 import type { Dirent, Stats } from "node:fs";
-import { open, readFile, readdir, stat } from "node:fs/promises";
+import { open, readdir, stat, type FileHandle } from "node:fs/promises";
+import { StringDecoder } from "node:string_decoder";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
@@ -167,7 +168,13 @@ class SettingsAwarePiSessionManagerGateway implements PiSessionManagerGateway {
         return { signature, identity, size: file.size, entries, branch: deriveTranscriptBranch(entries) };
       }
     }
-    const entries = parseTranscriptEntries(await readFile(path, "utf8"));
+    const handle = await open(path, "r");
+    let entries: Record<string, unknown>[];
+    try {
+      entries = await readTranscriptEntries(handle, 0, (await handle.stat()).size, false) ?? [];
+    } finally {
+      await handle.close();
+    }
     return { signature, identity, size: file.size, entries, branch: deriveTranscriptBranch(entries) };
   }
 
@@ -224,39 +231,47 @@ async function readAppendedEntries(path: string, offset: number, size: number, i
     // Read the byte before the offset along with the appended bytes: it must
     // end a line, proving the cached prefix still ends on a line boundary in
     // the file's current content (i.e. this really is a pure append).
-    const length = size - offset + 1;
-    const buffer = Buffer.alloc(length);
-    const { bytesRead } = await handle.read(buffer, 0, length, offset - 1);
-    if (bytesRead !== length) return undefined;
+    const buffer = Buffer.alloc(1);
+    const { bytesRead } = await handle.read(buffer, 0, 1, offset - 1);
+    if (bytesRead !== 1) return undefined;
     if (buffer[0] !== 0x0a) return undefined;
-    const lines = buffer.toString("utf8", 1).split("\n");
-    const appended: Record<string, unknown>[] = [];
-    let firstLine = true;
-    for (const line of lines) {
-      const entry = tryParseEntry(line);
-      if (entry === undefined) {
-        // A first appended line that does not parse means the offset did not
-        // land on a real content boundary after all; later lines may be
-        // skipped the way a full read skips them.
-        if (firstLine && line.trim() !== "") return undefined;
-      } else if (entry["type"] !== "session") {
-        appended.push(entry);
-      }
-      firstLine = false;
-    }
-    return appended;
+    return await readTranscriptEntries(handle, offset, size, true);
   } finally {
     await handle.close();
   }
 }
 
-/** Parse every entry line in transcript `content`, skipping unreadable lines and session headers. */
-function parseTranscriptEntries(content: string): Record<string, unknown>[] {
+/** Decode one line at a time: image-heavy transcripts can exceed V8's string limit. */
+async function readTranscriptEntries(handle: FileHandle, start: number, end: number, validateFirstLine: boolean): Promise<Record<string, unknown>[] | undefined> {
   const entries: Record<string, unknown>[] = [];
-  for (const line of content.split("\n")) {
+  const decoder = new StringDecoder("utf8");
+  const buffer = Buffer.alloc(64 * 1024);
+  let pending = "";
+  let firstLine = true;
+  const parseLine = (line: string): boolean => {
     const entry = tryParseEntry(line);
+    if (validateFirstLine && firstLine && entry === undefined && line.trim() !== "") return false;
     if (entry !== undefined && entry["type"] !== "session") entries.push(entry);
+    firstLine = false;
+    return true;
+  };
+  for (let position = start; position < end;) {
+    const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, end - position), position);
+    if (bytesRead === 0) {
+      if (validateFirstLine) return undefined;
+      break;
+    }
+    position += bytesRead;
+    pending += decoder.write(buffer.subarray(0, bytesRead));
+    let lineStart = 0;
+    let newline: number;
+    while ((newline = pending.indexOf("\n", lineStart)) !== -1) {
+      if (!parseLine(pending.slice(lineStart, newline))) return undefined;
+      lineStart = newline + 1;
+    }
+    pending = pending.slice(lineStart);
   }
+  if (!parseLine(pending + decoder.end())) return undefined;
   return entries;
 }
 
