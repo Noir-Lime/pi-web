@@ -957,6 +957,28 @@ describe("PiSessionService", () => {
       await service.dispose();
     });
 
+    it("stops only an owned child, clears its queue, and preserves it for resuming", async () => {
+      const { parent, child, service } = subsessionService({ allowed: true, cwd: "/workspace" });
+      await service.start("/workspace");
+      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "review" });
+      const branch = child.session.sessionManager.getBranch();
+      child.session.isStreaming = true;
+      await expect(service.stopSubsession("other", "child-1")).rejects.toThrow("not one of your subsessions");
+      await expect(service.stopSubsession("parent-1", "child-1", "/tmp/copied-parent.jsonl")).rejects.toThrow("not one of your subsessions");
+      expect(child.calls.abort).toBe(0);
+      await service.stopSubsession("parent-1", "child-1", "/tmp/parent-1.jsonl");
+      expect(child.calls.abort).toBe(1);
+      expect(child.calls.clearQueue).toBe(1);
+      expect(parent.calls.abort).toBe(0);
+      expect(child.calls.dispose).toBe(0);
+      expect(child.session.sessionManager.getBranch()).toEqual(branch);
+      child.session.isStreaming = false;
+      await service.stopSubsession("parent-1", "child-1");
+      await service.sendSubsessionMessage("parent-1", "child-1", "Continue the review");
+      expect(child.calls.prompt.at(-1)?.text).toBe("Continue the review");
+      await service.dispose();
+    });
+
     it("queues a follow-up to a busy child without replacing its current task", async () => {
       const { child, service } = subsessionService({ allowed: true, cwd: "/workspace" });
       await service.start("/workspace");

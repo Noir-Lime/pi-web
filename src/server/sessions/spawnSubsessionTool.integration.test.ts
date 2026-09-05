@@ -83,6 +83,7 @@ function streamSequence(messages: AssistantMessage[]): StreamFn {
 async function runYieldBatch(subsessions: SubsessionSummary[], includeSentinel = false) {
   const list = vi.fn(() => Promise.resolve(subsessions));
   const deps: SubsessionToolDeps = {
+    stop: () => Promise.resolve(),
     send: vi.fn(() => Promise.resolve()),
     spawn: vi.fn(() => Promise.resolve({ sessionId: "child-1", cwd: "/workspace" })),
     list,

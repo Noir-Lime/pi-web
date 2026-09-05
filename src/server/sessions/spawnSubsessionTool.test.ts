@@ -14,6 +14,7 @@ function ctxFor(sessionId: string, sessionFile: string | undefined, model?: unkn
 
 function tools(deps: Partial<SubsessionToolDeps>) {
   const full: SubsessionToolDeps = {
+    stop: deps.stop ?? vi.fn(() => Promise.resolve()),
     send: deps.send ?? vi.fn(() => Promise.resolve()),
     spawn: deps.spawn ?? vi.fn(() => Promise.resolve({ sessionId: "x", cwd: "/repos/a" })),
     list: deps.list ?? vi.fn(() => Promise.resolve([])),
@@ -29,6 +30,7 @@ function tools(deps: Partial<SubsessionToolDeps>) {
   return {
     spawn: find("spawn_subsession"),
     send: find("send_subsession_message"),
+    stop: find("stop_subsession"),
     list: find("list_subsessions"),
     check: find("check_subsession"),
     read: find("read_subsession"),
@@ -46,6 +48,16 @@ function firstText(content: readonly (TextContent | ImageContent)[]): string {
 }
 
 describe("createSubsessionToolDefinitions", () => {
+  it("stops a child using live parent identity and propagates failures", async () => {
+    const stop = vi.fn(() => Promise.resolve());
+    const tool = tools({ stop }).stop;
+    const ctx = ctxFor("parent-1", "/sessions/parent-1.jsonl");
+    const result = await tool.execute("stop-1", { sessionId: "child-1" }, undefined, undefined, ctx);
+    expect(stop).toHaveBeenCalledWith("parent-1", "child-1", "/sessions/parent-1.jsonl");
+    expect(result.details).toEqual({ sessionId: "child-1" });
+    stop.mockRejectedValueOnce(new Error("abort failed"));
+    await expect(tool.execute("stop-2", { sessionId: "child-1" }, undefined, undefined, ctx)).rejects.toThrow("abort failed");
+  });
   it("sends follow-ups with the live parent identity and propagates rejection", async () => {
     const send = vi.fn(() => Promise.resolve());
     const tool = tools({ send }).send;
