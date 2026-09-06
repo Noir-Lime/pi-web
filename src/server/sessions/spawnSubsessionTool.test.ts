@@ -14,6 +14,7 @@ function ctxFor(sessionId: string, sessionFile: string | undefined, model?: unkn
 
 function tools(deps: Partial<SubsessionToolDeps>) {
   const full: SubsessionToolDeps = {
+    sendParent: deps.sendParent ?? vi.fn(() => Promise.resolve()),
     stop: deps.stop ?? vi.fn(() => Promise.resolve()),
     send: deps.send ?? vi.fn(() => Promise.resolve()),
     spawn: deps.spawn ?? vi.fn(() => Promise.resolve({ sessionId: "x", cwd: "/repos/a" })),
@@ -30,6 +31,7 @@ function tools(deps: Partial<SubsessionToolDeps>) {
   return {
     spawn: find("spawn_subsession"),
     send: find("send_subsession_message"),
+    sendParent: find("send_parent_message"),
     stop: find("stop_subsession"),
     list: find("list_subsessions"),
     check: find("check_subsession"),
@@ -48,6 +50,18 @@ function firstText(content: readonly (TextContent | ImageContent)[]): string {
 }
 
 describe("createSubsessionToolDefinitions", () => {
+  it("messages the parent without terminating the child and forwards its identity", async () => {
+    const sendParent = vi.fn(() => Promise.resolve());
+    const tool = tools({ sendParent }).sendParent;
+    const ctx = ctxFor("child-1", "/sessions/child-1.jsonl");
+    const result = await tool.execute("parent-1", { message: "Progress" }, undefined, undefined, ctx);
+    expect(sendParent).toHaveBeenCalledWith("child-1", "Progress", "/sessions/child-1.jsonl", "queue");
+    expect(result).not.toHaveProperty("terminate");
+    await tool.execute("parent-2", { message: "Question", mode: "steer" }, undefined, undefined, ctx);
+    expect(sendParent).toHaveBeenLastCalledWith("child-1", "Question", "/sessions/child-1.jsonl", "steer");
+    sendParent.mockRejectedValueOnce(new Error("no verified parent"));
+    await expect(tool.execute("parent-3", { message: "Question" }, undefined, undefined, ctx)).rejects.toThrow("no verified parent");
+  });
   it("stops a child using live parent identity and propagates failures", async () => {
     const stop = vi.fn(() => Promise.resolve());
     const tool = tools({ stop }).stop;

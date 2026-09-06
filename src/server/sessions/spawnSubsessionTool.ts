@@ -73,6 +73,7 @@ export interface SubsessionReadQuery {
 }
 
 export interface SubsessionToolDeps {
+  sendParent(childSessionId: string, message: string, childSessionFile?: string, mode?: "queue" | "steer"): Promise<void>;
   stop(parentSessionId: string, sessionId: string, parentSessionFile?: string): Promise<void>;
   send(parentSessionId: string, sessionId: string, message: string, parentSessionFile?: string, mode?: "queue" | "steer"): Promise<void>;
   spawn(input: SpawnSubsessionInvocation): Promise<SpawnSubsessionResult>;
@@ -91,6 +92,12 @@ const SpawnSubsessionParams = Type.Object({
 });
 
 const ListSubsessionsParams = Type.Object({});
+const SendParentMessageParams = Type.Object({
+  message: Type.String({ minLength: 1, description: "Progress update, question, or finding for your parent session." }),
+  mode: Type.Optional(Type.Union([Type.Literal("queue"), Type.Literal("steer")], {
+    description: "queue (default): follow up after the parent's current work. steer: redirect at its next steering boundary. An idle parent is woken.",
+  })),
+});
 const SendSubsessionMessageParams = Type.Object({
   sessionId: Type.String({ description: "Tracked child id from spawn_subsession or list_subsessions." }),
   message: Type.String({ minLength: 1, description: "Follow-up instruction or question for the existing child conversation." }),
@@ -347,5 +354,19 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
     },
   });
 
-  return [spawnTool, listTool, checkTool, readTool, sendTool, stopTool, yieldTool];
+  const sendParentTool = defineTool<typeof SendParentMessageParams, { sent: boolean }>({
+    name: "send_parent_message",
+    label: "Message parent",
+    description: "Send a progress update, question, or finding to your verified parent without ending your run or waiting for a reply. The parent is selected automatically. Use queue (default) or steer; an idle parent is woken. Only available to tracked children. Continue working after this tool returns.",
+    parameters: SendParentMessageParams,
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      await deps.sendParent(ctx.sessionManager.getSessionId(), params.message, ctx.sessionManager.getSessionFile() ?? undefined, params.mode ?? "queue");
+      return {
+        content: [{ type: "text", text: "Message accepted for your parent. Your run continues; this does not wait for a reply." }],
+        details: { sent: true },
+      };
+    },
+  });
+
+  return [spawnTool, listTool, checkTool, readTool, sendTool, stopTool, sendParentTool, yieldTool];
 }

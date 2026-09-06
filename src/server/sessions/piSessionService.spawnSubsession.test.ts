@@ -994,6 +994,39 @@ describe("PiSessionService", () => {
       await service.dispose();
     });
 
+    it.each(["queue", "steer"] as const)("sends %s updates to the parent without ending the child", async (mode) => {
+      const { parent, child, service } = subsessionService({ allowed: true, cwd: "/workspace" });
+      await service.start("/workspace");
+      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "review" });
+      child.session.isStreaming = true;
+      await service.sendParentMessage("child-1", "Found a problem", "/tmp/child-1.jsonl", mode);
+      expect(parent.calls.sendCustomMessage.at(-1)).toMatchObject({
+        message: { customType: "subsession.message", content: "Message from subsession child-1:\n\nFound a problem", display: true, details: { sessionId: "child-1" } },
+        options: { triggerTurn: true, deliverAs: mode === "steer" ? "steer" : "followUp" },
+      });
+      expect(child.session.isStreaming).toBe(true);
+      expect(child.calls.abort).toBe(0);
+      await expect(service.sendParentMessage("parent-1", "Hi")).rejects.toThrow("no verified parent");
+      await expect(service.sendParentMessage("child-1", "Hi", "/tmp/copied-child.jsonl")).rejects.toThrow("active tracked subsession");
+      await expect(service.sendParentMessage("child-1", "   ")).rejects.toThrow("must not be empty");
+      parent.session.isCompacting = true;
+      await expect(service.sendParentMessage("child-1", "Hi")).rejects.toThrow("compacting");
+      parent.session.isCompacting = false;
+      child.session.isStreaming = false;
+      await service.dispose();
+    });
+
+    it("does not wait for an idle parent's response before returning to the child", async () => {
+      const { parent, service } = subsessionService({ allowed: true, cwd: "/workspace" });
+      await service.start("/workspace");
+      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "review" });
+      let finish: () => void = () => { throw new Error("Parent did not start"); };
+      parent.session.sendCustomMessage = () => new Promise<void>((resolve) => { finish = resolve; });
+      await service.sendParentMessage("child-1", "Update");
+      finish();
+      await service.dispose();
+    });
+
     it("queues a follow-up to a busy child without replacing its current task", async () => {
       const { child, service } = subsessionService({ allowed: true, cwd: "/workspace" });
       await service.start("/workspace");

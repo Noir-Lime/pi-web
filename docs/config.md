@@ -349,11 +349,13 @@ This mirrors the Pi CLI: with `defaultProjectTrust: "never"`, an opened workspac
 
 `spawnSessions` controls whether agents receive the `spawn_session` tool. It defaults to `true`; set it to `false` if you do not want an agent to start independent PI WEB sessions.
 
-`subsessions` controls whether agents receive the tracked-subsession tools: `spawn_subsession`, `list_subsessions`, `check_subsession`, `read_subsession`, `send_subsession_message`, `stop_subsession`, and `yield_to_subsessions`. It defaults to `true` and also requires `spawnSessions` to be enabled.
+`subsessions` controls whether agents receive the tracked-subsession tools: `spawn_subsession`, `list_subsessions`, `check_subsession`, `read_subsession`, `send_subsession_message`, `send_parent_message`, `stop_subsession`, and `yield_to_subsessions`. It defaults to `true` and also requires `spawnSessions` to be enabled.
 
 Use `send_subsession_message({ sessionId, message, mode })` to continue a tracked child's existing conversation. The optional `mode` is `queue` (default) to deliver after current work, or `steer` to redirect current work at the next agent steering boundary. Steering does not forcibly cancel a running tool. Either mode resumes an idle child; messages during compaction wait until it finishes. The child retains its history and model. Completion notices wake the parent again. Only the child's verified parent can send messages through this tool.
 
 Use `stop_subsession({ sessionId })` to interrupt a direct child's current work and clear queued prompts. The child's history and model are preserved for a later follow-up. This uses the same abort operation as the UI; it does not undo completed actions or stop descendants. Only the verified parent can stop a child.
+
+A tracked child can call `send_parent_message({ message, mode })` without ending its run or waiting for a reply. The parent is resolved from the verified session link, not supplied by the model. `queue` (default) follows the parent's current work; `steer` redirects at a steering boundary. An idle parent is woken. Messages are displayed as child-authored `subsession.message` entries, not human prompts or completion notices. If the parent is compacting or navigating history, delivery is rejected for retry. Later asynchronous delivery failures are reported on the child session.
 
 Tracked subsessions are join-oriented. Calling `spawn_subsession` returns immediately, so the parent can continue independent work while the child runs. Work whose result the parent does not need to join belongs in the fire-and-forget `spawn_session` tool instead.
 
