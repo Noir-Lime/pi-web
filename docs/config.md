@@ -351,7 +351,7 @@ This mirrors the Pi CLI: with `defaultProjectTrust: "never"`, an opened workspac
 
 `subsessions` controls whether agents receive the tracked-subsession tools: `spawn_subsession`, `list_subsessions`, `check_subsession`, `read_subsession`, `send_subsession_message`, `stop_subsession`, and `yield_to_subsessions`. It defaults to `true` and also requires `spawnSessions` to be enabled.
 
-Use `send_subsession_message({ sessionId, message })` to continue a tracked child's existing conversation. The child retains its history and model. An idle child resumes immediately; a busy child receives a queued follow-up after its current work. Completion notices wake the parent again. Only the child's verified parent can send messages through this tool.
+Use `send_subsession_message({ sessionId, message, mode })` to continue a tracked child's existing conversation. The optional `mode` is `queue` (default) to deliver after current work, or `steer` to redirect current work at the next agent steering boundary. Steering does not forcibly cancel a running tool. Either mode resumes an idle child; messages during compaction wait until it finishes. The child retains its history and model. Completion notices wake the parent again. Only the child's verified parent can send messages through this tool.
 
 Use `stop_subsession({ sessionId })` to interrupt a direct child's current work and clear queued prompts. The child's history and model are preserved for a later follow-up. This uses the same abort operation as the UI; it does not undo completed actions or stop descendants. Only the verified parent can stop a child.
 

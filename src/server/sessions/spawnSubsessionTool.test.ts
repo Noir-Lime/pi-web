@@ -63,7 +63,9 @@ describe("createSubsessionToolDefinitions", () => {
     const tool = tools({ send }).send;
     const ctx = ctxFor("parent-1", "/sessions/parent-1.jsonl");
     const result = await tool.execute("send-1", { sessionId: "child-1", message: "Check your conclusion" }, undefined, undefined, ctx);
-    expect(send).toHaveBeenCalledWith("parent-1", "child-1", "Check your conclusion", "/sessions/parent-1.jsonl");
+    expect(send).toHaveBeenCalledWith("parent-1", "child-1", "Check your conclusion", "/sessions/parent-1.jsonl", "queue");
+    await tool.execute("steer-1", { sessionId: "child-1", message: "Change direction", mode: "steer" }, undefined, undefined, ctx);
+    expect(send).toHaveBeenLastCalledWith("parent-1", "child-1", "Change direction", "/sessions/parent-1.jsonl", "steer");
     expect(result.details).toEqual({ sessionId: "child-1" });
     send.mockRejectedValueOnce(new Error("not one of your subsessions"));
     await expect(tool.execute("send-2", { sessionId: "other", message: "hello" }, undefined, undefined, ctx)).rejects.toThrow("not one of your subsessions");

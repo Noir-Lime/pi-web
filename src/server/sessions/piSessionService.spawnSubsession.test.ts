@@ -979,6 +979,21 @@ describe("PiSessionService", () => {
       await service.dispose();
     });
 
+    it.each(["queue", "steer"] as const)("delivers explicit %s mode to busy children and resumes idle children", async (mode) => {
+      const { child, service } = subsessionService({ allowed: true, cwd: "/workspace" });
+      await service.start("/workspace");
+      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "review" });
+      child.session.isStreaming = true;
+      await service.sendSubsessionMessage("parent-1", "child-1", "Check the tests", "/tmp/parent-1.jsonl", mode);
+      expect(child.calls.prompt.at(-1)).toEqual({ text: "Check the tests", options: { streamingBehavior: mode === "steer" ? "steer" : "followUp" } });
+      await expect(service.sendSubsessionMessage("parent-1", "child-1", "Invalid", undefined, "invalid")).rejects.toThrow("mode must be");
+      await expect(service.sendSubsessionMessage("other", "child-1", "Change direction", undefined, mode)).rejects.toThrow("not one of your subsessions");
+      child.session.isStreaming = false;
+      await service.sendSubsessionMessage("parent-1", "child-1", "Resume", undefined, mode);
+      expect(child.calls.prompt.at(-1)).toEqual({ text: "Resume", options: undefined });
+      await service.dispose();
+    });
+
     it("queues a follow-up to a busy child without replacing its current task", async () => {
       const { child, service } = subsessionService({ allowed: true, cwd: "/workspace" });
       await service.start("/workspace");
