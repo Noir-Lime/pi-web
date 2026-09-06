@@ -74,7 +74,7 @@ export interface SubsessionReadQuery {
 
 export interface SubsessionToolDeps {
   stop(parentSessionId: string, sessionId: string, parentSessionFile?: string): Promise<void>;
-  send(parentSessionId: string, sessionId: string, message: string, parentSessionFile?: string): Promise<void>;
+  send(parentSessionId: string, sessionId: string, message: string, parentSessionFile?: string, mode?: "queue" | "steer"): Promise<void>;
   spawn(input: SpawnSubsessionInvocation): Promise<SpawnSubsessionResult>;
   list(parentSessionId: string, parentSessionFile?: string): Promise<SubsessionSummary[]>;
   check(parentSessionId: string, sessionId: string, parentSessionFile?: string): Promise<SubsessionCheckResult>;
@@ -94,6 +94,9 @@ const ListSubsessionsParams = Type.Object({});
 const SendSubsessionMessageParams = Type.Object({
   sessionId: Type.String({ description: "Tracked child id from spawn_subsession or list_subsessions." }),
   message: Type.String({ minLength: 1, description: "Follow-up instruction or question for the existing child conversation." }),
+  mode: Type.Optional(Type.Union([Type.Literal("queue"), Type.Literal("steer")], {
+    description: "queue (default): deliver after current work finishes. steer: redirect current work at the next agent steering boundary, without forcibly cancelling a running tool. Either mode resumes an idle child.",
+  })),
 });
 const YieldToSubsessionsParams = Type.Object({});
 
@@ -317,13 +320,14 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
   const sendTool = defineTool<typeof SendSubsessionMessageParams, { sessionId: string }>({
     name: "send_subsession_message",
     label: "Message subsession",
-    description: "Send a follow-up to an existing tracked child, preserving its conversation and model. Resumes a finished child; queues a follow-up when it is busy. Completion notices wake you again. Returns immediately; use yield_to_subsessions at the join point.",
+    description: "Send a message to an existing tracked child, preserving its conversation and model. Choose queue (default) for a follow-up after current work, or steer to redirect current work at the next steering boundary. Either resumes an idle child. Completion notices wake you again; use yield_to_subsessions at the join point.",
     promptSnippet: "send_subsession_message: continue an existing child's conversation by sessionId",
     parameters: SendSubsessionMessageParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      await deps.send(ctx.sessionManager.getSessionId(), params.sessionId, params.message, ctx.sessionManager.getSessionFile() ?? undefined);
+      const mode = params.mode ?? "queue";
+      await deps.send(ctx.sessionManager.getSessionId(), params.sessionId, params.message, ctx.sessionManager.getSessionFile() ?? undefined, mode);
       return {
-        content: [{ type: "text", text: `Follow-up accepted for subsession ${params.sessionId}. Continue other work, then join with yield_to_subsessions; do not poll.` }],
+        content: [{ type: "text", text: `Message accepted for subsession ${params.sessionId} (mode: ${mode}). Continue other work, then join with yield_to_subsessions; do not poll.` }],
         details: { sessionId: params.sessionId },
       };
     },

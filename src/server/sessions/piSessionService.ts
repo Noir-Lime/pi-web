@@ -1262,7 +1262,7 @@ export class PiSessionService implements SessionRouteService {
       this.spawnTargets === undefined ? undefined : (input) => this.spawnSession(input),
       !subsessionsActive ? undefined : {
         spawn: (input) => this.spawnSubsession(input),
-        send: (parentSessionId, sessionId, message, parentSessionFile) => this.sendSubsessionMessage(parentSessionId, sessionId, message, parentSessionFile),
+        send: (parentSessionId, sessionId, message, parentSessionFile, mode) => this.sendSubsessionMessage(parentSessionId, sessionId, message, parentSessionFile, mode),
         stop: (parentSessionId, sessionId, parentSessionFile) => this.stopSubsession(parentSessionId, sessionId, parentSessionFile),
         list: (parentSessionId, parentSessionFile) => this.listSubsessions(parentSessionId, parentSessionFile),
         check: (parentSessionId, sessionId, parentSessionFile) => this.checkSubsession(parentSessionId, sessionId, parentSessionFile),
@@ -2050,11 +2050,12 @@ export class PiSessionService implements SessionRouteService {
     };
   }
 
-  async sendSubsessionMessage(parentSessionId: string, sessionId: string, message: string, parentSessionFile?: string): Promise<void> {
+  async sendSubsessionMessage(parentSessionId: string, sessionId: string, message: string, parentSessionFile?: string, mode: unknown = "queue"): Promise<void> {
+    if (mode !== "queue" && mode !== "steer") throw new Error('Subsession message mode must be "queue" or "steer"');
     const text = requirePromptText(message);
     if (text.trim() === "") throw new Error("Subsession message must not be empty");
     const session = await this.openSubsession(parentSessionId, sessionId, parentSessionFile);
-    await this.prompt({ id: sessionId, cwd: session.sessionManager.getCwd() }, text, "followUp");
+    await this.prompt({ id: sessionId, cwd: session.sessionManager.getCwd() }, text, mode === "steer" ? "steer" : "followUp");
   }
 
   async stopSubsession(parentSessionId: string, sessionId: string, parentSessionFile?: string): Promise<void> {
