@@ -1263,6 +1263,7 @@ export class PiSessionService implements SessionRouteService {
       !subsessionsActive ? undefined : {
         spawn: (input) => this.spawnSubsession(input),
         send: (parentSessionId, sessionId, message, parentSessionFile, mode) => this.sendSubsessionMessage(parentSessionId, sessionId, message, parentSessionFile, mode),
+        sendParent: (childSessionId, message, childSessionFile, mode) => this.sendParentMessage(childSessionId, message, childSessionFile, mode),
         stop: (parentSessionId, sessionId, parentSessionFile) => this.stopSubsession(parentSessionId, sessionId, parentSessionFile),
         list: (parentSessionId, parentSessionFile) => this.listSubsessions(parentSessionId, parentSessionFile),
         check: (parentSessionId, sessionId, parentSessionFile) => this.checkSubsession(parentSessionId, sessionId, parentSessionFile),
@@ -2056,6 +2057,31 @@ export class PiSessionService implements SessionRouteService {
     if (text.trim() === "") throw new Error("Subsession message must not be empty");
     const session = await this.openSubsession(parentSessionId, sessionId, parentSessionFile);
     await this.prompt({ id: sessionId, cwd: session.sessionManager.getCwd() }, text, mode === "steer" ? "steer" : "followUp");
+  }
+
+  async sendParentMessage(childSessionId: string, message: string, childSessionFile?: string, mode: unknown = "queue"): Promise<void> {
+    if (mode !== "queue" && mode !== "steer") throw new Error('Parent message mode must be "queue" or "steer"');
+    const text = requirePromptText(message);
+    if (text.trim() === "") throw new Error("Parent message must not be empty");
+    const child = this.active.get(childSessionId)?.runtime.session;
+    if (child === undefined || (childSessionFile !== undefined && !sessionFileMatches(child, childSessionFile))) {
+      throw new Error("Only an active tracked subsession can message its parent");
+    }
+    const link = this.subsessionLinkForActiveChild(child);
+    if (link === undefined) throw new Error("This session has no verified parent");
+    const parent = await this.getOrOpenParentForSubsession(link.parentSessionId, childSessionId);
+    this.assertTreeNavigationInactive(parent, "receive a child message");
+    if (parent.isCompacting) throw new Error("Parent is compacting; retry the message after compaction finishes");
+    // Waking an idle parent returns its entire run promise. Do not hold the child
+    // tool open: the parent may need to send instructions back to this child.
+    void this.runSessionEntryMutation(parent, "receive a child message", () => parent.sendCustomMessage(
+      { customType: "subsession.message", content: `Message from subsession ${childSessionId}:\n\n${text}`, display: true, details: { sessionId: childSessionId } },
+      { triggerTurn: true, deliverAs: mode === "steer" ? "steer" : "followUp" },
+    )).catch((error: unknown) => {
+      this.logSubsessionNotificationFailure(link.parentSessionId, childSessionId, error);
+      this.events.publish(childSessionId, { type: "session.error", message: `Parent message delivery failed: ${error instanceof Error ? error.message : String(error)}` });
+    });
+    this.publishStatus(parent);
   }
 
   async stopSubsession(parentSessionId: string, sessionId: string, parentSessionFile?: string): Promise<void> {
