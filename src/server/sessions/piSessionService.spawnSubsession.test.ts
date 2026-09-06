@@ -985,7 +985,7 @@ describe("PiSessionService", () => {
       await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "review" });
       child.session.isStreaming = true;
       await service.sendSubsessionMessage("parent-1", "child-1", "Check the tests", "/tmp/parent-1.jsonl", mode);
-      expect(child.calls.prompt.at(-1)).toEqual({ text: "Check the tests", options: { streamingBehavior: mode === "steer" ? "steer" : "followUp" } });
+      expect(child.calls.prompt.at(-1)).toEqual({ text: "Check the tests", options: { streamingBehavior: "steer" } });
       await expect(service.sendSubsessionMessage("parent-1", "child-1", "Invalid", undefined, "invalid")).rejects.toThrow("mode must be");
       await expect(service.sendSubsessionMessage("other", "child-1", "Change direction", undefined, mode)).rejects.toThrow("not one of your subsessions");
       child.session.isStreaming = false;
@@ -1002,7 +1002,7 @@ describe("PiSessionService", () => {
       await service.sendParentMessage("child-1", "Found a problem", "/tmp/child-1.jsonl", mode);
       expect(parent.calls.sendCustomMessage.at(-1)).toMatchObject({
         message: { customType: "subsession.message", content: "Message from subsession child-1:\n\nFound a problem", display: true, details: { sessionId: "child-1" } },
-        options: { triggerTurn: true, deliverAs: mode === "steer" ? "steer" : "followUp" },
+        options: { triggerTurn: true, deliverAs: "steer" },
       });
       expect(child.session.isStreaming).toBe(true);
       expect(child.calls.abort).toBe(0);
@@ -1033,7 +1033,7 @@ describe("PiSessionService", () => {
       await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "review" });
       child.session.isStreaming = true;
       await service.sendSubsessionMessage("parent-1", "child-1", "Then check the tests");
-      expect(child.calls.prompt.at(-1)).toEqual({ text: "Then check the tests", options: { streamingBehavior: "followUp" } });
+      expect(child.calls.prompt.at(-1)).toEqual({ text: "Then check the tests", options: { streamingBehavior: "steer" } });
       child.session.isStreaming = false;
       await service.dispose();
     });

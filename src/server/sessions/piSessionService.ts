@@ -2051,15 +2051,15 @@ export class PiSessionService implements SessionRouteService {
     };
   }
 
-  async sendSubsessionMessage(parentSessionId: string, sessionId: string, message: string, parentSessionFile?: string, mode: unknown = "queue"): Promise<void> {
+  async sendSubsessionMessage(parentSessionId: string, sessionId: string, message: string, parentSessionFile?: string, mode: unknown = "steer"): Promise<void> {
     if (mode !== "queue" && mode !== "steer") throw new Error('Subsession message mode must be "queue" or "steer"');
     const text = requirePromptText(message);
     if (text.trim() === "") throw new Error("Subsession message must not be empty");
     const session = await this.openSubsession(parentSessionId, sessionId, parentSessionFile);
-    await this.prompt({ id: sessionId, cwd: session.sessionManager.getCwd() }, text, mode === "steer" ? "steer" : "followUp");
+    await this.prompt({ id: sessionId, cwd: session.sessionManager.getCwd() }, text, "steer");
   }
 
-  async sendParentMessage(childSessionId: string, message: string, childSessionFile?: string, mode: unknown = "queue"): Promise<void> {
+  async sendParentMessage(childSessionId: string, message: string, childSessionFile?: string, mode: unknown = "steer"): Promise<void> {
     if (mode !== "queue" && mode !== "steer") throw new Error('Parent message mode must be "queue" or "steer"');
     const text = requirePromptText(message);
     if (text.trim() === "") throw new Error("Parent message must not be empty");
@@ -2076,7 +2076,7 @@ export class PiSessionService implements SessionRouteService {
     // tool open: the parent may need to send instructions back to this child.
     void this.runSessionEntryMutation(parent, "receive a child message", () => parent.sendCustomMessage(
       { customType: "subsession.message", content: `Message from subsession ${childSessionId}:\n\n${text}`, display: true, details: { sessionId: childSessionId } },
-      { triggerTurn: true, deliverAs: mode === "steer" ? "steer" : "followUp" },
+      { triggerTurn: true, deliverAs: "steer" },
     )).catch((error: unknown) => {
       this.logSubsessionNotificationFailure(link.parentSessionId, childSessionId, error);
       this.events.publish(childSessionId, { type: "session.error", message: `Parent message delivery failed: ${error instanceof Error ? error.message : String(error)}` });

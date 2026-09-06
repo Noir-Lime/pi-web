@@ -81,7 +81,21 @@ describe("PromptEditor folder delivery sends the displayed folder", () => {
     // request come from the same workspace-effective prop.
     expect(attachmentFolderDeliveryLabel(editor.attachmentsFolder)).toBe("Save to project-attachments");
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toEqual(["check this", undefined, [expect.objectContaining({ name: "notes.txt" })], "folder", "project-attachments"]);
+    expect(sent[0]).toEqual(["check this", "steer", [expect.objectContaining({ name: "notes.txt" })], "folder", "project-attachments"]);
+  });
+
+  it.each([
+    { canSteer: false, isCompacting: false },
+    { canSteer: true, isCompacting: false },
+    { canSteer: false, isCompacting: true },
+  ])("always requests steering with state %j", (state) => {
+    const editor = new PromptEditor();
+    Object.assign(editor, state);
+    Reflect.set(editor, "draft", "Change direction");
+    const sent: unknown[][] = [];
+    editor.onSend = (...args: unknown[]) => { sent.push(args); };
+    invokeSend(editor);
+    expect(sent[0]?.[1]).toBe("steer");
   });
 
   it("omits the folder for inline delivery", () => {

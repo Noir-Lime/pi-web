@@ -119,7 +119,7 @@ describe("PromptEditor attachment wiring", () => {
       // the paste is wired to capture, the data URL prefix is stripped, and a failed read does not
       // drop the other attachment.
       expect(onSend).toHaveBeenCalledTimes(1);
-      expect(onSend).toHaveBeenCalledWith("inspect attachments", undefined, [
+      expect(onSend).toHaveBeenCalledWith("inspect attachments", "steer", [
         { kind: "image", mimeType: "image/png", data: "UE5H", name: "shot.png" },
       ], "inline", undefined);
     } finally {
@@ -146,7 +146,7 @@ describe("PromptEditor attachment wiring", () => {
     // onSend receives only the image, proving the remove handler dropped report.pdf while leaving
     // shot.png queued (folder delivery is not forced because no generic file remains).
     expect(onSend).toHaveBeenCalledTimes(1);
-    expect(onSend).toHaveBeenCalledWith("please review", undefined, [
+    expect(onSend).toHaveBeenCalledWith("please review", "steer", [
       { kind: "image", mimeType: "image/png", data: "UE5H", name: "shot.png" },
     ], "inline", undefined);
   });
