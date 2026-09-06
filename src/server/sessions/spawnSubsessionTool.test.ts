@@ -55,9 +55,10 @@ describe("createSubsessionToolDefinitions", () => {
     const tool = tools({ sendParent }).sendParent;
     const ctx = ctxFor("child-1", "/sessions/child-1.jsonl");
     const result = await tool.execute("parent-1", { message: "Progress" }, undefined, undefined, ctx);
-    expect(sendParent).toHaveBeenCalledWith("child-1", "Progress", "/sessions/child-1.jsonl", "queue");
+    expect(sendParent).toHaveBeenCalledWith("child-1", "Progress", "/sessions/child-1.jsonl", "steer");
+    expect(tool.parameters).not.toHaveProperty("properties.mode");
     expect(result).not.toHaveProperty("terminate");
-    await tool.execute("parent-2", { message: "Question", mode: "steer" }, undefined, undefined, ctx);
+    await tool.execute("parent-2", { message: "Question" }, undefined, undefined, ctx);
     expect(sendParent).toHaveBeenLastCalledWith("child-1", "Question", "/sessions/child-1.jsonl", "steer");
     sendParent.mockRejectedValueOnce(new Error("no verified parent"));
     await expect(tool.execute("parent-3", { message: "Question" }, undefined, undefined, ctx)).rejects.toThrow("no verified parent");
@@ -77,8 +78,9 @@ describe("createSubsessionToolDefinitions", () => {
     const tool = tools({ send }).send;
     const ctx = ctxFor("parent-1", "/sessions/parent-1.jsonl");
     const result = await tool.execute("send-1", { sessionId: "child-1", message: "Check your conclusion" }, undefined, undefined, ctx);
-    expect(send).toHaveBeenCalledWith("parent-1", "child-1", "Check your conclusion", "/sessions/parent-1.jsonl", "queue");
-    await tool.execute("steer-1", { sessionId: "child-1", message: "Change direction", mode: "steer" }, undefined, undefined, ctx);
+    expect(send).toHaveBeenCalledWith("parent-1", "child-1", "Check your conclusion", "/sessions/parent-1.jsonl", "steer");
+    expect(tool.parameters).not.toHaveProperty("properties.mode");
+    await tool.execute("steer-1", { sessionId: "child-1", message: "Change direction" }, undefined, undefined, ctx);
     expect(send).toHaveBeenLastCalledWith("parent-1", "child-1", "Change direction", "/sessions/parent-1.jsonl", "steer");
     expect(result.details).toEqual({ sessionId: "child-1" });
     send.mockRejectedValueOnce(new Error("not one of your subsessions"));

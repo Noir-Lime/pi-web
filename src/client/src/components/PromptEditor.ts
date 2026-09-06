@@ -16,7 +16,7 @@ import { clearStagedAttachments, loadStagedAttachments, saveStagedAttachments, t
 import { loadAttachmentDelivery, saveAttachmentDelivery } from "../attachmentPreferences";
 import { createMobilePromptEnterMedia, readPromptEnterPreference, shouldSendPromptOnEnterShortcut, shouldUsePromptEnterShiftShortcut } from "../promptEnterBehavior";
 import { promptEditorStyles, type CompletionItem } from "./shared";
-import { renderAttachIcon, renderSendIcon, renderQueueIcon, renderSteerIcon, renderStopIcon, renderThinkingGauge } from "./promptEditorIcons";
+import { renderAttachIcon, renderSendIcon, renderStopIcon, renderThinkingGauge } from "./promptEditorIcons";
 import { thinkingGauge, thinkingLevelLabel } from "../../../shared/thinkingLevels";
 import "./AutocompleteMenu";
 
@@ -129,8 +129,7 @@ export class PromptEditor extends LitElement {
         </div>
         <div class="actions">
           ${this.renderCompactStatus()}
-          <button class="icon-button send-button" ?disabled=${busy} title=${queuesInput ? "Queue until the current activity finishes" : "Send message"} aria-label=${queuesInput ? "Queue message" : "Send message"} @click=${() => { this.send("followUp"); }}>${queuesInput ? renderQueueIcon() : renderSendIcon()}</button>
-          ${this.canSteer && !this.isCompacting ? html`<button class="icon-button steer-button" ?disabled=${busy} title="Steer the current response before the next model call" aria-label="Steer current response" @click=${() => { this.send("steer"); }}>${renderSteerIcon()}</button>` : null}
+          <button class="icon-button send-button" ?disabled=${busy} title=${queuesInput ? "Steer the current response at the next available boundary" : "Send message"} aria-label="Send message" @click=${() => { this.send(); }}>${renderSendIcon()}</button>
           <button class="icon-button stop-button" ?disabled=${this.disabled || !this.canStop} title=${this.canStop ? "Stop current work and clear queued messages" : "Nothing running"} aria-label="Stop current work" @click=${() => this.onStop?.()}>${renderStopIcon()}</button>
         </div>
       </footer>
@@ -445,7 +444,7 @@ export class PromptEditor extends LitElement {
     if (!shouldSendPromptOnEnterShortcut(shiftKey, this.mobilePromptEnterMedia, readPromptEnterPreference())) {
       return insertNewlineContinueMarkup(view) || insertNewlineAndIndent(view);
     }
-    this.send(this.canSteer || this.isCompacting ? "followUp" : undefined);
+    this.send();
     return true;
   }
 
@@ -477,12 +476,12 @@ export class PromptEditor extends LitElement {
     this.completions = [];
   }
 
-  private send(streamingBehavior?: "steer" | "followUp") {
+  private send() {
     if (this.disabled || this.sending) return;
     const text = this.draft.trim();
     const pending = this.attachments;
     if (text === "" && pending.length === 0) return;
-    const behavior = this.canSteer || this.isCompacting ? streamingBehavior : undefined;
+    const behavior = "steer";
     const attachments = pending.length > 0 ? this.currentAttachments() : undefined;
     const delivery = this.effectiveAttachmentDelivery();
     // Folder delivery sends the displayed workspace-effective folder explicitly
@@ -609,4 +608,3 @@ function inputAssistanceContentAttributes(draftBeforeCursor: string): Record<str
   // CodeMirror is optimized for code and disables these by default, but the chat prompt is usually prose.
   return inputModeForDraft(draftBeforeCursor).kind === "normal" ? proseInputAssistanceAttributes : codeLikeInputAssistanceAttributes;
 }
-

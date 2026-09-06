@@ -917,9 +917,9 @@ PI_CODING_AGENT_SESSION_DIR=/opt/pi-profiles/lab-sessions</code></pre>
                 to retrieve it with <code>check_subsession</code>.
               </p>
               <p>
-                Use <code>send_subsession_message({ sessionId, message, mode })</code> with <code>queue</code> (default) for a follow-up after current work, or <code>steer</code> to redirect at the next agent steering boundary without forcibly cancelling a running tool. Either resumes an idle child; compaction delays delivery until it finishes. History and model are preserved. Completion notices wake the parent again. Only the verified parent can use this tool for its child.
+                Use <code>send_subsession_message({ sessionId, message })</code> to steer at the next agent steering boundary without forcibly cancelling a running tool. There is no delivery-mode option. Idle children resume; compaction delays delivery until it finishes. History and model are preserved. Only the verified parent can use this tool for its child.
                 Use <code>stop_subsession({ sessionId })</code> to interrupt a direct child and clear queued prompts without deleting its history. This does not stop descendants or undo completed actions. Only the verified parent can stop a child.
-                Children can call <code>send_parent_message({ message, mode })</code> with <code>queue</code> (default) or <code>steer</code> without ending their run or waiting for a reply. The verified parent is selected automatically and woken if idle. Messages are labeled as child updates, not completion notices. Retry if the parent is compacting or navigating history.
+                Children can call <code>send_parent_message({ message })</code> without ending their run or waiting for a reply. Messages always steer; the verified parent is selected automatically and woken if idle. Messages are labeled as child updates, not completion notices. Retry if the parent is compacting or navigating history.
               </p>
               <p>
                 <code>list_subsessions</code>, <code>check_subsession</code>, and <code>read_subsession</code> never yield

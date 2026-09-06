@@ -94,16 +94,10 @@ const SpawnSubsessionParams = Type.Object({
 const ListSubsessionsParams = Type.Object({});
 const SendParentMessageParams = Type.Object({
   message: Type.String({ minLength: 1, description: "Progress update, question, or finding for your parent session." }),
-  mode: Type.Optional(Type.Union([Type.Literal("queue"), Type.Literal("steer")], {
-    description: "queue (default): follow up after the parent's current work. steer: redirect at its next steering boundary. An idle parent is woken.",
-  })),
 });
 const SendSubsessionMessageParams = Type.Object({
   sessionId: Type.String({ description: "Tracked child id from spawn_subsession or list_subsessions." }),
   message: Type.String({ minLength: 1, description: "Follow-up instruction or question for the existing child conversation." }),
-  mode: Type.Optional(Type.Union([Type.Literal("queue"), Type.Literal("steer")], {
-    description: "queue (default): deliver after current work finishes. steer: redirect current work at the next agent steering boundary, without forcibly cancelling a running tool. Either mode resumes an idle child.",
-  })),
 });
 const YieldToSubsessionsParams = Type.Object({});
 
@@ -327,14 +321,13 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
   const sendTool = defineTool<typeof SendSubsessionMessageParams, { sessionId: string }>({
     name: "send_subsession_message",
     label: "Message subsession",
-    description: "Send a message to an existing tracked child, preserving its conversation and model. Choose queue (default) for a follow-up after current work, or steer to redirect current work at the next steering boundary. Either resumes an idle child. Completion notices wake you again; use yield_to_subsessions at the join point.",
+    description: "Send a steering message to an existing tracked child, preserving its conversation and model. Redirects active work at the next steering boundary without forcibly cancelling running tools; resumes an idle child. Completion notices wake you again; use yield_to_subsessions at the join point.",
     promptSnippet: "send_subsession_message: continue an existing child's conversation by sessionId",
     parameters: SendSubsessionMessageParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const mode = params.mode ?? "queue";
-      await deps.send(ctx.sessionManager.getSessionId(), params.sessionId, params.message, ctx.sessionManager.getSessionFile() ?? undefined, mode);
+      await deps.send(ctx.sessionManager.getSessionId(), params.sessionId, params.message, ctx.sessionManager.getSessionFile() ?? undefined, "steer");
       return {
-        content: [{ type: "text", text: `Message accepted for subsession ${params.sessionId} (mode: ${mode}). Continue other work, then join with yield_to_subsessions; do not poll.` }],
+        content: [{ type: "text", text: `Steering message accepted for subsession ${params.sessionId}. Continue other work, then join with yield_to_subsessions; do not poll.` }],
         details: { sessionId: params.sessionId },
       };
     },
@@ -357,10 +350,10 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
   const sendParentTool = defineTool<typeof SendParentMessageParams, { sent: boolean }>({
     name: "send_parent_message",
     label: "Message parent",
-    description: "Send a progress update, question, or finding to your verified parent without ending your run or waiting for a reply. The parent is selected automatically. Use queue (default) or steer; an idle parent is woken. Only available to tracked children. Continue working after this tool returns.",
+    description: "Send a steering message to your verified parent without ending your run or waiting for a reply. The parent is selected automatically and woken if idle; active work is redirected at the next steering boundary. Only usable by tracked children. Continue working after this tool returns.",
     parameters: SendParentMessageParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      await deps.sendParent(ctx.sessionManager.getSessionId(), params.message, ctx.sessionManager.getSessionFile() ?? undefined, params.mode ?? "queue");
+      await deps.sendParent(ctx.sessionManager.getSessionId(), params.message, ctx.sessionManager.getSessionFile() ?? undefined, "steer");
       return {
         content: [{ type: "text", text: "Message accepted for your parent. Your run continues; this does not wait for a reply." }],
         details: { sent: true },
