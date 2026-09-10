@@ -69,9 +69,9 @@ export class PluginRegistry {
     this.registeringPluginIds.add(runtimePluginId);
     try {
       const apiVersion: unknown = plugin.apiVersion;
-      if (apiVersion !== 2) throw new Error(`Unsupported browser plugin API version for ${sourcePluginId}: ${String(apiVersion)} (expected 2)`);
+      if (apiVersion !== 3) throw new Error(`Unsupported browser plugin API version for ${sourcePluginId}: ${String(apiVersion)} (expected 3)`);
       const activation = plugin.activate(Object.freeze({
-        apiVersion: 2,
+        apiVersion: 3,
         pluginId: sourcePluginId,
         runtimePluginId,
         html,

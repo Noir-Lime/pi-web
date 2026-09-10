@@ -1,6 +1,6 @@
 import type {
   JsonValue,
-  PairedWorkspaceBackendV1,
+  PluginPeer,
   PiWebPlugin,
   Workspace,
   WorkspaceBackend,
@@ -12,7 +12,7 @@ import type {
 } from "@jmfederico/pi-web/plugin-api";
 
 const plugin: PiWebPlugin = {
-  apiVersion: 2,
+  apiVersion: 3,
   name: "Browser declaration fixture",
   activate: (context) => ({
     contributions: {
@@ -54,20 +54,20 @@ function requestOwnerBackend(backend: WorkspaceBackend): Promise<JsonValue> {
   return backend.request("fixture.owner-summary", null);
 }
 
-async function requestPairedBackend(context: WorkspacePanelContext): Promise<JsonValue | undefined> {
-  const backend: PairedWorkspaceBackendV1 | undefined = context.pairedBackend;
-  if (backend?.requestVersion !== 1) return undefined;
-  return await backend.request("fixture.summary", null);
+async function requestPeer(context: WorkspacePanelContext): Promise<JsonValue | undefined> {
+  const peer: PluginPeer | undefined = context.peer;
+  if (peer?.request === undefined) return undefined;
+  return await peer.request("fixture.summary", null);
 }
 
-function openPairedBackendChannel(context: WorkspacePanelContext): void {
-  const backend = context.pairedBackend;
-  if (backend?.channelVersion !== 1) return;
-  void backend.openChannel("fixture.watch", null, { onData: echoJson });
+function openPeerChannel(context: WorkspacePanelContext): void {
+  const peer = context.peer;
+  if (peer?.openChannel === undefined) return;
+  void peer.openChannel("fixture.watch", null, { onData: echoJson });
 }
 
 const echoJson = (value: JsonValue): JsonValue => value;
-export { capabilityV1, echoJson, openPairedBackendChannel, plugin, requestOwnerBackend, requestPairedBackend };
+export { capabilityV1, echoJson, openPeerChannel, plugin, requestOwnerBackend, requestPeer };
 export type {
   BrowserWorkspace,
   ExtendedWorkspaceFiles,

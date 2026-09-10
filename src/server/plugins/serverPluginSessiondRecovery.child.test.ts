@@ -103,7 +103,7 @@ describe("sessiond persisted server plugin recovery", () => {
     await writeFile(join(pluginRoot, "server.mjs"), `
       import { writeFileSync } from "node:fs";
       export default {
-        apiVersion: 1,
+        apiVersion: 2,
         name: "Startup signal fixture",
         activate() {
           return {

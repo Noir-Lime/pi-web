@@ -12,7 +12,7 @@ import type {
 const markerPath = ".pi-web/example-workspace-provider";
 
 const plugin: PiWebServerPlugin = {
-  apiVersion: 1,
+  apiVersion: 2,
   name: "Example Workspace Provider",
   activate({ pluginId, logger }) {
     logger.info("Activating example workspace provider", { pluginId });

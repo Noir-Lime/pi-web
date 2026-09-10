@@ -17,7 +17,7 @@ export const FILES_CODE_VIEWER_ELEMENT = "pi-web-files-code-viewer";
 const filesCustomElementOwnersKey = Symbol.for("pi-web.files.custom-element-owners.v1");
 
 const plugin: PiWebPlugin = {
-  apiVersion: 2,
+  apiVersion: 3,
   name: "Files",
   activate: (context) => activateFilesPlugin(context, new FilesRuntime()),
 };

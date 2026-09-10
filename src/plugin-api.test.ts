@@ -10,10 +10,10 @@ import type {
   PluginContributions,
   Workspace,
   WorkspaceBackend,
-  PairedWorkspaceBackendChannel,
-  PairedWorkspaceBackendChannelOptions,
-  PairedWorkspaceBackendRequestOptions,
-  PairedWorkspaceBackendV1,
+  PluginPeerChannel,
+  PluginPeerChannelOptions,
+  PluginPeerRequestOptions,
+  PluginPeer,
   WorkspaceContext,
   WorkspaceFiles,
   WorkspaceFilesCapabilityV1,
@@ -105,36 +105,30 @@ describe("public browser plugin API", () => {
     expectTypeOf<ReadonlyKeys<Pick<WorkspaceFilesCapabilityV1, "capabilityVersion" | "defaultUploadFolder" | "maxInlinePreviewBytes">>>().toEqualTypeOf<"capabilityVersion" | "defaultUploadFolder" | "maxInlinePreviewBytes">();
   });
 
-  it("keeps the owner-backed helper unchanged and models paired capabilities as valid detectable combinations", () => {
-    type PairedBackendIsOptional = IsOptional<WorkspaceContext, "pairedBackend">;
-    type PairedRequestIsOptional = IsOptional<PairedWorkspaceBackendV1, "request">;
-    type PairedChannelIsOptional = IsOptional<PairedWorkspaceBackendV1, "openChannel">;
-    type PairedRequest = NonNullable<PairedWorkspaceBackendV1["request"]>;
-    type PairedChannel = NonNullable<PairedWorkspaceBackendV1["openChannel"]>;
-    type EmptyBackendIsValid = { readonly version: 1 } extends PairedWorkspaceBackendV1 ? true : false;
-    type RequestMarkerWithoutMethodIsValid = { readonly version: 1; readonly requestVersion: 1 } extends PairedWorkspaceBackendV1 ? true : false;
-    type RequestMethodWithoutMarkerIsValid = { readonly version: 1; request: PairedRequest } extends PairedWorkspaceBackendV1 ? true : false;
-    type ChannelMarkerWithoutMethodIsValid = { readonly version: 1; readonly channelVersion: 1 } extends PairedWorkspaceBackendV1 ? true : false;
-    type RequestOnlyIsValid = { readonly version: 1; readonly requestVersion: 1; request: PairedRequest } extends PairedWorkspaceBackendV1 ? true : false;
-    type ChannelOnlyIsValid = { readonly version: 1; readonly channelVersion: 1; openChannel: PairedChannel } extends PairedWorkspaceBackendV1 ? true : false;
+  it("keeps the owner-backed helper unchanged and models peer capabilities as valid detectable combinations", () => {
+    type PeerIsOptional = IsOptional<WorkspaceContext, "peer">;
+    type PeerRequestIsOptional = IsOptional<PluginPeer, "request">;
+    type PeerChannelIsOptional = IsOptional<PluginPeer, "openChannel">;
+    type PeerRequest = NonNullable<PluginPeer["request"]>;
+    type PeerChannel = NonNullable<PluginPeer["openChannel"]>;
+    type EmptyPeerIsValid = Record<never, never> extends PluginPeer ? true : false;
+    type RequestOnlyIsValid = { request: PeerRequest } extends PluginPeer ? true : false;
+    type ChannelOnlyIsValid = { openChannel: PeerChannel } extends PluginPeer ? true : false;
+    type BothCapabilitiesAreValid = { request: PeerRequest; openChannel: PeerChannel } extends PluginPeer ? true : false;
     expectTypeOf<ExistingV2WorkspaceBackend>().toExtend<WorkspaceBackend>();
     expectTypeOf<keyof WorkspaceBackend>().toEqualTypeOf<"request">();
-    expectTypeOf<PairedWorkspaceBackendV1["version"]>().toEqualTypeOf<1>();
-    expectTypeOf<PairedWorkspaceBackendV1["requestVersion"]>().toEqualTypeOf<1 | undefined>();
-    expectTypeOf<PairedWorkspaceBackendV1["channelVersion"]>().toEqualTypeOf<1 | undefined>();
-    expectTypeOf<PairedBackendIsOptional>().toEqualTypeOf<true>();
-    expectTypeOf<PairedRequestIsOptional>().toEqualTypeOf<true>();
-    expectTypeOf<PairedChannelIsOptional>().toEqualTypeOf<true>();
-    expectTypeOf<EmptyBackendIsValid>().toEqualTypeOf<false>();
-    expectTypeOf<RequestMarkerWithoutMethodIsValid>().toEqualTypeOf<false>();
-    expectTypeOf<RequestMethodWithoutMarkerIsValid>().toEqualTypeOf<false>();
-    expectTypeOf<ChannelMarkerWithoutMethodIsValid>().toEqualTypeOf<false>();
+    expectTypeOf<keyof PluginPeer>().toEqualTypeOf<"request" | "openChannel">();
+    expectTypeOf<PeerIsOptional>().toEqualTypeOf<true>();
+    expectTypeOf<PeerRequestIsOptional>().toEqualTypeOf<true>();
+    expectTypeOf<PeerChannelIsOptional>().toEqualTypeOf<true>();
+    expectTypeOf<EmptyPeerIsValid>().toEqualTypeOf<false>();
     expectTypeOf<RequestOnlyIsValid>().toEqualTypeOf<true>();
     expectTypeOf<ChannelOnlyIsValid>().toEqualTypeOf<true>();
-    expectTypeOf<ReadonlyKeys<PairedWorkspaceBackendV1>>().toEqualTypeOf<"version" | "requestVersion" | "channelVersion">();
-    expectTypeOf<ReadonlyKeys<PairedWorkspaceBackendRequestOptions>>().toEqualTypeOf<"signal">();
-    expectTypeOf<ReadonlyKeys<PairedWorkspaceBackendChannelOptions>>().toEqualTypeOf<keyof PairedWorkspaceBackendChannelOptions>();
-    expectTypeOf<ReadonlyKeys<Pick<PairedWorkspaceBackendChannel, "closed">>>().toEqualTypeOf<"closed">();
+    expectTypeOf<BothCapabilitiesAreValid>().toEqualTypeOf<true>();
+    expectTypeOf<PluginPeerRequestOptions["signal"]>().toEqualTypeOf<AbortSignal | undefined>();
+    expectTypeOf<ReadonlyKeys<PluginPeerRequestOptions>>().toEqualTypeOf<"signal">();
+    expectTypeOf<ReadonlyKeys<PluginPeerChannelOptions>>().toEqualTypeOf<keyof PluginPeerChannelOptions>();
+    expectTypeOf<ReadonlyKeys<Pick<PluginPeerChannel, "closed">>>().toEqualTypeOf<"closed">();
   });
 
   it("adds optional versioned panel navigation without changing browser API v2 compatibility", () => {

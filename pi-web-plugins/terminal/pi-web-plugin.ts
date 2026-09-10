@@ -16,7 +16,7 @@ export interface TerminalPluginActivation extends PluginActivationResult {
 }
 
 const plugin: PiWebPlugin = {
-  apiVersion: 2,
+  apiVersion: 3,
   name: "Terminal",
   activate: (context) => activateTerminalPlugin(context),
 };

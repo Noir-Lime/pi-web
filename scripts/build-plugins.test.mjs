@@ -177,7 +177,7 @@ describe("Files browser package build", () => {
       const secondImported = await import(secondModuleUrl.href);
       const template = (strings, ...values) => ({ strings, values });
       const activated = imported.default.activate({
-        apiVersion: 2,
+        apiVersion: 3,
         pluginId: "files",
         runtimePluginId: "files",
         html: template,
@@ -228,8 +228,8 @@ describe("Files browser package build", () => {
         },
       };
     });
-    expect(builtModule.default).toMatchObject({ apiVersion: 2, name: "Files" });
-    expect(secondBuiltModule.default).toMatchObject({ apiVersion: 2, name: "Files" });
+    expect(builtModule.default).toMatchObject({ apiVersion: 3, name: "Files" });
+    expect(secondBuiltModule.default).toMatchObject({ apiVersion: 3, name: "Files" });
     expect(secondBuiltModule.FilesRuntime).not.toBe(builtModule.FilesRuntime);
     expect(registrations.panelMachineIds).toEqual(["remote-1", "remote-2"]);
     expect(registrations.firstElementConstructor).toBeDefined();

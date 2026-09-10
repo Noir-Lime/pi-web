@@ -5,11 +5,11 @@ import type {
   QualifiedContributionId,
   TerminalCommandRunStatus,
   Workspace,
-  PairedWorkspaceBackendV1,
+  PluginPeer,
   WorkspacePanelTerminal,
   WorkspaceTerminalCommandInput,
 } from "@jmfederico/pi-web/plugin-api";
-import { TerminalBackendClient, parseTerminalCommandRun, type TerminalCommandRunFilter } from "./terminalProtocol";
+import { TerminalPeerClient, parseTerminalCommandRun, type TerminalCommandRunFilter } from "./terminalProtocol";
 
 type TimerId = ReturnType<typeof globalThis.setTimeout>;
 type SetTimer = (handler: () => void, timeout: number) => TimerId;
@@ -29,12 +29,12 @@ export interface RequiredTerminalWorkspaceBindingV1 {
   readonly origin: string;
   readonly registrationPluginId: string;
   readonly workspace: Workspace;
-  readonly pairedBackend: PairedWorkspaceBackendV1;
+  readonly peer: PluginPeer;
   readonly host: RequiredTerminalFacadeHostV1;
 }
 
 export interface RequiredTerminalCommandRunQueryV1 {
-  readonly pairedBackend: PairedWorkspaceBackendV1;
+  readonly peer: PluginPeer;
   readonly filter?: Readonly<{
     terminalId?: string;
     statuses?: readonly TerminalCommandRunStatus[];
@@ -74,7 +74,7 @@ export class TerminalFacade implements RequiredTerminalBrowserFacadeV1 {
   }
 
   createWorkspaceTerminal(binding: RequiredTerminalWorkspaceBindingV1): WorkspacePanelTerminal {
-    const client = new TerminalBackendClient(binding.pairedBackend);
+    const client = new TerminalPeerClient(binding.peer);
     return Object.freeze({
       open: (options?: { terminalId?: string | undefined }) => { this.openTerminal(binding, options); },
       runCommand: async (input: WorkspaceTerminalCommandInput): Promise<TerminalCommandRunHandle> => {
@@ -107,7 +107,7 @@ export class TerminalFacade implements RequiredTerminalBrowserFacadeV1 {
       ...(query.filter?.statuses === undefined ? {} : { statuses: [...query.filter.statuses] }),
       ...(query.filter?.metadata === undefined ? {} : { metadata: { ...query.filter.metadata } }),
     };
-    return new TerminalBackendClient(query.pairedBackend).listCommandRuns(filter, query.signal);
+    return new TerminalPeerClient(query.peer).listCommandRuns(filter, query.signal);
   }
 
   parseCommandRun(value: unknown): TerminalCommandRun {
@@ -117,7 +117,7 @@ export class TerminalFacade implements RequiredTerminalBrowserFacadeV1 {
 
 function waitForCommandRunCompletion(
   initialRun: TerminalCommandRun,
-  client: Pick<TerminalBackendClient, "getCommandRun">,
+  client: Pick<TerminalPeerClient, "getCommandRun">,
   pollIntervalMs: number,
   setTimer: SetTimer,
   clearTimer: ClearTimer,

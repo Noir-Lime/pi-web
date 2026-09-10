@@ -2,8 +2,8 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   JsonValue,
-  PairedPluginChannelOpenContext,
-  PairedPluginRequestContext,
+  ServerPluginPeerChannelOpenContext,
+  ServerPluginPeerRequestContext,
   WorkspaceProvider,
 } from "../../server-plugin-api.js";
 import type { Project } from "../types.js";
@@ -30,7 +30,7 @@ afterEach(() => {
 
 describe("PluginBackendRegistry", () => {
   it("dispatches a non-provider plugin against a host-resolved provider workspace", async () => {
-    let observed: PairedPluginRequestContext | undefined;
+    let observed: ServerPluginPeerRequestContext | undefined;
     const workspaces = providerRegistry([providerContribution("git", {
       fallback: true,
       probe: () => Promise.resolve("claim"),
@@ -312,7 +312,7 @@ describe("PluginBackendRegistry", () => {
     const workspaces = providerRegistry([]);
     const workspaceId = (await workspaces.resolve(project)).workspaces[0]?.id;
     if (workspaceId === undefined) throw new Error("Expected folder workspace");
-    let openContext: PairedPluginChannelOpenContext | undefined;
+    let openContext: ServerPluginPeerChannelOpenContext | undefined;
     let closeSignal: AbortSignal | undefined;
     const receive = vi.fn((data: JsonValue, signal: AbortSignal) => {
       expect(data).toEqual({ type: "input", value: "hello" });

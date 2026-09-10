@@ -889,7 +889,7 @@ describe("PiWebApp plugin host", () => {
     appPluginRegistry(app).register({
       id: "browser-only",
       plugin: {
-        apiVersion: 2,
+        apiVersion: 3,
         name: "Browser only",
         activate: ({ html }) => ({
           contributions: {
@@ -939,7 +939,7 @@ describe("PiWebApp plugin host", () => {
     appPluginRegistry(app).register({
       id: "browser-only",
       plugin: {
-        apiVersion: 2,
+        apiVersion: 3,
         name: "Browser only",
         activate: ({ html }) => ({
           contributions: {
@@ -1225,7 +1225,7 @@ describe("PiWebApp plugin host", () => {
       pairedRequestVersion: 1,
       pairedChannelVersion: 1,
       plugin: {
-        apiVersion: 2,
+        apiVersion: 3,
         name: "Terminal",
         activate: ({ html }) => ({
           requiredTerminalFacade: testTerminalFacade(),
@@ -1240,7 +1240,7 @@ describe("PiWebApp plugin host", () => {
                   machine: context.machine,
                   workspace: context.workspace,
                   files: context.files,
-                  ...(context.pairedBackend === undefined ? {} : { pairedBackend: context.pairedBackend }),
+                  ...(context.peer === undefined ? {} : { peer: context.peer }),
                   host: context.host,
                   prompt: context.prompt,
                   terminal: context.terminal,
@@ -1616,7 +1616,7 @@ describe("PiWebApp plugin host", () => {
     appPluginRegistry(app).register({
       id: "first",
       plugin: {
-        apiVersion: 2,
+        apiVersion: 3,
         name: "First panel",
         activate: ({ html }) => ({
           contributions: { workspacePanels: [{ id: "workspace.first", title: "First", order: 10, render: () => html`<p>First</p>` }] },
@@ -2233,7 +2233,7 @@ describe("PiWebApp plugin host", () => {
       id: "portable",
       machineSpecific: false,
       plugin: {
-        apiVersion: 2,
+        apiVersion: 3,
         name: "Portable",
         activate: () => ({ contributions: { actions: [{ id: "act", title: "Portable", run }] } }),
       },
@@ -2429,7 +2429,7 @@ describe("PiWebApp plugin host", () => {
       id: "ordinary",
       machineSpecific: false,
       plugin: {
-        apiVersion: 2 as const,
+        apiVersion: 3 as const,
         name: "Ordinary",
         activate: () => ({
           contributions: {
@@ -2488,7 +2488,7 @@ describe("PiWebApp plugin host", () => {
           pairedRequestVersion: 1,
           pairedChannelVersion: 1,
           plugin: {
-            apiVersion: 2,
+            apiVersion: 3,
             name: "Terminal",
             activate: () => { throw terminalFailure; },
           },
@@ -2512,7 +2512,7 @@ describe("PiWebApp plugin host", () => {
     stubPluginLoadRendering(app);
     let activationAttempts = 0;
     const retryable: PiWebPlugin = {
-      apiVersion: 2,
+      apiVersion: 3,
       name: "Retryable",
       activate: () => {
         activationAttempts += 1;
@@ -2688,7 +2688,7 @@ function stubPluginLoadRendering(app: PiWebApp): void {
 
 function pluginWithPanel(name: string, onInvalidate: (context: WorkspacePanelContext, invalidation?: WorkspaceInvalidation) => void | Promise<void>): PiWebPlugin {
   return {
-    apiVersion: 2,
+    apiVersion: 3,
     name,
     activate: ({ html }) => ({
       contributions: {
@@ -2707,7 +2707,7 @@ function registerFilesRuntimePanel(
   appPluginRegistry(app).register({
     id: "files",
     plugin: {
-      apiVersion: 2,
+      apiVersion: 3,
       name: "Files host integration",
       activate: ({ html }) => ({
         contributions: {
@@ -2722,7 +2722,7 @@ function registerFilesRuntimePanel(
                 machine: context.machine,
                 workspace: context.workspace,
                 files,
-                ...(context.pairedBackend === undefined ? {} : { pairedBackend: context.pairedBackend }),
+                ...(context.peer === undefined ? {} : { peer: context.peer }),
                 host: context.host,
                 prompt: context.prompt,
                 terminal: context.terminal,
@@ -2857,7 +2857,7 @@ function testWorkspaceFiles(overrides: Partial<WorkspaceFilesCapabilityV1> = {})
 
 function requiredTerminalPlugin(facade: RequiredTerminalBrowserFacadeV1 = testTerminalFacade()): PiWebPlugin {
   return {
-    apiVersion: 2,
+    apiVersion: 3,
     name: "Terminal",
     activate: ({ html, runtimePluginId }) => ({
       requiredTerminalFacade: facade,
@@ -2933,7 +2933,7 @@ function isWorkspacePanelNavigation(value: unknown): value is WorkspacePanelNavi
 }
 
 function emptyPlugin(name: string): PiWebPlugin {
-  return { apiVersion: 2, name, activate: () => ({ contributions: {} }) };
+  return { apiVersion: 3, name, activate: () => ({ contributions: {} }) };
 }
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
@@ -2964,7 +2964,7 @@ function isNavigationFreshness(value: unknown): value is NavigationFreshness {
 
 function pluginWithAction(name: string, actionId: string): PiWebPlugin {
   return {
-    apiVersion: 2,
+    apiVersion: 3,
     name,
     activate: () => ({ contributions: { actions: [{ id: actionId, title: name, run: () => undefined }] } }),
   };

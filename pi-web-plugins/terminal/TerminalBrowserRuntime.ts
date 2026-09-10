@@ -1,6 +1,6 @@
 import type { WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
 import { SessionStorageTerminalSelectionMemory, terminalSelectionScope, type TerminalSelectionMemory } from "./terminalSelection";
-import { TerminalBackendClient, type TerminalInfo } from "./terminalProtocol";
+import { TerminalPeerClient, type TerminalInfo } from "./terminalProtocol";
 
 const ACTIVE_TERMINAL_REFRESH_MS = 1_000;
 const ACTIVE_TERMINAL_FAILURE_RETRY_MS = 5_000;
@@ -56,11 +56,11 @@ export class TerminalBrowserRuntime {
   }
 
   async refresh(context: WorkspacePanelContext): Promise<void> {
-    const pairedBackend = context.pairedBackend;
-    if (pairedBackend === undefined) throw new Error("Required Terminal paired backend is unavailable");
+    const peer = context.peer;
+    if (peer === undefined) throw new Error("Required Terminal peer is unavailable");
     const state = this.workspaceState(context);
     if (state.refresh !== undefined) return state.refresh;
-    const refresh = new TerminalBackendClient(pairedBackend).list().then((terminals) => {
+    const refresh = new TerminalPeerClient(peer).list().then((terminals) => {
       this.updateTerminals(context, terminals);
     }).catch((error: unknown) => {
       state.refreshFailed = true;

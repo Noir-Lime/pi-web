@@ -18,14 +18,14 @@ type MaybePromise<T> = T | Promise<T>;
 
 /** Public server entry exported by a package's `serverModule`. */
 export interface PiWebServerPlugin {
-  apiVersion: 1;
+  apiVersion: 2;
   name: string;
   activate(context: ServerPluginActivationContext): MaybePromise<ServerPluginActivation>;
 }
 
 /** Host-owned frozen values supplied during server plugin activation. */
 export interface ServerPluginActivationContext {
-  readonly apiVersion: 1;
+  readonly apiVersion: 2;
   readonly pluginId: string;
   readonly packageRoot: string;
   readonly logger: ServerPluginLogger;
@@ -111,7 +111,7 @@ export interface ServerPluginExecFileResult {
 export interface ServerPluginActivation {
   workspaceProvider?: WorkspaceProvider;
   /** Serve bounded requests and optional duplex channels from this package's paired browser entry. */
-  pairedBackend?: PairedPluginBackendV1;
+  peer?: ServerPluginPeer;
   /** Initialize resources within one host-bounded start invocation. */
   start?(signal: AbortSignal): MaybePromise<void>;
   /** Release resources within one host-bounded stop invocation. */
@@ -130,22 +130,20 @@ export interface ServerPluginHealth {
  * Capabilities for this package's matching browser entry. An activation may
  * supply a request handler, a channel handler, or both, but never neither.
  */
-export type PairedPluginBackendV1 =
+export type ServerPluginPeer =
   | {
-      readonly version: 1;
-      request(context: PairedPluginRequestContext): MaybePromise<JsonValue>;
+      request(context: ServerPluginPeerRequestContext): MaybePromise<JsonValue>;
       /** Open one finite-lived, host-bounded duplex channel. */
-      openChannel?(context: PairedPluginChannelOpenContext): MaybePromise<PairedPluginChannel>;
+      openChannel?(context: ServerPluginPeerChannelOpenContext): MaybePromise<ServerPluginPeerChannel>;
     }
   | {
-      readonly version: 1;
       request?: undefined;
       /** Open one finite-lived, host-bounded duplex channel. */
-      openChannel(context: PairedPluginChannelOpenContext): MaybePromise<PairedPluginChannel>;
+      openChannel(context: ServerPluginPeerChannelOpenContext): MaybePromise<ServerPluginPeerChannel>;
     };
 
 /** Channel instance returned by `openChannel()` after the host validates scope. */
-export interface PairedPluginChannel {
+export interface ServerPluginPeerChannel {
   /** Consume one browser-authored JSON frame in accepted order within a host-bounded invocation. */
   receive(data: JsonValue, signal: AbortSignal): MaybePromise<void>;
   /**
@@ -155,10 +153,10 @@ export interface PairedPluginChannel {
    */
   readonly closed?: PromiseLike<void>;
   /** Release channel resources once after disconnect, failure, expiry, shutdown, or plugin completion. */
-  close?(context: PairedPluginChannelCloseContext): MaybePromise<void>;
+  close?(context: ServerPluginPeerChannelCloseContext): MaybePromise<void>;
 }
 
-export interface PairedPluginChannelCloseContext {
+export interface ServerPluginPeerChannelCloseContext {
   readonly code: number;
   readonly reason: string;
   /** Signal for this bounded close invocation, not the already-ended channel lifetime. */
@@ -166,7 +164,7 @@ export interface PairedPluginChannelCloseContext {
 }
 
 /** Host-resolved, browser-visible workspace projection without provider-private data. */
-export interface PairedPluginWorkspace {
+export interface ServerPluginPeerWorkspace {
   readonly id: string;
   readonly projectId: string;
   readonly path: string;
@@ -180,9 +178,9 @@ export interface PairedPluginWorkspace {
  * this callback and is aborted when the request times out, is cancelled, or
  * settles.
  */
-export interface PairedPluginRequestContext {
+export interface ServerPluginPeerRequestContext {
   readonly project: ProjectInput;
-  readonly workspace: PairedPluginWorkspace;
+  readonly workspace: ServerPluginPeerWorkspace;
   readonly operation: string;
   readonly input: JsonValue;
   readonly signal: AbortSignal;
@@ -194,9 +192,9 @@ export interface PairedPluginRequestContext {
  * and bounds one JSON frame synchronously; success means queue acceptance, not
  * remote receipt. Invalid data or host queue overflow throws and closes the channel.
  */
-export interface PairedPluginChannelOpenContext {
+export interface ServerPluginPeerChannelOpenContext {
   readonly project: ProjectInput;
-  readonly workspace: PairedPluginWorkspace;
+  readonly workspace: ServerPluginPeerWorkspace;
   readonly operation: string;
   readonly input: JsonValue;
   readonly signal: AbortSignal;

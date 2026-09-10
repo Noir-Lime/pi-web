@@ -259,7 +259,7 @@ describe("bundled Git browser plugin", () => {
 });
 
 function activate(pluginId: string, runtimePluginId = pluginId) {
-  return plugin.activate({ apiVersion: 2, pluginId, runtimePluginId, html, svg }).contributions;
+  return plugin.activate({ apiVersion: 3, pluginId, runtimePluginId, html, svg }).contributions;
 }
 
 function requiredPanel(contributions: ReturnType<typeof activate>) {

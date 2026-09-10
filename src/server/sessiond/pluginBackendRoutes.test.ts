@@ -84,7 +84,6 @@ describe("session daemon plugin backend routes", () => {
       scope: "local",
       moduleRevision: "server-r1",
       backend: {
-        version: 1,
         request: ({ operation, input, signal }) => {
           observedSignal = signal;
           return { operation, input };

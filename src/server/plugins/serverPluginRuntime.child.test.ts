@@ -22,7 +22,7 @@ describe("server plugin runtime child-process fixtures", () => {
     const poisonMarker = join(root, "poison-imported");
     const modules = new Map<string, string>([
       ["alpha", lifecycleModule("Alpha", eventsPath, "alpha")],
-      ["bad-activate", `export default { apiVersion: 1, name: "Bad activate", activate() { throw new Error("activate fixture failed"); } };`],
+      ["bad-activate", `export default { apiVersion: 2, name: "Bad activate", activate() { throw new Error("activate fixture failed"); } };`],
       ["bad-import", `throw new Error("import fixture failed");`],
       ["bad-start", lifecycleModule("Bad start", eventsPath, "bad-start", { failStart: true })],
       ["poison", `
@@ -149,7 +149,7 @@ describe("server plugin runtime child-process fixtures", () => {
         let resolveNotice = () => undefined;
         const noticeObserved = new Promise((resolve) => { resolveNotice = resolve; });
         const blockerPlugin = {
-          apiVersion: 1,
+          apiVersion: 2,
           name: "Stop blocker",
           activate() {
             return {
@@ -289,7 +289,7 @@ function lifecycleModule(
     import { appendFileSync } from "node:fs";
     const record = (event) => appendFileSync(${JSON.stringify(eventsPath)}, event + "\\n");
     export default {
-      apiVersion: 1,
+      apiVersion: 2,
       name: ${JSON.stringify(name)},
       activate() {
         return {

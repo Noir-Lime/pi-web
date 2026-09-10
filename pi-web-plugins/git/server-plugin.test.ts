@@ -371,7 +371,7 @@ describe("parseGitWorktreeList", () => {
 
 async function providerFor(execFile: ServerPluginActivationContext["execFile"]): Promise<WorkspaceProvider> {
   const activation = await plugin.activate({
-    apiVersion: 1,
+    apiVersion: 2,
     pluginId: "git",
     packageRoot: resolve("pi-web-plugins/git"),
     logger: {
@@ -385,7 +385,7 @@ async function providerFor(execFile: ServerPluginActivationContext["execFile"]):
     signal: new AbortController().signal,
   });
   const workspaceProvider = activation.workspaceProvider;
-  if (activation.pairedBackend !== undefined) throw new Error("Bundled Git must remain owner-backed");
+  if (activation.peer !== undefined) throw new Error("Bundled Git must remain owner-backed");
   if (workspaceProvider === undefined) throw new Error("Bundled Git did not activate its workspace provider");
   return workspaceProvider;
 }

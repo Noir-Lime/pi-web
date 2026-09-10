@@ -1,12 +1,11 @@
-import type { PairedPluginBackendV1, PiWebServerPlugin } from "@jmfederico/pi-web/server-plugin-api";
+import type { ServerPluginPeer, PiWebServerPlugin } from "@jmfederico/pi-web/server-plugin-api";
 
-const channelOnlyBackend: PairedPluginBackendV1 = {
-  version: 1,
+const channelOnlyPeer: ServerPluginPeer = {
   openChannel: () => ({ receive: () => undefined }),
 };
 
 const plugin: PiWebServerPlugin = {
-  apiVersion: 1,
+  apiVersion: 2,
   name: "Server declaration fixture",
   activate: (context) => {
     context.notices?.record({
@@ -16,8 +15,7 @@ const plugin: PiWebServerPlugin = {
       context: { phase: "activate" },
     });
     return {
-      pairedBackend: {
-        version: 1,
+      peer: {
         request: ({ workspace, operation, input }) => ({ workspaceId: workspace.id, operation, input }),
       },
       workspaceProvider: {
@@ -33,5 +31,5 @@ const plugin: PiWebServerPlugin = {
   },
 };
 
-export { channelOnlyBackend };
+export { channelOnlyPeer };
 export default plugin;

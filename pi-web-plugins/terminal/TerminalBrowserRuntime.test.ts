@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { JsonValue, PairedWorkspaceBackendV1, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
+import type { JsonValue, PluginPeer, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
 import { TerminalBrowserRuntime } from "./TerminalBrowserRuntime";
 import { InMemoryTerminalSelectionMemory } from "./terminalSelection";
 
@@ -156,25 +156,25 @@ describe("Terminal browser runtime", () => {
     expect(runtime.selectedTerminalId(context)).toBe("deep-link");
   });
 
-  it("fails closed when the required paired backend is absent", async () => {
+  it("fails closed when the required peer is absent", async () => {
     const runtime = new TerminalBrowserRuntime();
     const context = workspaceContext("local", vi.fn());
-    Reflect.deleteProperty(context, "pairedBackend");
+    Reflect.deleteProperty(context, "peer");
 
-    await expect(runtime.refresh(context)).rejects.toThrow("Required Terminal paired backend is unavailable");
+    await expect(runtime.refresh(context)).rejects.toThrow("Required Terminal peer is unavailable");
   });
 });
 
 function workspaceContext(
   machineId: string,
-  request: NonNullable<PairedWorkspaceBackendV1["request"]>,
+  request: NonNullable<PluginPeer["request"]>,
   navigation: Partial<NonNullable<WorkspacePanelContext["navigation"]>> = {},
 ): WorkspacePanelContext {
   return {
     machine: { id: machineId, name: machineId, kind: machineId === "local" ? "local" : "remote" },
     workspace: { id: "workspace-1", projectId: "project-1", path: "/repo", label: "main", isMain: true },
     files: { readFile: vi.fn(), listFiles: vi.fn(), writeFile: vi.fn(), deleteFile: vi.fn(), moveFile: vi.fn() },
-    pairedBackend: { version: 1, requestVersion: 1, request },
+    peer: { request },
     host: { requestRender: vi.fn() },
     prompt: { insertText: vi.fn(), getText: vi.fn(() => ""), getSelection: vi.fn(() => null) },
     terminal: { open: vi.fn(), runCommand: vi.fn() },

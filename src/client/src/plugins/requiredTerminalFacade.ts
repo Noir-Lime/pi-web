@@ -1,5 +1,5 @@
 import type { TerminalCommandRun, TerminalCommandRunStatus, Workspace } from "../api";
-import type { ContributionQueryValue, PairedWorkspaceBackendV1, QualifiedContributionId, WorkspacePanelTerminal, WorkspacePluginBinding, WorkspaceTerminalCommandInput } from "./types";
+import type { ContributionQueryValue, PluginPeer, QualifiedContributionId, WorkspacePanelTerminal, WorkspacePluginBinding, WorkspaceTerminalCommandInput } from "./types";
 
 export interface WorkspaceContributionNavigationV1 {
   readonly contributionId: QualifiedContributionId;
@@ -15,12 +15,12 @@ export interface RequiredTerminalWorkspaceBindingV1 {
   readonly origin: string;
   readonly registrationPluginId: string;
   readonly workspace: Workspace;
-  readonly pairedBackend: PairedWorkspaceBackendV1;
+  readonly peer: PluginPeer;
   readonly host: RequiredTerminalFacadeHostV1;
 }
 
 export interface RequiredTerminalCommandRunQueryV1 {
-  readonly pairedBackend: PairedWorkspaceBackendV1;
+  readonly peer: PluginPeer;
   readonly filter?: Readonly<{
     terminalId?: string;
     statuses?: readonly TerminalCommandRunStatus[];

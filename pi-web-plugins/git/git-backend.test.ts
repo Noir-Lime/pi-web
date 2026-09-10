@@ -21,7 +21,7 @@ const GIT_ENV = Object.fromEntries([
 ]);
 
 const backendContext: ServerPluginActivationContext = {
-  apiVersion: 1,
+  apiVersion: 2,
   pluginId: "git",
   packageRoot: "pi-web-plugins/git",
   logger: {

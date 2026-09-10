@@ -9,8 +9,8 @@ import {
   type PluginBackendRequestTarget,
 } from "../api/pluginBackends";
 import type {
-  PairedWorkspaceBackendRequestOptions,
-  PairedWorkspaceBackendV1,
+  PluginPeer,
+  PluginPeerRequestOptions,
   WorkspaceBackend,
   WorkspacePluginBinding,
 } from "./types";
@@ -46,36 +46,29 @@ export function createPluginWorkspaceBackend(
 }
 
 /** Expose only the capabilities contributed by this exact revision-paired package. */
-export function createPairedPluginWorkspaceBackend(
+export function createPluginPeer(
   binding: WorkspacePluginBinding,
   workspace: Pick<Workspace, "id" | "projectId">,
   machineId: string,
   request: PluginBackendRequester = requestPairedPluginBackend,
   openChannel: PluginBackendChannelOpener = openPairedPluginBackendChannel,
-): PairedWorkspaceBackendV1 | undefined {
+): PluginPeer | undefined {
   if (binding.pairedRequestVersion !== 1 && binding.pairedChannelVersion !== 1) return undefined;
   const target = pluginBackendTarget(binding, workspace, machineId);
   if (target === undefined) return undefined;
   if (binding.pairedRequestVersion === 1 && binding.pairedChannelVersion === 1) {
     return {
-      version: 1,
-      requestVersion: 1,
-      channelVersion: 1,
-      request: (operation: string, input: JsonValue, options?: PairedWorkspaceBackendRequestOptions) => request(target, operation, input, options),
+      request: (operation: string, input: JsonValue, options?: PluginPeerRequestOptions) => request(target, operation, input, options),
       openChannel: (operation, input, options) => openChannel(target, operation, input, options),
     };
   }
   if (binding.pairedRequestVersion === 1) {
     return {
-      version: 1,
-      requestVersion: 1,
-      request: (operation: string, input: JsonValue, options?: PairedWorkspaceBackendRequestOptions) => request(target, operation, input, options),
+      request: (operation: string, input: JsonValue, options?: PluginPeerRequestOptions) => request(target, operation, input, options),
     };
   }
   if (binding.pairedChannelVersion === 1) {
     return {
-      version: 1,
-      channelVersion: 1,
       openChannel: (operation, input, options) => openChannel(target, operation, input, options),
     };
   }

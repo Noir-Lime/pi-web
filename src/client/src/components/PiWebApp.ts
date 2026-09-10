@@ -37,7 +37,7 @@ import { themePackPlugin } from "../plugins/themes";
 import { loadExternalPlugins, type ExternalPluginLoadResult } from "../plugins/external";
 import { REQUIRED_TERMINAL_PLUGIN_ID, type TerminalPluginMode } from "../../../shared/requiredTerminalPlugin";
 import { PluginRegistry, installPluginRuntimeScope, installWorkspaceLabelScope, installWorkspacePanelScope } from "../plugins/registry";
-import { createPairedPluginWorkspaceBackend, createPluginWorkspaceBackend } from "../plugins/workspaceBackend";
+import { createPluginPeer, createPluginWorkspaceBackend } from "../plugins/workspaceBackend";
 import { requiredTerminalUnavailableError, snapshotRequiredTerminalBrowserFacade, type RequiredTerminalBrowserComposition, type WorkspaceContributionNavigationV1 } from "../plugins/requiredTerminalFacade";
 import { createWorkspaceFiles as createPluginWorkspaceFiles } from "../plugins/workspaceFiles";
 import { contributionQueryFromRecord, isContributionQueryLocalKey, patchContributionQueryRecord, readContributionQuery, readContributionQueryRecord, setContributionQueryKey, writeContributionQueryRecord, type ContributionQueryRecord } from "../namespacedQueryArgs";
@@ -1300,8 +1300,8 @@ export class PiWebApp extends LitElement {
     navigation?: NavigationFreshness,
   ): WorkspacePanelTerminal {
     const composition = this.requiredTerminalByMachine.get(machineId);
-    const pairedBackend = composition === undefined ? undefined : createPairedPluginWorkspaceBackend(composition.binding, workspace, machineId);
-    if (composition === undefined || pairedBackend === undefined) {
+    const peer = composition === undefined ? undefined : createPluginPeer(composition.binding, workspace, machineId);
+    if (composition === undefined || peer === undefined) {
       const error = requiredTerminalUnavailableError(machineId);
       return Object.freeze({
         open: () => { this.setState({ error: error.message }); },
@@ -1319,7 +1319,7 @@ export class PiWebApp extends LitElement {
       origin,
       registrationPluginId: composition.binding.registrationPluginId,
       workspace,
-      pairedBackend,
+      peer,
       host: {
         navigateWorkspaceContribution: (targetWorkspace, targetNavigation) =>
           this.navigateRuntimeWorkspaceContribution(machineId, targetWorkspace, targetNavigation, expected),
@@ -1930,14 +1930,14 @@ export class PiWebApp extends LitElement {
     const machine = pluginMachineFromState(this.state);
     const createContext = (binding: WorkspacePluginBinding): WorkspaceLabelContext => {
       const backend = createPluginWorkspaceBackend(binding, workspace, machine.id);
-      const pairedBackend = createPairedPluginWorkspaceBackend(binding, workspace, machine.id);
+      const peer = createPluginPeer(binding, workspace, machine.id);
       return installWorkspaceLabelScope({
         machine,
         workspace,
         state: this.state,
         files: this.createWorkspaceFiles(workspace, machine),
         ...(backend === undefined ? {} : { backend }),
-        ...(pairedBackend === undefined ? {} : { pairedBackend }),
+        ...(peer === undefined ? {} : { peer }),
         host: this.createWorkspaceHost(),
       }, createContext);
     };
@@ -1972,14 +1972,14 @@ export class PiWebApp extends LitElement {
       // navigation mutations use this token; workspace data refreshes do not.
       const navigation = this.beginNavigationOperation(WORKSPACE_SURFACE_SCOPE);
       const backend = createPluginWorkspaceBackend(binding, workspace, machineId);
-      const pairedBackend = createPairedPluginWorkspaceBackend(binding, workspace, machineId);
+      const peer = createPluginPeer(binding, workspace, machineId);
       return installWorkspacePanelScope({
         machine,
         workspace,
         state: this.state,
         files: this.createWorkspaceFiles(workspace, machine),
         ...(backend === undefined ? {} : { backend }),
-        ...(pairedBackend === undefined ? {} : { pairedBackend }),
+        ...(peer === undefined ? {} : { peer }),
         prompt: this.createPromptEditor(),
         terminal: this.workspaceTerminal(binding.registrationPluginId, workspace, machineId, navigation),
         ...(contributionId === undefined ? {} : {
@@ -2551,10 +2551,10 @@ export class PiWebApp extends LitElement {
         ? this.state.workspaces.filter((workspace) => workspace.projectId === project.id)
         : [...new Map(pendingRuns.map((run) => [run.workspaceId, { id: run.workspaceId, projectId: run.projectId }])).values()];
       const results = await Promise.allSettled(queryWorkspaces.map(async (workspace) => {
-        const pairedBackend = createPairedPluginWorkspaceBackend(composition.binding, workspace, machineId);
-        if (pairedBackend === undefined) throw requiredTerminalUnavailableError(machineId);
+        const peer = createPluginPeer(composition.binding, workspace, machineId);
+        if (peer === undefined) throw requiredTerminalUnavailableError(machineId);
         return composition.facade.listCommandRuns({
-          pairedBackend,
+          peer,
           filter: { metadata: filter.metadata },
           signal: controller.signal,
         });
@@ -3338,7 +3338,7 @@ function requiredTerminalPluginBinding(registration: PiWebPluginRegistration): W
     || registration.backendRevision === undefined
     || registration.pairedRequestVersion !== 1
     || registration.pairedChannelVersion !== 1) {
-    throw new Error("Required Terminal browser entry does not have a matching paired backend/channel revision");
+    throw new Error("Required Terminal browser entry does not have matching peer request/channel capabilities");
   }
   return Object.freeze({
     registrationPluginId: registration.id,

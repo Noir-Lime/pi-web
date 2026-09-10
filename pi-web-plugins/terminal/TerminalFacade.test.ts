@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { JsonValue, PairedWorkspaceBackendV1, TerminalCommandRun, Workspace } from "@jmfederico/pi-web/plugin-api";
+import type { JsonValue, PluginPeer, TerminalCommandRun, Workspace } from "@jmfederico/pi-web/plugin-api";
 import { TerminalFacade } from "./TerminalFacade";
 
 const workspace: Workspace = {
@@ -35,7 +35,7 @@ afterEach(() => {
 });
 
 describe("Terminal facade", () => {
-  it("runs a command through the paired backend and opens its terminal when requested", async () => {
+  it("runs a command through the peer and opens its terminal when requested", async () => {
     const request = vi.fn((operation: string): Promise<JsonValue> => {
       if (operation === "terminal.run") return Promise.resolve(runJson(succeededRun));
       return Promise.reject(new Error(`unexpected operation ${operation}`));
@@ -45,7 +45,7 @@ describe("Terminal facade", () => {
       origin: "actions",
       registrationPluginId: "pi-web.terminal",
       workspace,
-      pairedBackend: backend(request),
+      peer: peer(request),
       host: { navigateWorkspaceContribution },
     });
 
@@ -65,7 +65,7 @@ describe("Terminal facade", () => {
     await expect(handle.completed).resolves.toEqual(succeededRun);
   });
 
-  it("polls scoped command runs through the same backend until completion", async () => {
+  it("polls scoped command runs through the same peer until completion", async () => {
     vi.useFakeTimers();
     const request = vi.fn((operation: string): Promise<JsonValue> => {
       if (operation === "terminal.run") return Promise.resolve(runJson(runningRun));
@@ -77,7 +77,7 @@ describe("Terminal facade", () => {
       origin: "actions",
       registrationPluginId: "pi-web.terminal",
       workspace,
-      pairedBackend: backend(request),
+      peer: peer(request),
       host: { navigateWorkspaceContribution: vi.fn() },
     });
 
@@ -99,7 +99,7 @@ describe("Terminal facade", () => {
       origin: "actions",
       registrationPluginId: "pi-web.terminal",
       workspace,
-      pairedBackend: backend(request),
+      peer: peer(request),
       host: { navigateWorkspaceContribution: vi.fn() },
     });
 
@@ -116,7 +116,7 @@ describe("Terminal facade", () => {
       origin: "actions",
       registrationPluginId: "machine.remote.pi-web.terminal",
       workspace,
-      pairedBackend: backend(vi.fn(() => Promise.resolve(null))),
+      peer: peer(vi.fn(() => Promise.resolve(null))),
       host: { navigateWorkspaceContribution },
     });
 
@@ -149,7 +149,7 @@ describe("Terminal facade", () => {
     const facade = new TerminalFacade();
 
     await expect(facade.listCommandRuns({
-      pairedBackend: backend(request),
+      peer: peer(request),
       filter: { statuses: ["running"], metadata: { "pi.operation": "workspace.delete" } },
       signal: controller.signal,
     })).resolves.toEqual([runningRun]);
@@ -160,21 +160,21 @@ describe("Terminal facade", () => {
     }, { signal: controller.signal });
   });
 
-  it("fails closed when the paired request capability is absent", () => {
+  it("fails closed when the peer request capability is absent", () => {
     const facade = new TerminalFacade();
     expect(() => facade.createWorkspaceTerminal({
       origin: "actions",
       registrationPluginId: "pi-web.terminal",
       workspace,
       // @ts-expect-error Exercise the runtime guard against a malformed host capability.
-      pairedBackend: { version: 1 },
+      peer: {},
       host: { navigateWorkspaceContribution: vi.fn() },
-    })).toThrow("Required Terminal paired request capability v1 is unavailable");
+    })).toThrow("Required Terminal peer request capability is unavailable");
   });
 });
 
-function backend(request: NonNullable<PairedWorkspaceBackendV1["request"]>): PairedWorkspaceBackendV1 {
-  return { version: 1, requestVersion: 1, request };
+function peer(request: NonNullable<PluginPeer["request"]>): PluginPeer {
+  return { request };
 }
 
 function runJson(run: TerminalCommandRun): JsonValue {

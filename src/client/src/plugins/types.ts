@@ -29,13 +29,13 @@ export interface WorkspacePluginBinding {
 }
 
 export interface PiWebPlugin {
-  apiVersion: 2;
+  apiVersion: 3;
   name: string;
   activate: (context: PluginActivationContext) => PluginActivationResult;
 }
 
 export interface PluginActivationContext {
-  readonly apiVersion: 2;
+  readonly apiVersion: 3;
   /** Stable package/source identity, including on federated machines. */
   readonly pluginId: PluginId;
   /** Host-unique identity for qualified contribution references in this runtime. */
@@ -119,57 +119,37 @@ export interface WorkspaceBackend {
   request(operation: string, input: JsonValue): Promise<JsonValue>;
 }
 
-export interface PairedWorkspaceBackendRequestOptions {
+export interface PluginPeerRequestOptions {
   readonly signal?: AbortSignal;
 }
 
-export interface PairedWorkspaceBackendChannelOptions {
+export interface PluginPeerChannelOptions {
   readonly signal?: AbortSignal;
   readonly onData: (data: JsonValue) => void;
 }
 
-export interface PairedWorkspaceBackendChannelClose {
+export interface PluginPeerChannelClose {
   readonly code: number;
   readonly reason: string;
   readonly wasClean: boolean;
   readonly error?: Readonly<{ code: string; message: string }>;
 }
 
-export interface PairedWorkspaceBackendChannel {
-  readonly closed: Promise<PairedWorkspaceBackendChannelClose>;
+export interface PluginPeerChannel {
+  readonly closed: Promise<PluginPeerChannelClose>;
   send(data: JsonValue): void;
   close(reason?: string): void;
 }
 
-interface PairedWorkspaceBackendBaseV1 {
-  readonly version: 1;
-}
-
-interface PairedWorkspaceBackendRequestCapabilityV1 {
-  readonly requestVersion: 1;
-  request(operation: string, input: JsonValue, options?: PairedWorkspaceBackendRequestOptions): Promise<JsonValue>;
-}
-
-interface PairedWorkspaceBackendWithoutRequest {
-  readonly requestVersion?: undefined;
-  request?: undefined;
-}
-
-interface PairedWorkspaceBackendChannelCapabilityV1 {
-  readonly channelVersion: 1;
-  openChannel(operation: string, input: JsonValue, options: PairedWorkspaceBackendChannelOptions): Promise<PairedWorkspaceBackendChannel>;
-}
-
-interface PairedWorkspaceBackendWithoutChannel {
-  readonly channelVersion?: undefined;
-  openChannel?: undefined;
-}
-
-export type PairedWorkspaceBackendV1 = PairedWorkspaceBackendBaseV1 & (
-  | (PairedWorkspaceBackendRequestCapabilityV1 & PairedWorkspaceBackendWithoutChannel)
-  | (PairedWorkspaceBackendWithoutRequest & PairedWorkspaceBackendChannelCapabilityV1)
-  | (PairedWorkspaceBackendRequestCapabilityV1 & PairedWorkspaceBackendChannelCapabilityV1)
-);
+export type PluginPeer =
+  | {
+      request(operation: string, input: JsonValue, options?: PluginPeerRequestOptions): Promise<JsonValue>;
+      openChannel?(operation: string, input: JsonValue, options: PluginPeerChannelOptions): Promise<PluginPeerChannel>;
+    }
+  | {
+      request?: undefined;
+      openChannel(operation: string, input: JsonValue, options: PluginPeerChannelOptions): Promise<PluginPeerChannel>;
+    };
 
 export interface WorkspaceHost {
   requestRender(): void;
@@ -181,7 +161,7 @@ export interface WorkspaceContext {
   state: AppState;
   files: WorkspaceFilesContextValue;
   backend?: WorkspaceBackend;
-  pairedBackend?: PairedWorkspaceBackendV1;
+  peer?: PluginPeer;
   host: WorkspaceHost;
 }
 

@@ -42,7 +42,7 @@ describe("Info plugin copy-diagnostics action", () => {
 });
 
 function findCopyDiagnosticsAction() {
-  const action = plugin.activate({ apiVersion: 2, pluginId: "info", runtimePluginId: "info", html, svg }).contributions.actions?.find((candidate) => candidate.id === "copy-diagnostics");
+  const action = plugin.activate({ apiVersion: 3, pluginId: "info", runtimePluginId: "info", html, svg }).contributions.actions?.find((candidate) => candidate.id === "copy-diagnostics");
   if (action === undefined) throw new Error("Expected copy-diagnostics action");
   return action;
 }

@@ -8,7 +8,7 @@ import { corePlugin } from "./core";
 import { PluginRegistry, installWorkspaceLabelScope, installWorkspacePanelScope } from "./registry";
 import { themePackPlugin } from "./themes";
 import type { PiWebPlugin, PluginRuntimeContext, QualifiedContributionId, ThemeTokens, WorkspaceFiles, WorkspaceHost, WorkspaceInvalidation, WorkspaceLabelContext, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePanelContribution, WorkspacePluginBinding } from "./types";
-import { createPairedPluginWorkspaceBackend } from "./workspaceBackend";
+import { createPluginPeer } from "./workspaceBackend";
 import type { PluginBackendRequestTarget } from "../api/pluginBackends";
 
 function createContext(statePatch: Partial<AppState> = {}) {
@@ -85,7 +85,7 @@ describe("PluginRegistry", () => {
       },
     }));
     const registry = new PluginRegistry({ isContributionEnabled: () => enabled });
-    registry.register({ id: "ordinary", plugin: { apiVersion: 2, name: "Ordinary", activate } });
+    registry.register({ id: "ordinary", plugin: { apiVersion: 3, name: "Ordinary", activate } });
     const runtime = createContext({ selectedMachine: testMachine("local"), selectedWorkspace: testWorkspace() }).context;
     const panelContext = createWorkspacePanelContext("local");
     const labelContext = createWorkspaceLabelContext("local");
@@ -132,7 +132,7 @@ describe("PluginRegistry", () => {
       id: "portable",
       machineSpecific: false,
       plugin: {
-        apiVersion: 2,
+        apiVersion: 3,
         name: "Portable",
         activate: () => ({
           contributions: {
@@ -179,14 +179,14 @@ describe("PluginRegistry", () => {
   it("rejects legacy browser plugins with an attributed API-version error", () => {
     const registry = new PluginRegistry();
     const legacyPlugin: PiWebPlugin = {
-      apiVersion: 2,
+      apiVersion: 3,
       name: "Legacy",
       activate: () => ({ contributions: {} }),
     };
     Reflect.set(legacyPlugin, "apiVersion", 1);
 
     expect(() => { registry.register({ id: "legacy", plugin: legacyPlugin }); }).toThrow(
-      "Unsupported browser plugin API version for legacy: 1 (expected 2)",
+      "Unsupported browser plugin API version for legacy: 1 (expected 3)",
     );
     expect(registry.hasPlugin("legacy")).toBe(false);
   });
@@ -209,14 +209,14 @@ describe("PluginRegistry", () => {
       sourcePluginId: "board-tools",
       machineId: "remote-1",
       machineSpecific: true,
-      plugin: { apiVersion: 2, name: "Board Tools", activate },
+      plugin: { apiVersion: 3, name: "Board Tools", activate },
     });
 
     expect(activate).toHaveBeenCalledOnce();
     const activationContext = activate.mock.calls[0]?.[0];
     if (activationContext === undefined) throw new Error("Expected browser plugin activation context");
     expect(activationContext).toMatchObject({
-      apiVersion: 2,
+      apiVersion: 3,
       pluginId: "board-tools",
       runtimePluginId,
     });
@@ -241,7 +241,7 @@ describe("PluginRegistry", () => {
   it("resolves panel and shortcut migrations to the active machine-scoped contribution", () => {
     const registry = new PluginRegistry();
     const plugin: PiWebPlugin = {
-      apiVersion: 2,
+      apiVersion: 3,
       name: "VCS",
       activate: () => ({
         contributions: {
@@ -276,7 +276,7 @@ describe("PluginRegistry", () => {
     registry.register({
       id: "example",
       plugin: {
-        apiVersion: 2,
+        apiVersion: 3,
         name: "Example",
         activate: () => ({
           contributions: {
@@ -322,7 +322,7 @@ describe("PluginRegistry", () => {
     };
     Reflect.set(panel, "navigationAliases", ["not-qualified"]);
     const plugin: PiWebPlugin = {
-      apiVersion: 2,
+      apiVersion: 3,
       name: "Invalid navigation",
       activate: () => ({ contributions: { workspacePanels: [panel] } }),
     };
@@ -338,7 +338,7 @@ describe("PluginRegistry", () => {
     registry.register({
       id: "example",
       plugin: {
-        apiVersion: 2,
+        apiVersion: 3,
         name: "Example",
         activate: ({ html, svg }) => ({
           contributions: {
@@ -366,7 +366,7 @@ describe("PluginRegistry", () => {
     registry.register({
       id: "example",
       plugin: {
-        apiVersion: 2,
+        apiVersion: 3,
         name: "Example",
         activate: () => ({
           contributions: {
@@ -399,7 +399,7 @@ describe("PluginRegistry", () => {
       registry.register({
         id: "example",
         plugin: {
-          apiVersion: 2,
+          apiVersion: 3,
           name: "Example",
           activate: () => ({
             contributions: {
@@ -418,7 +418,7 @@ describe("PluginRegistry", () => {
     const registry = new PluginRegistry();
     let fail = true;
     const plugin = {
-      apiVersion: 2 as const,
+      apiVersion: 3 as const,
       name: "Retryable",
       activate: () => ({
         contributions: {
@@ -454,7 +454,7 @@ describe("PluginRegistry", () => {
     registry.register({
       id: "example",
       plugin: {
-        apiVersion: 2,
+        apiVersion: 3,
         name: "Example",
         activate: () => ({
           contributions: {
@@ -488,7 +488,7 @@ describe("PluginRegistry", () => {
     registry.register({
       id: "example",
       plugin: {
-        apiVersion: 2,
+        apiVersion: 3,
         name: "Example",
         activate: () => ({
           contributions: {
@@ -522,7 +522,7 @@ describe("PluginRegistry", () => {
     expect(() => {
       registry.register({
         id: "example",
-        plugin: { apiVersion: 2, name: "Example", activate: () => ({ contributions: { workspacePanels: [panel] } }) },
+        plugin: { apiVersion: 3, name: "Example", activate: () => ({ contributions: { workspacePanels: [panel] } }) },
       });
     }).toThrow("Invalid workspace-panel invalidation resource for example:files: workspace.unknown");
     expect(registry.hasPlugin("example")).toBe(false);
@@ -745,7 +745,7 @@ describe("PluginRegistry", () => {
     registry.register({
       id: "example",
       plugin: {
-        apiVersion: 2,
+        apiVersion: 3,
         name: "Example",
         activate: () => ({
           contributions: {
@@ -776,7 +776,7 @@ describe("PluginRegistry", () => {
     registry.register({
       id: "example",
       plugin: {
-        apiVersion: 2,
+        apiVersion: 3,
         name: "Example",
         activate: () => ({
           contributions: {
@@ -812,7 +812,7 @@ describe("PluginRegistry", () => {
     registry.register({
       id: "example",
       plugin: {
-        apiVersion: 2,
+        apiVersion: 3,
         name: "Example",
         activate: () => ({
           contributions: {
@@ -838,7 +838,7 @@ describe("PluginRegistry", () => {
       machineId: "remote-1",
       sourcePluginId: "project-tools",
       plugin: {
-        apiVersion: 2,
+        apiVersion: 3,
         name: "Project Tools",
         activate: () => ({
           contributions: {
@@ -876,7 +876,7 @@ describe("PluginRegistry", () => {
       pairedRequestVersion: 1,
       pairedChannelVersion: 1,
       plugin: {
-        apiVersion: 2,
+        apiVersion: 3,
         name: "Board Tools",
         activate: ({ pluginId, runtimePluginId }) => {
           expect(pluginId).toBe("board-tools");
@@ -887,14 +887,14 @@ describe("PluginRegistry", () => {
                 id: "workspace.board",
                 title: "Board",
                 render: (context) => {
-                  void requiredPairedBackend(context.pairedBackend).request?.("cards.summary", { includeClosed: false });
+                  void requiredPluginPeer(context.peer).request?.("cards.summary", { includeClosed: false });
                   return html`<p>Board</p>`;
                 },
               }],
               workspaceLabels: [{
                 id: "board-count",
                 items: (context) => {
-                  void requiredPairedBackend(context.pairedBackend).request?.("cards.count", null);
+                  void requiredPluginPeer(context.peer).request?.("cards.count", null);
                   return [{ type: "text", text: "2 cards" }];
                 },
               }],
@@ -906,7 +906,7 @@ describe("PluginRegistry", () => {
     const panelBase = createWorkspacePanelContext("remote-1");
     const panelContext = installWorkspacePanelScope(panelBase, (binding) => ({
       ...panelBase,
-      pairedBackend: requiredPairedBackend(createPairedPluginWorkspaceBackend(binding, panelBase.workspace, panelBase.machine.id, (target, operation, input) => {
+      peer: requiredPluginPeer(createPluginPeer(binding, panelBase.workspace, panelBase.machine.id, (target, operation, input) => {
         observedBindings.push(binding);
         observedRequests.push({ target, operation, input });
         return Promise.resolve(null);
@@ -915,7 +915,7 @@ describe("PluginRegistry", () => {
     const labelBase = createWorkspaceLabelContext("remote-1");
     const labelContext = installWorkspaceLabelScope(labelBase, (binding) => ({
       ...labelBase,
-      pairedBackend: requiredPairedBackend(createPairedPluginWorkspaceBackend(binding, labelBase.workspace, labelBase.machine.id, (target, operation, input) => {
+      peer: requiredPluginPeer(createPluginPeer(binding, labelBase.workspace, labelBase.machine.id, (target, operation, input) => {
         observedBindings.push(binding);
         observedRequests.push({ target, operation, input });
         return Promise.resolve(null);
@@ -947,7 +947,7 @@ describe("PluginRegistry", () => {
     const registry = new PluginRegistry();
     const remotePluginId = machineScopedPluginId("remote-1", "pair-tools");
     const pairedPlugin = (name: string) => ({
-      apiVersion: 2 as const,
+      apiVersion: 3 as const,
       name,
       activate: () => ({
         contributions: {
@@ -955,7 +955,7 @@ describe("PluginRegistry", () => {
             id: "workspace.pair",
             title: name,
             render: (context: WorkspacePanelContext) => {
-              void requiredPairedBackend(context.pairedBackend).request?.("pair.check", null);
+              void requiredPluginPeer(context.peer).request?.("pair.check", null);
               return html`<p>${name}</p>`;
             },
           }],
@@ -978,7 +978,7 @@ describe("PluginRegistry", () => {
       const base = createWorkspacePanelContext(machineId);
       const context = installWorkspacePanelScope(base, (binding) => ({
         ...base,
-        pairedBackend: requiredPairedBackend(createPairedPluginWorkspaceBackend(binding, base.workspace, machineId, (target) => {
+        peer: requiredPluginPeer(createPluginPeer(binding, base.workspace, machineId, (target) => {
           requests.push(target);
           return Promise.resolve(null);
         }, vi.fn())),
@@ -1003,7 +1003,7 @@ describe("PluginRegistry", () => {
       machineId: "remote-1",
       sourcePluginId: "shared-tools",
       plugin: {
-        apiVersion: 2,
+        apiVersion: 3,
         name: "Remote Shared Tools",
         activate: () => ({
           contributions: {
@@ -1020,7 +1020,7 @@ describe("PluginRegistry", () => {
     registry.register({
       id: "shared-tools",
       plugin: {
-        apiVersion: 2,
+        apiVersion: 3,
         name: "Gateway Shared Tools",
         activate: () => ({
           contributions: {
@@ -1052,7 +1052,7 @@ describe("PluginRegistry", () => {
       id: "updates",
       machineSpecific: true,
       plugin: {
-        apiVersion: 2,
+        apiVersion: 3,
         name: "Gateway Updates",
         activate: () => ({
           contributions: {
@@ -1073,7 +1073,7 @@ describe("PluginRegistry", () => {
       machineId: "remote-1",
       sourcePluginId: "updates",
       plugin: {
-        apiVersion: 2,
+        apiVersion: 3,
         name: "Remote Updates",
         activate: () => ({
           contributions: {
@@ -1103,7 +1103,7 @@ describe("PluginRegistry", () => {
     registry.register({
       id: "status-tools",
       plugin: {
-        apiVersion: 2,
+        apiVersion: 3,
         name: "Gateway Status Tools",
         activate: () => ({ contributions: { actions: [{ id: "open", title: "Open Gateway Status", run: () => undefined }] } }),
       },
@@ -1117,7 +1117,7 @@ describe("PluginRegistry", () => {
       sourcePluginId: "status-tools",
       machineSpecific: true,
       plugin: {
-        apiVersion: 2,
+        apiVersion: 3,
         name: "Remote Status Tools",
         activate: () => ({ contributions: { actions: [{ id: "open", title: "Open Remote Status", run: () => undefined }] } }),
       },
@@ -1130,13 +1130,13 @@ describe("PluginRegistry", () => {
   it("does not activate remote duplicates when the gateway plugin is already registered", () => {
     const registry = new PluginRegistry();
     const remoteActivate = vi.fn(() => ({ contributions: { actions: [{ id: "remote-action", title: "Remote Action", run: () => undefined }] } }));
-    registry.register({ id: "shared-tools", plugin: { apiVersion: 2, name: "Gateway Shared Tools", activate: () => ({ contributions: {} }) } });
+    registry.register({ id: "shared-tools", plugin: { apiVersion: 3, name: "Gateway Shared Tools", activate: () => ({ contributions: {} }) } });
 
     registry.register({
       id: machineScopedPluginId("remote-1", "shared-tools"),
       machineId: "remote-1",
       sourcePluginId: "shared-tools",
-      plugin: { apiVersion: 2, name: "Remote Shared Tools", activate: remoteActivate },
+      plugin: { apiVersion: 3, name: "Remote Shared Tools", activate: remoteActivate },
     });
 
     expect(remoteActivate).not.toHaveBeenCalled();
@@ -1174,7 +1174,7 @@ function createWorkspacePanelContext(machineId: string, prompt: WorkspacePanelCo
   };
 }
 
-function requiredPairedBackend(backend: WorkspacePanelContext["pairedBackend"]): NonNullable<WorkspacePanelContext["pairedBackend"]> {
+function requiredPluginPeer(backend: WorkspacePanelContext["peer"]): NonNullable<WorkspacePanelContext["peer"]> {
   if (backend === undefined) throw new Error("Expected a paired workspace backend");
   return backend;
 }

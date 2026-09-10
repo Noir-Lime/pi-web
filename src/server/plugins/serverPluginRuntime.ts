@@ -2,12 +2,12 @@ import { pathToFileURL } from "node:url";
 import type {
   JsonObject,
   JsonValue,
-  PairedPluginBackendV1,
-  PairedPluginChannel,
-  PairedPluginChannelCloseContext,
-  PairedPluginChannelOpenContext,
-  PairedPluginRequestContext,
   PiWebServerPlugin,
+  ServerPluginPeer,
+  ServerPluginPeerChannel,
+  ServerPluginPeerChannelCloseContext,
+  ServerPluginPeerChannelOpenContext,
+  ServerPluginPeerRequestContext,
   ProjectInput,
   ProviderRemoveContext,
   ProviderRequestContext,
@@ -86,7 +86,7 @@ export interface ServerPluginPairedBackendContribution {
   source: string;
   scope: PiWebPluginScope;
   moduleRevision: string;
-  backend: PairedPluginBackendV1;
+  backend: ServerPluginPeer;
 }
 
 export interface ServerPluginHealthInspection {
@@ -280,8 +280,8 @@ export class ServerPluginRuntime {
           name: active.plugin.name,
           phase: "stop",
           message: errorMessage(error),
-          ...(active.activation.pairedBackend?.request === undefined ? {} : { pairedRequestVersion: 1 }),
-          ...(active.activation.pairedBackend?.openChannel === undefined ? {} : { pairedChannelVersion: 1 }),
+          ...(active.activation.peer?.request === undefined ? {} : { pairedRequestVersion: 1 }),
+          ...(active.activation.peer?.openChannel === undefined ? {} : { pairedChannelVersion: 1 }),
         }));
         this.logger.error({ err: error, pluginId: active.entry.id, phase: "stop" }, "server plugin stop failed");
       }
@@ -327,7 +327,7 @@ export class ServerPluginRuntime {
       const scopedLogger = createScopedLogger(entry.id, this.logger);
       noticeReporter = createScopedNoticeReporter(entry.id, this.noticeSink);
       const activationValue = await runBounded(entry.id, phase, this.lifecycleTimeoutMs, (signal) => loadedPlugin.activate(Object.freeze({
-        apiVersion: 1,
+        apiVersion: 2,
         pluginId: entry.id,
         packageRoot: entry.packageRoot,
         logger: scopedLogger,
@@ -359,7 +359,7 @@ export class ServerPluginRuntime {
             moduleRevision: requireServerModule(entry).revision,
             provider: loadedActivation.workspaceProvider,
           });
-      const pairedBackendContribution = loadedActivation.pairedBackend === undefined
+      const pairedBackendContribution = loadedActivation.peer === undefined
         ? undefined
         : Object.freeze({
             pluginId: entry.id,
@@ -368,7 +368,7 @@ export class ServerPluginRuntime {
             source: entry.source,
             scope: entry.scope,
             moduleRevision: requireServerModule(entry).revision,
-            backend: loadedActivation.pairedBackend,
+            backend: loadedActivation.peer,
           });
       this.activePlugins.push(Object.freeze({
         entry,
@@ -437,8 +437,8 @@ function requireTerminalCatalogEntry(snapshot: PiWebPluginCatalogSnapshot): PiWe
 }
 
 function requireTerminalActivation(activation: InternalServerPluginActivation): void {
-  if (activation.pairedBackend?.request === undefined || activation.pairedBackend.openChannel === undefined) {
-    throw new IncompatibleServerPluginError("Required Terminal server entry must expose paired request and channel version 1");
+  if (activation.peer?.request === undefined || activation.peer.openChannel === undefined) {
+    throw new IncompatibleServerPluginError("Required Terminal server entry must expose peer request and channel capabilities");
   }
   if (activation.requiredTerminalService === undefined) {
     throw new IncompatibleServerPluginError("Required Terminal server entry must expose requiredTerminalService");
@@ -513,7 +513,7 @@ function parsePluginExport(imported: unknown): PiWebServerPlugin {
     name: plugin["name"],
     activate: plugin["activate"],
   };
-  if (candidate.apiVersion !== 1) {
+  if (candidate.apiVersion !== 2) {
     throw new IncompatibleServerPluginError(`Unsupported server plugin API version: ${formatUnknown(candidate.apiVersion)}`);
   }
   if (typeof candidate.name !== "string" || candidate.name === "") {
@@ -523,12 +523,12 @@ function parsePluginExport(imported: unknown): PiWebServerPlugin {
     throw new IncompatibleServerPluginError("Server plugin activate must be a function");
   }
   const activate = candidate.activate.bind(plugin);
-  return Object.freeze({ apiVersion: 1, name: candidate.name, activate: (context: ServerPluginActivationContext) => activate(context) });
+  return Object.freeze({ apiVersion: 2, name: candidate.name, activate: (context: ServerPluginActivationContext) => activate(context) });
 }
 
 function isPiWebServerPlugin(value: unknown): value is PiWebServerPlugin {
   return isRecord(value)
-    && value["apiVersion"] === 1
+    && value["apiVersion"] === 2
     && typeof value["name"] === "string"
     && value["name"] !== ""
     && typeof value["activate"] === "function";
@@ -549,7 +549,7 @@ function parseActivation(value: unknown, pluginId: string): InternalServerPlugin
     throw new IncompatibleServerPluginError("Server plugins may contribute only one workspaceProvider");
   }
   const workspaceProviderValue = value["workspaceProvider"];
-  const pairedBackendValue = value["pairedBackend"];
+  const peerValue = value["peer"];
   const requiredTerminalServiceValue = value["requiredTerminalService"];
   if (requiredTerminalServiceValue !== undefined && pluginId !== REQUIRED_TERMINAL_PLUGIN_ID) {
     throw new IncompatibleServerPluginError("Only the required Terminal plugin may expose requiredTerminalService");
@@ -564,7 +564,7 @@ function parseActivation(value: unknown, pluginId: string): InternalServerPlugin
   }
   const candidate = {
     workspaceProvider: workspaceProviderValue === undefined ? undefined : snapshotWorkspaceProvider(workspaceProviderValue),
-    pairedBackend: pairedBackendValue === undefined ? undefined : snapshotPairedPluginBackend(pairedBackendValue),
+    peer: peerValue === undefined ? undefined : snapshotPluginPeer(peerValue),
     start: value["start"],
     stop: value["stop"],
     health: value["health"],
@@ -581,7 +581,7 @@ function parseActivation(value: unknown, pluginId: string): InternalServerPlugin
   const health = candidate.health?.bind(value);
   return Object.freeze({
     ...(candidate.workspaceProvider === undefined ? {} : { workspaceProvider: candidate.workspaceProvider }),
-    ...(candidate.pairedBackend === undefined ? {} : { pairedBackend: candidate.pairedBackend }),
+    ...(candidate.peer === undefined ? {} : { peer: candidate.peer }),
     ...(requiredTerminalService === undefined ? {} : { requiredTerminalService }),
     ...(start === undefined ? {} : { start: (signal: AbortSignal) => start(signal) }),
     ...(stop === undefined ? {} : { stop: (signal: AbortSignal) => stop(signal) }),
@@ -592,41 +592,41 @@ function parseActivation(value: unknown, pluginId: string): InternalServerPlugin
 function isServerPluginActivation(value: unknown): value is ServerPluginActivation {
   if (!isRecord(value)) return false;
   const workspaceProvider = value["workspaceProvider"];
-  const pairedBackend = value["pairedBackend"];
+  const peer = value["peer"];
   const start = value["start"];
   const stop = value["stop"];
   const health = value["health"];
   return (workspaceProvider === undefined || isWorkspaceProvider(workspaceProvider))
-    && (pairedBackend === undefined || isPairedPluginBackend(pairedBackend))
+    && (peer === undefined || isPluginPeer(peer))
     && (start === undefined || typeof start === "function")
     && (stop === undefined || typeof stop === "function")
     && (health === undefined || typeof health === "function");
 }
 
-function snapshotPairedPluginBackend(value: unknown): PairedPluginBackendV1 {
-  if (!isPairedPluginBackend(value)) {
-    throw new IncompatibleServerPluginError("Server plugin pairedBackend must be version 1 with at least one request or channel handler");
+function snapshotPluginPeer(value: unknown): ServerPluginPeer {
+  if (!isPluginPeer(value)) {
+    throw new IncompatibleServerPluginError("Server plugin peer must include a request or channel handler");
   }
   const request = value.request?.bind(value);
   const openChannel = value.openChannel?.bind(value);
   const snapshotRequest = request === undefined
     ? undefined
-    : (context: PairedPluginRequestContext): JsonValue | Promise<JsonValue> => request(context);
+    : (context: ServerPluginPeerRequestContext): JsonValue | Promise<JsonValue> => request(context);
   const snapshotOpenChannel = openChannel === undefined
     ? undefined
-    : async (context: PairedPluginChannelOpenContext): Promise<PairedPluginChannel> => (
-        snapshotPairedPluginChannel(await openChannel(context))
+    : async (context: ServerPluginPeerChannelOpenContext): Promise<ServerPluginPeerChannel> => (
+        snapshotPluginPeerChannel(await openChannel(context))
       );
   if (snapshotRequest !== undefined && snapshotOpenChannel !== undefined) {
-    return Object.freeze({ version: 1, request: snapshotRequest, openChannel: snapshotOpenChannel });
+    return Object.freeze({ request: snapshotRequest, openChannel: snapshotOpenChannel });
   }
-  if (snapshotRequest !== undefined) return Object.freeze({ version: 1, request: snapshotRequest });
-  if (snapshotOpenChannel !== undefined) return Object.freeze({ version: 1, openChannel: snapshotOpenChannel });
-  throw new IncompatibleServerPluginError("Server plugin pairedBackend must include a request or channel handler");
+  if (snapshotRequest !== undefined) return Object.freeze({ request: snapshotRequest });
+  if (snapshotOpenChannel !== undefined) return Object.freeze({ openChannel: snapshotOpenChannel });
+  throw new IncompatibleServerPluginError("Server plugin peer must include a request or channel handler");
 }
 
-function isPairedPluginBackend(value: unknown): value is PairedPluginBackendV1 {
-  if (!isRecord(value) || value["version"] !== 1) return false;
+function isPluginPeer(value: unknown): value is ServerPluginPeer {
+  if (!isRecord(value)) return false;
   const request = value["request"];
   const openChannel = value["openChannel"];
   return (typeof request === "function" || typeof openChannel === "function")
@@ -634,8 +634,8 @@ function isPairedPluginBackend(value: unknown): value is PairedPluginBackendV1 {
     && (openChannel === undefined || typeof openChannel === "function");
 }
 
-function snapshotPairedPluginChannel(value: unknown): PairedPluginChannel {
-  if (!isPairedPluginChannel(value)) {
+function snapshotPluginPeerChannel(value: unknown): ServerPluginPeerChannel {
+  if (!isPluginPeerChannel(value)) {
     throw new Error("Server plugin openChannel must return a channel with receive, optional completion, and optional close callbacks");
   }
   const receive = value.receive.bind(value);
@@ -644,11 +644,11 @@ function snapshotPairedPluginChannel(value: unknown): PairedPluginChannel {
   return Object.freeze({
     receive: (data: JsonValue, signal: AbortSignal) => receive(data, signal),
     ...(closed === undefined ? {} : { closed }),
-    ...(close === undefined ? {} : { close: (context: PairedPluginChannelCloseContext) => close(context) }),
+    ...(close === undefined ? {} : { close: (context: ServerPluginPeerChannelCloseContext) => close(context) }),
   });
 }
 
-function isPairedPluginChannel(value: unknown): value is PairedPluginChannel {
+function isPluginPeerChannel(value: unknown): value is ServerPluginPeerChannel {
   return isRecord(value)
     && typeof value["receive"] === "function"
     && (value["closed"] === undefined || isPromiseLike(value["closed"]))

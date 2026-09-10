@@ -31,8 +31,7 @@ describe("server plugin runtime", () => {
     const modules = new Map<string, unknown>([
       ["alpha", pluginModule("Alpha", {
         workspaceProvider: provider,
-        pairedBackend: {
-          version: 1,
+        peer: {
           request: () => ({ ready: true }),
           openChannel: () => ({ receive: () => undefined }),
         },
@@ -40,7 +39,7 @@ describe("server plugin runtime", () => {
         stop: () => { events.push("stop:alpha"); },
       })],
       ["bad-activate", { default: plugin("Bad activate", () => { throw new Error("activate exploded"); }) }],
-      ["bad-api", { default: { apiVersion: 2, name: "Future", activate: () => ({}) } }],
+      ["bad-api", { default: { apiVersion: 1, name: "Legacy", activate: () => ({}) } }],
       ["bad-start", pluginModule("Bad start", {
         workspaceProvider: testProvider(),
         start: () => {
@@ -80,7 +79,7 @@ describe("server plugin runtime", () => {
     expect(runtime.healthRecords()).toEqual([
       expect.objectContaining({ pluginId: "alpha", state: "active", name: "Alpha", browserRevision: "browser-7", settingsRevision: "settings-1", machineSpecific: true, pairedRequestVersion: 1, pairedChannelVersion: 1 }),
       expect.objectContaining({ pluginId: "bad-activate", state: "failed", phase: "activate", message: "activate exploded" }),
-      expect.objectContaining({ pluginId: "bad-api", state: "incompatible", phase: "validate", message: "Unsupported server plugin API version: 2" }),
+      expect.objectContaining({ pluginId: "bad-api", state: "incompatible", phase: "validate", message: "Unsupported server plugin API version: 1" }),
       expect.objectContaining({ pluginId: "bad-import", state: "failed", phase: "import", message: "import exploded" }),
       expect.objectContaining({ pluginId: "bad-start", state: "failed", phase: "start", message: "start exploded" }),
       expect.objectContaining({ pluginId: "omega", state: "active", name: "Omega" }),
@@ -721,12 +720,12 @@ describe("server plugin runtime", () => {
       ])) },
       importer: (url) => {
         const pluginId = pluginIdFromUrl(url);
-        const pairedBackend = pluginId === "request-only"
-          ? { version: 1, request: () => null }
+        const peer = pluginId === "request-only"
+          ? { request: () => null }
           : pluginId === "channel-only"
-            ? { version: 1, openChannel: () => ({ receive: () => undefined }) }
-            : { version: 1 };
-        return Promise.resolve(pluginModule(pluginId, { pairedBackend }));
+            ? { openChannel: () => ({ receive: () => undefined }) }
+            : {};
+        return Promise.resolve(pluginModule(pluginId, { peer }));
       },
       logger: testLogger(),
     });
@@ -745,15 +744,14 @@ describe("server plugin runtime", () => {
     const provider = testProvider();
     const mutableActivation: Record<string, unknown> = {
       workspaceProvider: provider,
-      pairedBackend: {
-        version: 1,
+      peer: {
         request: () => ({ captured: true }),
         openChannel: () => ({ receive: () => undefined }),
       },
     };
     mutableActivation["start"] = () => {
       mutableActivation["workspaceProvider"] = {};
-      mutableActivation["pairedBackend"] = {};
+      mutableActivation["peer"] = {};
     };
     const throwingActivation: Record<string, unknown> = {};
     Object.defineProperty(throwingActivation, "stop", {
@@ -809,7 +807,7 @@ describe("server plugin runtime", () => {
     ]);
   });
 
-  it("rejects plural providers, malformed paired backends, and non-JSON settings before publication", async () => {
+  it("rejects plural providers, malformed peers, and non-JSON settings before publication", async () => {
     const pluralActivation = { workspaceProviders: [testProvider()] };
     const circular: Record<string, unknown> = {};
     circular["self"] = circular;
@@ -817,8 +815,8 @@ describe("server plugin runtime", () => {
       const pluginId = pluginIdFromUrl(url);
       const activation = pluginId === "plural"
         ? pluralActivation
-        : pluginId === "invalid-backend" ? { pairedBackend: { version: 2, request: () => null } }
-          : pluginId === "invalid-channel" ? { pairedBackend: { version: 1, request: () => null, openChannel: true } }
+        : pluginId === "invalid-backend" ? { peer: {} }
+          : pluginId === "invalid-channel" ? { peer: { request: () => null, openChannel: true } }
             : {};
       return Promise.resolve(pluginModule("Plural", activation));
     };
@@ -843,8 +841,8 @@ describe("server plugin runtime", () => {
       ["non-json-settings", "incompatible", "validate"],
       ["plural", "incompatible", "validate"],
     ]);
-    expect(records[0]?.message).toContain("pairedBackend must be version 1 with at least one request or channel handler");
-    expect(records[1]?.message).toContain("pairedBackend must be version 1 with at least one request or channel handler");
+    expect(records[0]?.message).toContain("peer must include a request or channel handler");
+    expect(records[1]?.message).toContain("peer must include a request or channel handler");
     expect(records[2]?.message).toContain("must not contain cycles");
     expect(records[3]?.message).toContain("must contain only JSON values");
     expect(records[4]?.message).toBe("Server plugins may contribute only one workspaceProvider");
@@ -883,8 +881,7 @@ describe("server plugin runtime", () => {
         imported.push(id);
         if (id === "pi-web.terminal") {
           return Promise.resolve(pluginModule("Terminal", {
-            pairedBackend: {
-              version: 1,
+            peer: {
               request: () => null,
               openChannel: () => ({ receive: () => undefined }),
             },
@@ -919,8 +916,7 @@ describe("server plugin runtime", () => {
         entry("pi-web.terminal", { scope: "bundled", browserRevision: "terminal-browser" }),
       ])) },
       importer: () => Promise.resolve(pluginModule("Terminal", {
-        pairedBackend: {
-          version: 1,
+        peer: {
           request: () => null,
           openChannel: () => ({ receive: () => undefined }),
         },
@@ -944,8 +940,7 @@ describe("server plugin runtime", () => {
         const id = pluginIdFromUrl(url);
         imported.push(id);
         return Promise.resolve(pluginModule("Terminal", {
-          pairedBackend: {
-            version: 1,
+          peer: {
             request: () => null,
             openChannel: () => ({ receive: () => undefined }),
           },
@@ -988,7 +983,7 @@ function pluginModule(name: string, activation: ServerPluginActivation | Record<
 }
 
 function plugin(name: string, activate: PiWebServerPlugin["activate"]): PiWebServerPlugin {
-  return { apiVersion: 1, name, activate };
+  return { apiVersion: 2, name, activate };
 }
 
 function requiredTerminalServiceFixture() {

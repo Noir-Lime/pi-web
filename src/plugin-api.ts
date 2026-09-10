@@ -40,14 +40,14 @@ export type HtmlTemplateTag = (strings: TemplateStringsArray, ...values: unknown
 export type SvgTemplateTag = (strings: TemplateStringsArray, ...values: unknown[]) => TemplateResult;
 
 export interface PiWebPlugin {
-  apiVersion: 2;
+  apiVersion: 3;
   name: string;
   activate: (context: PluginActivationContext) => PluginActivationResult;
 }
 
 /** Host-owned frozen values supplied once during browser plugin activation. */
 export interface PluginActivationContext {
-  readonly apiVersion: 2;
+  readonly apiVersion: 3;
   /** Stable package/source identity, including on federated machines. */
   readonly pluginId: PluginId;
   /** Host-unique identity for qualified contribution references in this runtime. */
@@ -219,20 +219,20 @@ export interface WorkspaceBackend {
   request(operation: string, input: JsonValue): Promise<JsonValue>;
 }
 
-export interface PairedWorkspaceBackendRequestOptions {
+export interface PluginPeerRequestOptions {
   /** Cancels this bounded request through local or federated host transport. */
   readonly signal?: AbortSignal;
 }
 
-/** Callbacks and cancellation for one bounded package-paired backend channel. */
-export interface PairedWorkspaceBackendChannelOptions {
+/** Callbacks and cancellation for one bounded package-peer channel. */
+export interface PluginPeerChannelOptions {
   /** Cancels the channel open or closes the live channel through every host hop. */
   readonly signal?: AbortSignal;
   /** Receives one plugin-authored JSON frame after the channel is ready. */
   readonly onData: (data: JsonValue) => void;
 }
 
-export interface PairedWorkspaceBackendChannelClose {
+export interface PluginPeerChannelClose {
   readonly code: number;
   readonly reason: string;
   readonly wasClean: boolean;
@@ -240,8 +240,8 @@ export interface PairedWorkspaceBackendChannelClose {
   readonly error?: Readonly<{ code: string; message: string }>;
 }
 
-export interface PairedWorkspaceBackendChannel {
-  readonly closed: Promise<PairedWorkspaceBackendChannelClose>;
+export interface PluginPeerChannel {
+  readonly closed: Promise<PluginPeerChannelClose>;
   /** Queue one bounded JSON frame or throw. Success means queue acceptance, not remote receipt. */
   send(data: JsonValue): void;
   close(reason?: string): void;
@@ -249,37 +249,17 @@ export interface PairedWorkspaceBackendChannel {
 
 /**
  * Exact revision-paired path to this browser package's active server entry.
- * Request and channel support are advertised independently.
+ * A peer supplies a request handler, a channel handler, or both, but never neither.
  */
-interface PairedWorkspaceBackendBaseV1 {
-  readonly version: 1;
-}
-
-interface PairedWorkspaceBackendRequestCapabilityV1 {
-  readonly requestVersion: 1;
-  request(operation: string, input: JsonValue, options?: PairedWorkspaceBackendRequestOptions): Promise<JsonValue>;
-}
-
-interface PairedWorkspaceBackendWithoutRequest {
-  readonly requestVersion?: undefined;
-  request?: undefined;
-}
-
-interface PairedWorkspaceBackendChannelCapabilityV1 {
-  readonly channelVersion: 1;
-  openChannel(operation: string, input: JsonValue, options: PairedWorkspaceBackendChannelOptions): Promise<PairedWorkspaceBackendChannel>;
-}
-
-interface PairedWorkspaceBackendWithoutChannel {
-  readonly channelVersion?: undefined;
-  openChannel?: undefined;
-}
-
-export type PairedWorkspaceBackendV1 = PairedWorkspaceBackendBaseV1 & (
-  | (PairedWorkspaceBackendRequestCapabilityV1 & PairedWorkspaceBackendWithoutChannel)
-  | (PairedWorkspaceBackendWithoutRequest & PairedWorkspaceBackendChannelCapabilityV1)
-  | (PairedWorkspaceBackendRequestCapabilityV1 & PairedWorkspaceBackendChannelCapabilityV1)
-);
+export type PluginPeer =
+  | {
+      request(operation: string, input: JsonValue, options?: PluginPeerRequestOptions): Promise<JsonValue>;
+      openChannel?(operation: string, input: JsonValue, options: PluginPeerChannelOptions): Promise<PluginPeerChannel>;
+    }
+  | {
+      request?: undefined;
+      openChannel(operation: string, input: JsonValue, options: PluginPeerChannelOptions): Promise<PluginPeerChannel>;
+    };
 
 export interface WorkspaceHost {
   requestRender(): void;
@@ -295,7 +275,7 @@ export interface WorkspaceContext {
   /** Legacy request helper for the server plugin that currently owns this workspace. */
   backend?: WorkspaceBackend;
   /** Exact package-paired request/channel capabilities, independent of workspace ownership. */
-  pairedBackend?: PairedWorkspaceBackendV1;
+  peer?: PluginPeer;
   host: WorkspaceHost;
 }
 

@@ -61,7 +61,7 @@ describe("external plugin manifests", () => {
       plugins: [{ id: "terminal", module: "./terminal/plugin.js", source: "local", scope: "local" }],
     })))));
     const moduleLoader = vi.fn(() => Promise.resolve({
-      default: { apiVersion: 2, name: "Third-party terminal", activate: () => ({ contributions: {} }) },
+      default: { apiVersion: 3, name: "Third-party terminal", activate: () => ({ contributions: {} }) },
     }));
 
     const result = await loadExternalPlugins(undefined, { moduleLoader });
@@ -78,7 +78,7 @@ describe("external plugin manifests", () => {
       plugins: [{ id: "info", module: "./info/pi-web-plugin.js?v=1", backendRevision: "server-r1", pairedRequestVersion: 1, pairedChannelVersion: 1, machineSpecific: false }],
     }))));
     const moduleLoader = vi.fn(() => Promise.resolve({
-      default: { apiVersion: 2, name: "Info", activate: () => ({ contributions: {} }) },
+      default: { apiVersion: 3, name: "Info", activate: () => ({ contributions: {} }) },
     }));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -87,7 +87,7 @@ describe("external plugin manifests", () => {
     expect(fetchMock).toHaveBeenCalledWith(manifestUrl, { cache: "no-store" });
     expect(moduleLoader).toHaveBeenCalledWith("https://pi.example.test/test/ai/pi-web-plugins/info/pi-web-plugin.js?v=1");
     expect(result.failures).toEqual([]);
-    expect(result.registrations).toMatchObject([{ id: "info", backendRevision: "server-r1", pairedRequestVersion: 1, pairedChannelVersion: 1, machineSpecific: false, plugin: { apiVersion: 2, name: "Info" } }]);
+    expect(result.registrations).toMatchObject([{ id: "info", backendRevision: "server-r1", pairedRequestVersion: 1, pairedChannelVersion: 1, machineSpecific: false, plugin: { apiVersion: 3, name: "Info" } }]);
   });
 
   it.each([
@@ -97,7 +97,7 @@ describe("external plugin manifests", () => {
     { pairedChannelVersion: 1 },
   ])("rejects invalid paired backend capability metadata before module import", async (backend) => {
     const moduleLoader = vi.fn(() => Promise.resolve({
-      default: { apiVersion: 2, name: "Info", activate: () => ({ contributions: {} }) },
+      default: { apiVersion: 3, name: "Info", activate: () => ({ contributions: {} }) },
     }));
     vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(JSON.stringify({
       lifecycleVersion: 2,
@@ -119,7 +119,7 @@ describe("external plugin manifests", () => {
       ],
     })))));
     const moduleLoader = vi.fn(() => Promise.resolve({
-      default: { apiVersion: 2, name: "Info", activate: () => ({ contributions: {} }) },
+      default: { apiVersion: 3, name: "Info", activate: () => ({ contributions: {} }) },
     }));
 
     const result = await loadExternalPlugins(undefined, { moduleLoader });
@@ -151,7 +151,7 @@ describe("external plugin manifests", () => {
     const failure = new Error("Terminal module failed");
     const moduleLoader = vi.fn((moduleUrl: string) => moduleUrl.includes("/pi-web.terminal/")
       ? Promise.reject(failure)
-      : Promise.resolve({ default: { apiVersion: 2, name: "Info", activate: () => ({ contributions: {} }) } }));
+      : Promise.resolve({ default: { apiVersion: 3, name: "Info", activate: () => ({ contributions: {} }) } }));
 
     const result = await loadExternalPlugins(undefined, { moduleLoader });
 
@@ -180,7 +180,7 @@ describe("external plugin manifests", () => {
     expect(result.failures).toHaveLength(1);
     expect(result.failures[0]?.entry.id).toBe("legacy");
     expect(result.failures[0]?.error).toEqual(expect.objectContaining({
-      message: "Unsupported browser plugin API version for https://pi.example.test/pi-web-plugins/legacy/plugin.js: 1 (expected 2)",
+      message: "Unsupported browser plugin API version for https://pi.example.test/pi-web-plugins/legacy/plugin.js: 1 (expected 3)",
     }));
   });
 
@@ -224,7 +224,7 @@ describe("external plugin manifests", () => {
       }],
     })))));
     const moduleLoader = vi.fn(() => Promise.resolve({
-      default: { apiVersion: 2, name: "Bundled tools", activate: () => ({ contributions: {} }) },
+      default: { apiVersion: 3, name: "Bundled tools", activate: () => ({ contributions: {} }) },
     }));
 
     const local = await loadExternalPlugins(manifestUrl, { moduleLoader });
@@ -253,7 +253,7 @@ describe("external plugin manifests", () => {
       const id = moduleUrl.includes("/retry/") ? "retry" : "stable";
       if (id === "retry" && retryAttempts++ === 0) return Promise.reject(new Error("temporary module failure"));
       return Promise.resolve({
-        default: { apiVersion: 2, name: id, activate: () => ({ contributions: {} }) },
+        default: { apiVersion: 3, name: id, activate: () => ({ contributions: {} }) },
       });
     });
     const registry = new PluginRegistry();
@@ -285,7 +285,7 @@ describe("external plugin manifests", () => {
         { id: "duplicate", module: "./duplicate/two.js" },
       ],
     })))));
-    const moduleLoader = vi.fn(() => Promise.resolve({ default: { apiVersion: 2, name: "Duplicate", activate: () => ({ contributions: {} }) } }));
+    const moduleLoader = vi.fn(() => Promise.resolve({ default: { apiVersion: 3, name: "Duplicate", activate: () => ({ contributions: {} }) } }));
 
     await expect(loadExternalPlugins(undefined, { moduleLoader })).rejects.toThrow("Duplicate plugin manifest id: duplicate");
     expect(moduleLoader).not.toHaveBeenCalled();
@@ -297,7 +297,7 @@ describe("external plugin manifests", () => {
       terminalMode: "recovery-disabled",
       plugins: [{ id, module: `./${id}/plugin.js` }],
     })))));
-    const moduleLoader = vi.fn(() => Promise.resolve({ default: { apiVersion: 2, name: id, activate: () => ({ contributions: {} }) } }));
+    const moduleLoader = vi.fn(() => Promise.resolve({ default: { apiVersion: 3, name: id, activate: () => ({ contributions: {} }) } }));
 
     await expect(loadExternalPlugins(undefined, { moduleLoader })).rejects.toThrow(`Reserved plugin manifest id: ${id}`);
     expect(moduleLoader).not.toHaveBeenCalled();

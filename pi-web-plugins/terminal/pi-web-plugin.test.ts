@@ -18,7 +18,7 @@ describe("Terminal browser plugin activation", () => {
     const panel = result.contributions.workspacePanels?.[0];
     const action = result.contributions.actions?.[0];
 
-    expect(plugin).toMatchObject({ apiVersion: 2, name: "Terminal" });
+    expect(plugin).toMatchObject({ apiVersion: 3, name: "Terminal" });
     expect(result.requiredTerminalFacade).toMatchObject({ version: 1 });
     expect(panel).toMatchObject({
       id: "workspace.terminal",
@@ -80,7 +80,7 @@ describe("Terminal browser plugin activation", () => {
 });
 
 function activationContext(runtimePluginId = "pi-web.terminal"): PluginActivationContext {
-  return Object.freeze({ apiVersion: 2, pluginId: "pi-web.terminal", runtimePluginId, html, svg });
+  return Object.freeze({ apiVersion: 3, pluginId: "pi-web.terminal", runtimePluginId, html, svg });
 }
 
 function workspaceContext(machineId: string): WorkspacePanelContext {
@@ -88,7 +88,7 @@ function workspaceContext(machineId: string): WorkspacePanelContext {
     machine: { id: machineId, name: machineId, kind: machineId === "local" ? "local" : "remote" },
     workspace: { id: "workspace-1", projectId: "project-1", path: "/repo", label: "main", isMain: true },
     files: { readFile: vi.fn(), listFiles: vi.fn(), writeFile: vi.fn(), deleteFile: vi.fn(), moveFile: vi.fn() },
-    pairedBackend: { version: 1, requestVersion: 1, channelVersion: 1, request: vi.fn(() => Promise.resolve([])), openChannel: vi.fn() },
+    peer: { request: vi.fn(() => Promise.resolve([])), openChannel: vi.fn() },
     host: { requestRender: vi.fn() },
     prompt: { insertText: vi.fn(), getText: vi.fn(() => ""), getSelection: vi.fn(() => null) },
     terminal: { open: vi.fn(), runCommand: vi.fn() },

@@ -2,10 +2,10 @@ import { isAbsolute, resolve } from "node:path";
 import type {
   JsonObject,
   JsonValue,
-  PairedPluginChannel,
-  PairedPluginChannelOpenContext,
-  PairedPluginRequestContext,
-  PairedPluginWorkspace,
+  ServerPluginPeerChannel,
+  ServerPluginPeerChannelOpenContext,
+  ServerPluginPeerRequestContext,
+  ServerPluginPeerWorkspace,
   ProjectInput,
   WorkspaceProviderMetadata,
 } from "../../server-plugin-api.js";
@@ -269,7 +269,7 @@ export class PluginBackendRegistry {
     else signal?.addEventListener("abort", abortFromCaller, { once: true });
 
     let managed: ManagedPluginBackendChannel | undefined;
-    let openingChannel: Promise<PairedPluginChannel> | undefined;
+    let openingChannel: Promise<ServerPluginPeerChannel> | undefined;
     let sendFailure: Error | undefined;
     const send = (data: JsonValue): void => {
       if (lifetimeController.signal.aborted) throw channelError("channel-closed", 1008, `Server plugin ${pluginId} channel ${operation} is closed`);
@@ -297,7 +297,7 @@ export class PluginBackendRegistry {
         this.channelOpenTimeoutMs,
         async (openSignal) => {
           const { project, workspace } = await resolveDirectScope(this.options.workspaces, request, pluginId, operation, openSignal);
-          const context: PairedPluginChannelOpenContext = Object.freeze({
+          const context: ServerPluginPeerChannelOpenContext = Object.freeze({
             project,
             workspace,
             operation,
@@ -467,7 +467,7 @@ export class PluginBackendRegistry {
       );
     }
 
-    let workspace: PairedPluginWorkspace;
+    let workspace: ServerPluginPeerWorkspace;
     try {
       workspace = snapshotWorkspace(target, project.id);
     } catch (error) {
@@ -478,7 +478,7 @@ export class PluginBackendRegistry {
         error,
       );
     }
-    const context: PairedPluginRequestContext = Object.freeze({
+    const context: ServerPluginPeerRequestContext = Object.freeze({
       project,
       workspace,
       operation,
@@ -566,7 +566,7 @@ interface ManagedPluginBackendChannelOptions {
   pluginId: string;
   workspaceId: string;
   operation: string;
-  channel: PairedPluginChannel;
+  channel: ServerPluginPeerChannel;
   transport: PluginBackendChannelTransport;
   lifetimeController: AbortController;
   callbackTimeoutMs: number;
@@ -721,7 +721,7 @@ class ManagedPluginBackendChannel implements PluginBackendChannelSession {
 }
 
 async function closeUnpublishedChannel(
-  channel: PairedPluginChannel,
+  channel: ServerPluginPeerChannel,
   pluginId: string,
   operation: string,
   callbackTimeoutMs: number,
@@ -746,7 +746,7 @@ async function resolveDirectScope(
   pluginId: string,
   operation: string,
   signal: AbortSignal,
-): Promise<{ project: ProjectInput; workspace: PairedPluginWorkspace }> {
+): Promise<{ project: ProjectInput; workspace: ServerPluginPeerWorkspace }> {
   if (request.workspaceId === "") {
     throw channelError("workspace-not-found", 1008, `Workspace not found for server plugin ${pluginId} channel ${operation}`);
   }
@@ -868,7 +868,7 @@ function snapshotProject(project: Project): ProjectInput {
   return Object.freeze({ id: project.id, name: project.name, path: resolve(project.path) });
 }
 
-function snapshotWorkspace(workspace: WorkspaceListing, projectId: string): PairedPluginWorkspace {
+function snapshotWorkspace(workspace: WorkspaceListing, projectId: string): ServerPluginPeerWorkspace {
   if (workspace.id === "") throw new Error("Workspace id must be non-empty");
   if (workspace.projectId !== projectId) throw new Error("Workspace project scope does not match the resolved project");
   if (!isAbsolute(workspace.path)) throw new Error("Workspace path must be absolute");

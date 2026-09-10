@@ -12,8 +12,8 @@ const expectedPackageDeclarationPaths = [
   "plugin-api.d.ts",
   "server-plugin-api.d.ts",
 ].sort();
-const firstBrowserPluginApiV2Version = "1.202608.1";
-const workspaceProviderExamplePiWebRange = `^${firstBrowserPluginApiV2Version}`;
+const firstMinimalPluginPlatformVersion = "1.202609.1";
+const workspaceProviderExamplePiWebRange = `^${firstMinimalPluginPlatformVersion}`;
 const pluginConsumerCompilerModes = [
   {
     name: "NodeNext",

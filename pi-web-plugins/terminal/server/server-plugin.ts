@@ -1,10 +1,10 @@
 import type {
   JsonObject,
   JsonValue,
-  PairedPluginBackendV1,
-  PairedPluginChannel,
-  PairedPluginChannelOpenContext,
-  PairedPluginRequestContext,
+  ServerPluginPeer,
+  ServerPluginPeerChannel,
+  ServerPluginPeerChannelOpenContext,
+  ServerPluginPeerRequestContext,
   PiWebServerPlugin,
   ServerPluginActivation,
   ServerPluginActivationContext,
@@ -29,13 +29,13 @@ interface RequiredTerminalServiceContribution {
   bindActivitySink(sink: TerminalActivitySink): void;
 }
 
-/** Bundled Terminal's privileged host-only composition result; not part of server plugin API v1. */
+/** Bundled Terminal's privileged host-only composition result; not part of the public server plugin API. */
 interface TerminalActivation extends ServerPluginActivation {
   requiredTerminalService: RequiredTerminalServiceContribution;
 }
 
 const plugin: PiWebServerPlugin = {
-  apiVersion: 1,
+  apiVersion: 2,
   name: "Terminal",
   activate(context) {
     return activateTerminalPlugin(context);
@@ -60,7 +60,7 @@ export function activateTerminalPlugin(context: ServerPluginActivationContext): 
   });
   let stopped = false;
   return Object.freeze({
-    pairedBackend: createTerminalBackend(service, context),
+    peer: createTerminalPeer(service, context),
     requiredTerminalService,
     health: () => stopped
       ? Object.freeze({ status: "unhealthy" as const, message: "Terminal service is stopped" })
@@ -73,18 +73,17 @@ export function activateTerminalPlugin(context: ServerPluginActivationContext): 
   });
 }
 
-export function createTerminalBackend(
+export function createTerminalPeer(
   service: TerminalService,
   activationContext?: Pick<ServerPluginActivationContext, "logger">,
-): PairedPluginBackendV1 {
+): ServerPluginPeer {
   return Object.freeze({
-    version: 1,
-    request: (context: PairedPluginRequestContext) => terminalRequest(service, context),
-    openChannel: (context: PairedPluginChannelOpenContext) => openTerminalChannel(service, context, activationContext),
+    request: (context: ServerPluginPeerRequestContext) => terminalRequest(service, context),
+    openChannel: (context: ServerPluginPeerChannelOpenContext) => openTerminalChannel(service, context, activationContext),
   });
 }
 
-function terminalRequest(service: TerminalService, context: PairedPluginRequestContext): JsonValue {
+function terminalRequest(service: TerminalService, context: ServerPluginPeerRequestContext): JsonValue {
   throwIfAborted(context.signal);
   const scope = terminalScope(context);
   switch (context.operation) {
@@ -126,9 +125,9 @@ function terminalRequest(service: TerminalService, context: PairedPluginRequestC
 
 function openTerminalChannel(
   service: TerminalService,
-  context: PairedPluginChannelOpenContext,
+  context: ServerPluginPeerChannelOpenContext,
   activationContext?: Pick<ServerPluginActivationContext, "logger">,
-): PairedPluginChannel {
+): ServerPluginPeerChannel {
   if (context.operation !== "terminal.attach") {
     throw new Error(`Unsupported Terminal channel operation: ${context.operation}`);
   }
@@ -202,7 +201,7 @@ function openTerminalChannel(
   });
 }
 
-function terminalScope(context: Pick<PairedPluginRequestContext, "project" | "workspace">): TerminalWorkspaceScope {
+function terminalScope(context: Pick<ServerPluginPeerRequestContext, "project" | "workspace">): TerminalWorkspaceScope {
   if (context.workspace.projectId !== context.project.id) {
     throw new Error("Terminal workspace project scope does not match the host project");
   }
