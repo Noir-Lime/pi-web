@@ -1,5 +1,14 @@
-import { PI_WEB_HOST_STATE_CAPABILITY } from "@jmfederico/pi-web/server-plugin-api";
-import type { PiWebHostStateV1, PluginCapability, ServerPluginPeer, PiWebServerPlugin } from "@jmfederico/pi-web/server-plugin-api";
+import {
+  PI_WEB_HOST_STATE_CAPABILITY,
+  PI_WEB_HOST_WORKSPACES_CAPABILITY,
+} from "@jmfederico/pi-web/server-plugin-api";
+import type {
+  PiWebHostStateV1,
+  PiWebHostWorkspacesV1,
+  PluginCapability,
+  ServerPluginPeer,
+  PiWebServerPlugin,
+} from "@jmfederico/pi-web/server-plugin-api";
 
 interface FixtureDependencyV1 {
   readonly status: () => string;
@@ -26,7 +35,7 @@ const channelOnlyPeer: ServerPluginPeer = {
 const plugin: PiWebServerPlugin = {
   apiVersion: 3,
   name: "Server declaration fixture",
-  requires: [fixtureDependency, PI_WEB_HOST_STATE_CAPABILITY],
+  requires: [fixtureDependency, PI_WEB_HOST_STATE_CAPABILITY, PI_WEB_HOST_WORKSPACES_CAPABILITY],
   activate: (context) => {
     context.notices?.record({
       severity: "info",
@@ -42,18 +51,15 @@ const plugin: PiWebServerPlugin = {
         const current = await state.read();
         await state.write({ starts: current === undefined ? 1 : 2 });
         await state.clear();
+        const workspaces: PiWebHostWorkspacesV1 = capabilities.resolve(PI_WEB_HOST_WORKSPACES_CAPABILITY);
+        const authority = await workspaces.resolve({
+          projectId: "fixture-project",
+          workspaceId: "fixture-workspace",
+        });
+        context.logger.info(authority.workspace.label, { projectId: authority.project.id });
       },
       peer: {
         request: ({ workspace, operation, input }) => ({ workspaceId: workspace.id, operation, input }),
-      },
-      workspaceProvider: {
-        probe: async () => "claim",
-        list: async (project) => [{
-          key: "main",
-          path: project.path,
-          label: project.name,
-          isMain: true,
-        }],
       },
     };
   },

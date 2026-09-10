@@ -1,9 +1,15 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
-import { PI_WEB_HOST_STATE_CAPABILITY } from "./server-plugin-api.js";
+import {
+  PI_WEB_HOST_STATE_CAPABILITY,
+  PI_WEB_HOST_WORKSPACES_CAPABILITY,
+} from "./server-plugin-api.js";
 import type {
   JsonObject,
   PiWebHostStateV1,
+  PiWebHostWorkspaceAuthority,
+  PiWebHostWorkspaceSelection,
+  PiWebHostWorkspacesV1,
   PluginCapability,
   PluginCapabilityProvision,
   ServerPluginCapabilityResolver,
@@ -189,6 +195,83 @@ describe("public server plugin API", () => {
       .toThrow("must expose read, write, and clear");
   });
 
+  it("exports the exact frozen workspaces v1 token and snapshots resolved authority", async () => {
+    const sourceProject = { id: "project-1", name: "Project", path: "/repo", createdAt: "private" };
+    const sourceWorkspace = {
+      id: "workspace-1",
+      projectId: "project-1",
+      path: "/repo/worktree",
+      label: "Worktree",
+      isMain: false,
+      provider: {
+        pluginId: "workspace-provider",
+        capabilities: { remove: true },
+        metadata: { revision: 1, nested: [true] },
+      },
+      privateData: { secret: true },
+      removal: { precondition: "host-only" },
+    };
+    const resolveAuthority = vi.fn((selectionInput: PiWebHostWorkspaceSelection) => {
+      void selectionInput;
+      return Promise.resolve({ project: sourceProject, workspace: sourceWorkspace });
+    });
+    const source = { version: 1 as const, resolve: resolveAuthority };
+
+    const workspaces = PI_WEB_HOST_WORKSPACES_CAPABILITY.parse(source);
+    Reflect.set(source, "resolve", () => Promise.reject(new Error("mutated resolver was used")));
+    const selection = { projectId: "project-1", workspaceId: "workspace-1" };
+    const authority = await workspaces.resolve(selection);
+    sourceProject.name = "Mutated";
+    sourceWorkspace.label = "Mutated";
+    sourceWorkspace.provider.metadata.revision = 2;
+
+    expect(PI_WEB_HOST_WORKSPACES_CAPABILITY).toMatchObject({
+      pluginId: "pi-web.host",
+      id: "workspaces",
+      version: 1,
+    });
+    expect(Object.isFrozen(PI_WEB_HOST_WORKSPACES_CAPABILITY)).toBe(true);
+    expect(resolveAuthority).toHaveBeenCalledWith(selection);
+    expect(Object.isFrozen(resolveAuthority.mock.calls[0]?.[0])).toBe(true);
+    expect(authority).toEqual({
+      project: { id: "project-1", name: "Project", path: "/repo" },
+      workspace: {
+        id: "workspace-1",
+        projectId: "project-1",
+        path: "/repo/worktree",
+        label: "Worktree",
+        isMain: false,
+        provider: {
+          pluginId: "workspace-provider",
+          capabilities: { remove: true },
+          metadata: { revision: 1, nested: [true] },
+        },
+      },
+    });
+    expect(Object.isFrozen(authority)).toBe(true);
+    expect(Object.isFrozen(authority.project)).toBe(true);
+    expect(Object.isFrozen(authority.workspace)).toBe(true);
+    expect(Object.isFrozen(authority.workspace.provider)).toBe(true);
+    expect(Object.isFrozen(authority.workspace.provider?.metadata)).toBe(true);
+    expect(() => PI_WEB_HOST_WORKSPACES_CAPABILITY.parse({ version: 1 }))
+      .toThrow("must expose resolve");
+    await expect(Reflect.apply(workspaces.resolve, workspaces, [{
+      ...selection,
+      path: "/caller/path",
+    }])).rejects.toThrow("Unsupported PI WEB host workspaces capability v1 selection field: path");
+    await expect(PI_WEB_HOST_WORKSPACES_CAPABILITY.parse({
+      version: 1,
+      resolve: () => ({ project: sourceProject, workspace: { ...sourceWorkspace, projectId: "other" } }),
+    }).resolve(selection)).rejects.toThrow("mismatched project and workspace scopes");
+    await expect(PI_WEB_HOST_WORKSPACES_CAPABILITY.parse({
+      version: 1,
+      resolve: () => ({
+        project: { ...sourceProject, id: "other-project" },
+        workspace: { ...sourceWorkspace, id: "other-workspace", projectId: "other-project" },
+      }),
+    }).resolve(selection)).rejects.toThrow("authority outside the requested selection");
+  });
+
   it("keeps host inputs readonly and concrete services out of the declaration surface", async () => {
     expectTypeOf<keyof ServerPluginActivationContext>().toEqualTypeOf<
       "apiVersion" | "pluginId" | "packageRoot" | "logger" | "settings" | "notices" | "execFile" | "signal" | "lifetimeSignal"
@@ -200,6 +283,9 @@ describe("public server plugin API", () => {
     expectTypeOf<keyof PluginCapabilityProvision>().toEqualTypeOf<"capability" | "value">();
     expectTypeOf<keyof ServerPluginCapabilityResolver>().toEqualTypeOf<"resolve">();
     expectTypeOf<keyof PiWebHostStateV1>().toEqualTypeOf<"version" | "read" | "write" | "clear">();
+    expectTypeOf<keyof PiWebHostWorkspaceSelection>().toEqualTypeOf<"projectId" | "workspaceId">();
+    expectTypeOf<keyof PiWebHostWorkspaceAuthority>().toEqualTypeOf<"project" | "workspace">();
+    expectTypeOf<keyof PiWebHostWorkspacesV1>().toEqualTypeOf<"version" | "resolve">();
     expectTypeOf<keyof ServerPluginStartContext>().toEqualTypeOf<"capabilities" | "signal">();
     expectTypeOf<keyof ServerPluginActivation>().toEqualTypeOf<"workspaceProvider" | "peer" | "provides" | "start" | "dispose" | "health">();
     expectTypeOf<keyof ServerPluginNoticeScope>().toEqualTypeOf<"projectId" | "workspaceId" | "sessionId">();
@@ -239,6 +325,9 @@ describe("public server plugin API", () => {
     expectTypeOf<ReadonlyKeys<PluginCapabilityProvision>>().toEqualTypeOf<keyof PluginCapabilityProvision>();
     expectTypeOf<ReadonlyKeys<ServerPluginCapabilityResolver>>().toEqualTypeOf<keyof ServerPluginCapabilityResolver>();
     expectTypeOf<ReadonlyKeys<PiWebHostStateV1>>().toEqualTypeOf<keyof PiWebHostStateV1>();
+    expectTypeOf<ReadonlyKeys<PiWebHostWorkspaceSelection>>().toEqualTypeOf<keyof PiWebHostWorkspaceSelection>();
+    expectTypeOf<ReadonlyKeys<PiWebHostWorkspaceAuthority>>().toEqualTypeOf<keyof PiWebHostWorkspaceAuthority>();
+    expectTypeOf<ReadonlyKeys<PiWebHostWorkspacesV1>>().toEqualTypeOf<keyof PiWebHostWorkspacesV1>();
     expectTypeOf<ReadonlyKeys<ServerPluginStartContext>>().toEqualTypeOf<keyof ServerPluginStartContext>();
     expectTypeOf<ReadonlyKeys<ServerPluginLogger>>().toEqualTypeOf<keyof ServerPluginLogger>();
     expectTypeOf<ReadonlyKeys<ServerPluginNoticeReporterV1>>().toEqualTypeOf<keyof ServerPluginNoticeReporterV1>();
@@ -256,11 +345,15 @@ describe("public server plugin API", () => {
     expectTypeOf<WritableKeys<WorkspaceRemovePlan>>().toEqualTypeOf<keyof WorkspaceRemovePlan>();
     expectTypeOf<WritableKeys<ServerPluginActivation>>().toEqualTypeOf<keyof ServerPluginActivation>();
 
-    const source = await readFile("src/server-plugin-api.ts", "utf8");
+    const [source, browserSource] = await Promise.all([
+      readFile("src/server-plugin-api.ts", "utf8"),
+      readFile("src/plugin-api.ts", "utf8"),
+    ]);
     expect(source).not.toMatch(/\b(?:Fastify|WorkspaceService|ProjectService|TerminalService|SessionDaemonClient)\b/u);
     expect(source).not.toMatch(/event\s*bus|service\s*locator|registerRoute/iu);
     expect(source).toContain('from "./shared/pluginApiTypes.js";');
     expect(source).not.toContain("./shared/apiTypes.js");
+    expect(browserSource).not.toMatch(/PI_WEB_HOST_(?:STATE|WORKSPACES)_CAPABILITY|PiWebHost(?:State|Workspace|Workspaces)/u);
   });
 });
 

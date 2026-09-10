@@ -112,6 +112,24 @@ export interface PiWebHostStateV1 {
 }
 /** Exact state v1 capability supplied separately for each declaring server plugin. */
 export declare const PI_WEB_HOST_STATE_CAPABILITY: PluginCapability<PiWebHostStateV1, 1>;
+/** Current host authority selected only by opaque project and workspace ids. */
+export interface PiWebHostWorkspaceSelection {
+    readonly projectId: string;
+    readonly workspaceId: string;
+}
+/** Detached project and workspace projections resolved from current host authority. */
+export interface PiWebHostWorkspaceAuthority {
+    readonly project: ProjectInput;
+    readonly workspace: ServerPluginPeerWorkspace;
+}
+/** Package-attributed resolver for current project/workspace authority. */
+export interface PiWebHostWorkspacesV1 {
+    readonly version: 1;
+    /** Re-resolve both ids on every call; stale or mismatched selections reject. */
+    readonly resolve: (selection: PiWebHostWorkspaceSelection) => Promise<PiWebHostWorkspaceAuthority>;
+}
+/** Exact workspaces v1 capability supplied separately for each declaring server plugin. */
+export declare const PI_WEB_HOST_WORKSPACES_CAPABILITY: PluginCapability<PiWebHostWorkspacesV1, 1>;
 /** Resolver containing only the exact capability requirements declared by a plugin. */
 export interface ServerPluginCapabilityResolver {
     readonly resolve: <Value>(capability: PluginCapability<Value>) => Value;

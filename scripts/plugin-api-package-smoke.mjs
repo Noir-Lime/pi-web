@@ -109,17 +109,27 @@ async function assertExampleCompatibilityFloor(packageRoot) {
 async function assertServerRuntimeApi(consumerRoot) {
   const fixturePath = join(consumerRoot, "server-runtime.mjs");
   await writeFile(fixturePath, `
-    import { PI_WEB_HOST_STATE_CAPABILITY } from "@jmfederico/pi-web/server-plugin-api";
-    export default PI_WEB_HOST_STATE_CAPABILITY;
+    import {
+      PI_WEB_HOST_STATE_CAPABILITY,
+      PI_WEB_HOST_WORKSPACES_CAPABILITY,
+    } from "@jmfederico/pi-web/server-plugin-api";
+    export default [PI_WEB_HOST_STATE_CAPABILITY, PI_WEB_HOST_WORKSPACES_CAPABILITY];
   `, "utf8");
   const serverApi = await import(pathToFileURL(fixturePath).href);
-  const stateCapability = serverApi.default;
+  const [stateCapability, workspacesCapability] = serverApi.default;
   if (!Object.isFrozen(stateCapability)
     || stateCapability?.pluginId !== "pi-web.host"
     || stateCapability?.id !== "state"
     || stateCapability?.version !== 1
     || typeof stateCapability?.parse !== "function") {
     throw new Error("Installed server plugin API does not expose the exact pi-web.host/state v1 token");
+  }
+  if (!Object.isFrozen(workspacesCapability)
+    || workspacesCapability?.pluginId !== "pi-web.host"
+    || workspacesCapability?.id !== "workspaces"
+    || workspacesCapability?.version !== 1
+    || typeof workspacesCapability?.parse !== "function") {
+    throw new Error("Installed server plugin API does not expose the exact pi-web.host/workspaces v1 token");
   }
 }
 

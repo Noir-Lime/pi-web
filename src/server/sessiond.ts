@@ -29,6 +29,7 @@ import {
   WorkspaceProviderRegistry,
 } from "./workspaces/workspaceProviderRegistry.js";
 import { sessiondSocketPath } from "../sessiond/config.js";
+import { PI_WEB_HOST_WORKSPACES_CAPABILITY } from "../server-plugin-api.js";
 import { getPiWebRuntimeComponent } from "./piWebStatus.js";
 import { SESSIOND_RUNTIME_CAPABILITIES } from "../shared/capabilities.js";
 import { agentSessionDirEnvOverride, effectivePiWebConfig, maxUploadBytes, offlineModeEnabled, piWebDataDir, PI_CODING_AGENT_DIR_ENV, PI_CODING_AGENT_SESSION_DIR_ENV } from "../config.js";
@@ -47,6 +48,7 @@ import { PI_WEB_SESSION_ENV, sessionEnvironmentPromptSections } from "./sessions
 import { createServerPluginExecFile } from "./plugins/serverPluginExec.js";
 import { createServerPluginRuntime } from "./plugins/serverPluginRuntime.js";
 import { createServerPluginStateCapabilityFactory } from "./plugins/serverPluginStateCapability.js";
+import { createServerPluginWorkspacesCapabilityFactory } from "./plugins/serverPluginWorkspacesCapability.js";
 import {
   REQUIRED_TERMINAL_SERVICE_CAPABILITY,
   unavailableRequiredTerminalService,
@@ -202,6 +204,7 @@ async function createSessionDaemonRuntime() {
     hostCapabilityFactories: [createServerPluginStateCapabilityFactory({
       dataDir: piWebDataDir(daemonEnvironment),
     })],
+    lateHostCapabilities: [PI_WEB_HOST_WORKSPACES_CAPABILITY],
   });
   try {
     const notificationStore = new SessionNotificationStore();
@@ -233,19 +236,34 @@ async function createSessionDaemonRuntime() {
     catalogRefresher.start();
     auth.subscribe(() => { catalogRefresher.requestRefresh(); });
     const projects = new ProjectService(new ProjectStore(projectStorePath(daemonEnvironment)));
-    const providerHealth = await serverPlugins.inspectHealth();
+    // Only dependency-ready providers can define the aggregate topology. The
+    // runtime has already rejected any staged provider that depends on late
+    // host authority as a cycle, so this snapshot cannot omit a future owner.
+    const providerContributions = serverPlugins.providerContributions();
+    const providerPluginIds = providerContributions.map(({ pluginId }) => pluginId);
+    const providerHealth = await serverPlugins.inspectHealth(providerPluginIds);
     const workspaceProviders = new WorkspaceProviderRegistry({
-      contributions: eligibleWorkspaceProviderContributions(serverPlugins.providerContributions(), providerHealth),
+      contributions: eligibleWorkspaceProviderContributions(providerContributions, providerHealth),
       logger: app.log,
     });
+    await serverPlugins.resumeWithHostCapabilityFactories([
+      createServerPluginWorkspacesCapabilityFactory({ projects, workspaces: workspaceProviders }),
+    ]);
+    const providerPluginIdSet = new Set(providerPluginIds);
+    const remainingActivePluginIds = serverPlugins.healthRecords()
+      .filter(({ pluginId, state }) => state === "active" && !providerPluginIdSet.has(pluginId))
+      .map(({ pluginId }) => pluginId);
+    const remainingHealth = await serverPlugins.inspectHealth(remainingActivePluginIds);
+    const pluginHealth = Object.freeze([...providerHealth, ...remainingHealth]
+      .sort((left, right) => left.pluginId.localeCompare(right.pluginId)));
     const pluginBackends = new PluginBackendRegistry({
-      contributions: eligiblePluginBackendContributions(serverPlugins.pairedBackendContributions(), providerHealth),
+      contributions: eligiblePluginBackendContributions(serverPlugins.pairedBackendContributions(), pluginHealth),
       workspaces: workspaceProviders,
       logger: app.log,
     });
     const workspaceProviderRuntime = createWorkspaceProviderRuntimeSnapshot(
       serverPlugins.healthRecords(),
-      providerHealth,
+      pluginHealth,
       serverPlugins.safeStartLevel(),
       serverPlugins.catalogDiagnostics(),
     );

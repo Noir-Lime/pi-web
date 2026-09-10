@@ -138,6 +138,33 @@ export const PI_WEB_HOST_STATE_CAPABILITY: PluginCapability<PiWebHostStateV1, 1>
   parse: snapshotPiWebHostStateV1,
 });
 
+/** Current host authority selected only by opaque project and workspace ids. */
+export interface PiWebHostWorkspaceSelection {
+  readonly projectId: string;
+  readonly workspaceId: string;
+}
+
+/** Detached project and workspace projections resolved from current host authority. */
+export interface PiWebHostWorkspaceAuthority {
+  readonly project: ProjectInput;
+  readonly workspace: ServerPluginPeerWorkspace;
+}
+
+/** Package-attributed resolver for current project/workspace authority. */
+export interface PiWebHostWorkspacesV1 {
+  readonly version: 1;
+  /** Re-resolve both ids on every call; stale or mismatched selections reject. */
+  readonly resolve: (selection: PiWebHostWorkspaceSelection) => Promise<PiWebHostWorkspaceAuthority>;
+}
+
+/** Exact workspaces v1 capability supplied separately for each declaring server plugin. */
+export const PI_WEB_HOST_WORKSPACES_CAPABILITY: PluginCapability<PiWebHostWorkspacesV1, 1> = Object.freeze({
+  pluginId: "pi-web.host",
+  id: "workspaces",
+  version: 1,
+  parse: snapshotPiWebHostWorkspacesV1,
+});
+
 /** Resolver containing only the exact capability requirements declared by a plugin. */
 export interface ServerPluginCapabilityResolver {
   readonly resolve: <Value>(capability: PluginCapability<Value>) => Value;
@@ -336,6 +363,156 @@ function snapshotPiWebHostStateV1(value: unknown): PiWebHostStateV1 {
   });
 }
 
+function snapshotPiWebHostWorkspacesV1(value: unknown): PiWebHostWorkspacesV1 {
+  if (typeof value !== "object" || value === null) throw invalidPiWebHostWorkspaces();
+  const version: unknown = Reflect.get(value, "version");
+  const resolve: unknown = Reflect.get(value, "resolve");
+  if (version !== 1 || typeof resolve !== "function") throw invalidPiWebHostWorkspaces();
+  return Object.freeze({
+    version: 1,
+    resolve: async (selection: PiWebHostWorkspaceSelection) => {
+      const requested = snapshotPiWebHostWorkspaceSelection(selection);
+      const authority: unknown = await Reflect.apply(resolve, value, [requested]);
+      return snapshotPiWebHostWorkspaceAuthority(authority, requested);
+    },
+  });
+}
+
+function snapshotPiWebHostWorkspaceSelection(value: unknown): PiWebHostWorkspaceSelection {
+  if (!isPublicJsonObject(value)) throw new Error("PI WEB host workspaces capability v1 selection must be an object");
+  const supportedKeys = new Set(["projectId", "workspaceId"]);
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string" || !supportedKeys.has(key)) {
+      throw new Error(`Unsupported PI WEB host workspaces capability v1 selection field: ${String(key)}`);
+    }
+  }
+  if (!Object.hasOwn(value, "projectId") || !Object.hasOwn(value, "workspaceId")) {
+    throw new Error("PI WEB host workspaces capability v1 selection must contain projectId and workspaceId");
+  }
+  const projectId = requiredPublicString(Reflect.get(value, "projectId"), "selection projectId");
+  const workspaceId = requiredPublicString(Reflect.get(value, "workspaceId"), "selection workspaceId");
+  return Object.freeze({ projectId, workspaceId });
+}
+
+function snapshotPiWebHostWorkspaceAuthority(
+  value: unknown,
+  requested: PiWebHostWorkspaceSelection,
+): PiWebHostWorkspaceAuthority {
+  if (!isPublicJsonObject(value)) throw new Error("PI WEB host workspaces capability v1 must return an authority object");
+  const project = snapshotPiWebHostProject(Reflect.get(value, "project"));
+  const workspace = snapshotPiWebHostWorkspace(Reflect.get(value, "workspace"));
+  if (workspace.projectId !== project.id) {
+    throw new Error("PI WEB host workspaces capability v1 returned mismatched project and workspace scopes");
+  }
+  if (project.id !== requested.projectId || workspace.id !== requested.workspaceId) {
+    throw new Error("PI WEB host workspaces capability v1 returned authority outside the requested selection");
+  }
+  return Object.freeze({ project, workspace });
+}
+
+function snapshotPiWebHostProject(value: unknown): ProjectInput {
+  if (!isPublicJsonObject(value)) throw new Error("PI WEB host workspaces capability v1 project must be an object");
+  const id = requiredPublicString(Reflect.get(value, "id"), "project id");
+  const name = requiredPublicString(Reflect.get(value, "name"), "project name");
+  const path = requiredPublicString(Reflect.get(value, "path"), "project path");
+  return Object.freeze({ id, name, path });
+}
+
+function snapshotPiWebHostWorkspace(value: unknown): ServerPluginPeerWorkspace {
+  if (!isPublicJsonObject(value)) throw new Error("PI WEB host workspaces capability v1 workspace must be an object");
+  const id = requiredPublicString(Reflect.get(value, "id"), "workspace id");
+  const projectId = requiredPublicString(Reflect.get(value, "projectId"), "workspace projectId");
+  const path = requiredPublicString(Reflect.get(value, "path"), "workspace path");
+  const label = requiredPublicString(Reflect.get(value, "label"), "workspace label");
+  const isMain: unknown = Reflect.get(value, "isMain");
+  if (typeof isMain !== "boolean") {
+    throw new Error("PI WEB host workspaces capability v1 workspace isMain must be a boolean");
+  }
+  const providerValue: unknown = Reflect.get(value, "provider");
+  const provider = providerValue === undefined ? undefined : snapshotPiWebHostWorkspaceProvider(providerValue);
+  return Object.freeze({ id, projectId, path, label, isMain, ...(provider === undefined ? {} : { provider }) });
+}
+
+function snapshotPiWebHostWorkspaceProvider(value: unknown): WorkspaceProviderMetadata {
+  if (!isPublicJsonObject(value)) throw new Error("PI WEB host workspaces capability v1 workspace provider must be an object");
+  const pluginId = requiredPublicString(Reflect.get(value, "pluginId"), "workspace provider pluginId");
+  const capabilitiesValue: unknown = Reflect.get(value, "capabilities");
+  if (!isPublicJsonObject(capabilitiesValue)) {
+    throw new Error("PI WEB host workspaces capability v1 workspace provider capabilities are invalid");
+  }
+  const remove: unknown = Reflect.get(capabilitiesValue, "remove");
+  if (typeof remove !== "boolean") {
+    throw new Error("PI WEB host workspaces capability v1 workspace provider capabilities are invalid");
+  }
+  const capabilities = Object.freeze({ remove });
+  const metadataValue: unknown = Reflect.get(value, "metadata");
+  const metadata = metadataValue === undefined
+    ? undefined
+    : clonePublicJsonObject(metadataValue, "workspace provider metadata");
+  return Object.freeze({ pluginId, capabilities, ...(metadata === undefined ? {} : { metadata }) });
+}
+
+function clonePublicJsonObject(value: unknown, label: string): JsonObject {
+  if (!isPublicJsonObject(value)) throw new Error(`PI WEB host workspaces capability v1 ${label} must be a JSON object`);
+  return clonePublicJsonRecord(value, new Set<object>(), label);
+}
+
+function clonePublicJsonRecord(
+  value: Record<string, unknown>,
+  ancestors: Set<object>,
+  label: string,
+): JsonObject {
+  if (ancestors.has(value)) throw new Error(`PI WEB host workspaces capability v1 ${label} must not contain cycles`);
+  ancestors.add(value);
+  try {
+    const output: Record<string, JsonValue> = {};
+    for (const key of Object.keys(value)) {
+      Object.defineProperty(output, key, {
+        value: clonePublicJsonValue(value[key], ancestors, label),
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+    }
+    return Object.freeze(output);
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
+function clonePublicJsonValue(value: unknown, ancestors: Set<object>, label: string): JsonValue {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error(`PI WEB host workspaces capability v1 ${label} must contain only finite JSON numbers`);
+    return value;
+  }
+  if (Array.isArray(value)) {
+    if (ancestors.has(value)) throw new Error(`PI WEB host workspaces capability v1 ${label} must not contain cycles`);
+    ancestors.add(value);
+    try {
+      const output: JsonValue[] = [];
+      for (let index = 0; index < value.length; index += 1) {
+        if (!Object.hasOwn(value, index)) {
+          throw new Error(`PI WEB host workspaces capability v1 ${label} must not contain sparse arrays`);
+        }
+        output.push(clonePublicJsonValue(value[index], ancestors, label));
+      }
+      return Object.freeze(output);
+    } finally {
+      ancestors.delete(value);
+    }
+  }
+  if (isPublicJsonObject(value)) return clonePublicJsonRecord(value, ancestors, label);
+  throw new Error(`PI WEB host workspaces capability v1 ${label} must contain only JSON values`);
+}
+
+function requiredPublicString(value: unknown, label: string): string {
+  if (typeof value !== "string" || value === "") {
+    throw new Error(`PI WEB host workspaces capability v1 ${label} must be a non-empty string`);
+  }
+  return value;
+}
+
 function isPublicJsonValue(value: unknown, ancestors: Set<object>): value is JsonValue {
   if (value === null || typeof value === "string" || typeof value === "boolean") return true;
   if (typeof value === "number") return Number.isFinite(value);
@@ -368,4 +545,8 @@ function isPublicJsonObject(value: unknown): value is Record<string, unknown> {
 
 function invalidPiWebHostState(): Error {
   return new Error("PI WEB host state capability v1 must expose read, write, and clear");
+}
+
+function invalidPiWebHostWorkspaces(): Error {
+  return new Error("PI WEB host workspaces capability v1 must expose resolve");
 }

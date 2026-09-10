@@ -1,6 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PI_WEB_HOST_STATE_CAPABILITY } from "../../server-plugin-api.js";
-import type { JsonValue, PiWebHostStateV1, PiWebServerPlugin, PluginCapability, ServerPluginActivation, ServerPluginActivationContext, ServerPluginNoticeInput, ServerPluginNoticeReporterV1, WorkspaceProvider } from "../../server-plugin-api.js";
+import {
+  PI_WEB_HOST_STATE_CAPABILITY,
+  PI_WEB_HOST_WORKSPACES_CAPABILITY,
+} from "../../server-plugin-api.js";
+import type {
+  JsonValue,
+  PiWebHostStateV1,
+  PiWebHostWorkspacesV1,
+  PiWebServerPlugin,
+  PluginCapability,
+  ServerPluginActivation,
+  ServerPluginActivationContext,
+  ServerPluginNoticeInput,
+  ServerPluginNoticeReporterV1,
+  WorkspaceProvider,
+} from "../../server-plugin-api.js";
 import type { PiWebPluginScope } from "../../shared/apiTypes.js";
 import {
   SERVER_NOTICE_SCOPE_ID_MAX_LENGTH,
@@ -308,6 +322,205 @@ describe("server plugin runtime", () => {
     await expect(alphaState.read()).rejects.toThrow("state revoked for state-alpha");
     await runtime.stop();
     expect(cleanups).toEqual(["start-failure", "state-beta", "state-alpha"]);
+  });
+
+  it("starts early authority immediately and resumes exact late host capabilities once with failure isolation", async () => {
+    const service = testCapability("provider", "service", 1);
+    const workspacesV2: PluginCapability<PiWebHostWorkspacesV1, 2> = {
+      ...PI_WEB_HOST_WORKSPACES_CAPABILITY,
+      version: 2,
+    };
+    const events: string[] = [];
+    const lateContexts = new Map<string, ServerPluginActivationContext["lifetimeSignal"]>();
+    const lateCleanups: string[] = [];
+    const resolvedWorkspaces = new Map<string, PiWebHostWorkspacesV1>();
+    const stateFactory: ServerPluginHostCapabilityFactory<PiWebHostStateV1> = {
+      capability: PI_WEB_HOST_STATE_CAPABILITY,
+      create: () => ({
+        value: {
+          version: 1,
+          read: () => Promise.resolve(undefined),
+          write: () => Promise.resolve(),
+          clear: () => Promise.resolve(),
+        },
+      }),
+    };
+    const runtime = await createServerPluginRuntime({
+      catalog: { snapshot: () => Promise.resolve(testSnapshot([
+        entry("late-omega"),
+        entry("wrong-version"),
+        entry("provider"),
+        entry("late-beta"),
+        entry("early-state"),
+        entry("late-gamma"),
+        entry("late-alpha"),
+      ])) },
+      hostCapabilityFactories: [stateFactory],
+      lateHostCapabilities: [PI_WEB_HOST_WORKSPACES_CAPABILITY],
+      importer: (url) => {
+        const pluginId = pluginIdFromUrl(url);
+        if (pluginId === "provider") {
+          return Promise.resolve({ default: plugin("Provider", () => ({
+            provides: [{ capability: service, value: { label: "ready" } }],
+            start: () => { events.push("start:provider"); },
+            dispose: () => { events.push("dispose:provider"); },
+          })) });
+        }
+        if (pluginId === "early-state") {
+          return Promise.resolve({ default: plugin("Early state", () => ({
+            start: ({ capabilities }) => {
+              capabilities.resolve(PI_WEB_HOST_STATE_CAPABILITY);
+              events.push("start:early-state");
+            },
+            dispose: () => { events.push("dispose:early-state"); },
+          }), [PI_WEB_HOST_STATE_CAPABILITY]) });
+        }
+        const requirement = pluginId === "wrong-version"
+          ? workspacesV2
+          : PI_WEB_HOST_WORKSPACES_CAPABILITY;
+        const requirements = pluginId === "late-alpha" ? [service, requirement] : [requirement];
+        return Promise.resolve({ default: plugin(pluginId, (context) => {
+          lateContexts.set(pluginId, context.lifetimeSignal);
+          return {
+            start: ({ capabilities }) => {
+              events.push(`start:${pluginId}`);
+              const resolved = capabilities.resolve(requirement);
+              if (pluginId !== "wrong-version") resolvedWorkspaces.set(pluginId, resolved);
+              if (pluginId === "late-alpha" && capabilities.resolve(service).label !== "ready") {
+                throw new Error("provider capability was not ready");
+              }
+              if (pluginId === "late-gamma") throw new Error("late start failed");
+            },
+            dispose: () => { events.push(`dispose:${pluginId}:${String(context.lifetimeSignal.aborted)}`); },
+          };
+        }, requirements) });
+      },
+      logger: testLogger(),
+    });
+
+    expect(events).toEqual([
+      "start:early-state",
+      "start:provider",
+      "dispose:wrong-version:true",
+    ]);
+    expect(runtime.healthRecords()).toEqual([
+      expect.objectContaining({ pluginId: "early-state", state: "active" }),
+      expect.objectContaining({ pluginId: "provider", state: "active" }),
+      expect.objectContaining({ pluginId: "wrong-version", state: "failed", phase: "start" }),
+    ]);
+    expect(runtime.healthRecords().find(({ pluginId }) => pluginId === "wrong-version")?.message)
+      .toContain("requires unavailable capability pi-web.host/workspaces v2");
+    expect([...lateContexts.entries()]
+      .filter(([pluginId]) => pluginId !== "wrong-version")
+      .every(([, signal]) => !signal.aborted)).toBe(true);
+
+    const lateFactory: ServerPluginHostCapabilityFactory<PiWebHostWorkspacesV1> = {
+      capability: PI_WEB_HOST_WORKSPACES_CAPABILITY,
+      create(context) {
+        if (context.pluginId === "late-beta") throw new Error("late factory failed");
+        return {
+          value: {
+            version: 1,
+            resolve: () => Promise.reject(new Error("not exercised by this lifecycle fixture")),
+          },
+          dispose: () => { lateCleanups.push(context.pluginId); },
+        };
+      },
+    };
+    await runtime.resumeWithHostCapabilityFactories([lateFactory]);
+
+    expect(events).toEqual([
+      "start:early-state",
+      "start:provider",
+      "dispose:wrong-version:true",
+      "start:late-alpha",
+      "dispose:late-beta:true",
+      "start:late-gamma",
+      "dispose:late-gamma:true",
+      "start:late-omega",
+    ]);
+    expect(lateCleanups).toEqual(["late-gamma"]);
+    expect(resolvedWorkspaces.has("late-alpha")).toBe(true);
+    expect(resolvedWorkspaces.has("late-omega")).toBe(true);
+    expect(runtime.healthRecords()).toEqual([
+      expect.objectContaining({ pluginId: "early-state", state: "active" }),
+      expect.objectContaining({ pluginId: "late-alpha", state: "active" }),
+      expect.objectContaining({ pluginId: "late-beta", state: "failed", message: "late factory failed" }),
+      expect.objectContaining({ pluginId: "late-gamma", state: "failed", message: "late start failed" }),
+      expect.objectContaining({ pluginId: "late-omega", state: "active" }),
+      expect.objectContaining({ pluginId: "provider", state: "active" }),
+      expect.objectContaining({ pluginId: "wrong-version", state: "failed" }),
+    ]);
+    await expect(runtime.resumeWithHostCapabilityFactories([lateFactory]))
+      .rejects.toThrow("already resumed");
+
+    runtime.beginShutdown();
+    expect([...lateContexts.values()].every((signal) => signal.aborted)).toBe(true);
+    await runtime.stop();
+    expect(lateCleanups).toEqual(["late-gamma", "late-omega", "late-alpha"]);
+    expect(events.slice(-4)).toEqual([
+      "dispose:late-omega:true",
+      "dispose:late-alpha:true",
+      "dispose:provider",
+      "dispose:early-state",
+    ]);
+  });
+
+  it("rejects workspace providers blocked on late authority as topology cycles before publishing the registry", async () => {
+    const providerService = testCapability("cycle-provider", "service", 1);
+    const starts: string[] = [];
+    const runtime = await createServerPluginRuntime({
+      catalog: { snapshot: () => Promise.resolve(testSnapshot([
+        entry("ordinary-consumer"),
+        entry("downstream"),
+        entry("cycle-provider"),
+      ])) },
+      lateHostCapabilities: [PI_WEB_HOST_WORKSPACES_CAPABILITY],
+      importer: (url) => {
+        const pluginId = pluginIdFromUrl(url);
+        if (pluginId === "cycle-provider") {
+          return Promise.resolve({ default: plugin("Cycle provider", () => ({
+            workspaceProvider: testProvider(),
+            provides: [{ capability: providerService, value: { label: "provider" } }],
+            start: () => { starts.push(pluginId); },
+          }), [PI_WEB_HOST_WORKSPACES_CAPABILITY]) });
+        }
+        if (pluginId === "downstream") {
+          return Promise.resolve({ default: plugin("Downstream", () => ({
+            start: () => { starts.push(pluginId); },
+          }), [providerService]) });
+        }
+        return Promise.resolve({ default: plugin("Ordinary", () => ({
+          start: () => { starts.push(pluginId); },
+        }), [PI_WEB_HOST_WORKSPACES_CAPABILITY]) });
+      },
+      logger: testLogger(),
+    });
+
+    expect(starts).toEqual([]);
+    expect(runtime.providerContributions()).toEqual([]);
+    expect(runtime.healthRecords()).toEqual([
+      expect.objectContaining({ pluginId: "cycle-provider", state: "failed", phase: "start" }),
+      expect.objectContaining({ pluginId: "downstream", state: "failed", phase: "start" }),
+    ]);
+    expect(runtime.healthRecords().find(({ pluginId }) => pluginId === "cycle-provider")?.message)
+      .toContain("workspace provider that depends on late host capability pi-web.host/workspaces v1 in a capability dependency cycle");
+    expect(runtime.healthRecords().find(({ pluginId }) => pluginId === "downstream")?.message)
+      .toContain("provider plugin cycle-provider did not start");
+
+    await runtime.resumeWithHostCapabilityFactories([{
+      capability: PI_WEB_HOST_WORKSPACES_CAPABILITY,
+      create: () => ({
+        value: {
+          version: 1,
+          resolve: () => Promise.reject(new Error("not exercised by this topology fixture")),
+        },
+      }),
+    }]);
+    expect(starts).toEqual(["ordinary-consumer"]);
+    expect(runtime.healthRecords().find(({ pluginId }) => pluginId === "ordinary-consumer"))
+      .toEqual(expect.objectContaining({ state: "active" }));
+    await runtime.stop();
   });
 
   it("propagates failed and missing exact-version dependencies without blocking independent plugins", async () => {
@@ -919,12 +1132,23 @@ describe("server plugin runtime", () => {
       entry("configured-off", { scope: "bundled", enabled: false }),
     ]);
 
+    const createBundledLateHostCapability = vi.fn(() => ({
+      value: {
+        version: 1 as const,
+        resolve: () => Promise.reject(new Error("bundled safe start must not resolve workspaces")),
+      },
+    }));
     const bundledOnly = await createServerPluginRuntime({
       catalog: { snapshot: () => Promise.resolve(snapshot) },
       safeStart: "bundled-only",
       importer,
       logger: testLogger(),
+      lateHostCapabilities: [PI_WEB_HOST_WORKSPACES_CAPABILITY],
     });
+    await bundledOnly.resumeWithHostCapabilityFactories([{
+      capability: PI_WEB_HOST_WORKSPACES_CAPABILITY,
+      create: createBundledLateHostCapability,
+    }]);
 
     expect(imported).toEqual(["bundled"]);
     expect(bundledOnly.healthRecords()).toEqual([
@@ -932,11 +1156,19 @@ describe("server plugin runtime", () => {
       expect.objectContaining({ pluginId: "configured-off", state: "disabled", message: "disabled in PI WEB config" }),
       expect.objectContaining({ pluginId: "local", state: "disabled", message: "disabled by bundled-only safe start" }),
     ]);
+    expect(createBundledLateHostCapability).not.toHaveBeenCalled();
+    await bundledOnly.stop();
 
     imported.splice(0);
     const noneCatalog = { snapshot: vi.fn(() => Promise.resolve(snapshot)) };
     const createHostCapability = vi.fn(() => ({
       value: { version: 1 as const, read: () => Promise.resolve(undefined), write: () => Promise.resolve(), clear: () => Promise.resolve() },
+    }));
+    const createLateHostCapability = vi.fn(() => ({
+      value: {
+        version: 1 as const,
+        resolve: () => Promise.reject(new Error("safe start must not resolve workspaces")),
+      },
     }));
     const none = await createServerPluginRuntime({
       catalog: noneCatalog,
@@ -944,11 +1176,17 @@ describe("server plugin runtime", () => {
       importer,
       logger: testLogger(),
       hostCapabilityFactories: [{ capability: PI_WEB_HOST_STATE_CAPABILITY, create: createHostCapability }],
+      lateHostCapabilities: [PI_WEB_HOST_WORKSPACES_CAPABILITY],
     });
+    await none.resumeWithHostCapabilityFactories([{
+      capability: PI_WEB_HOST_WORKSPACES_CAPABILITY,
+      create: createLateHostCapability,
+    }]);
 
     expect(imported).toEqual([]);
     expect(noneCatalog.snapshot).not.toHaveBeenCalled();
     expect(createHostCapability).not.toHaveBeenCalled();
+    expect(createLateHostCapability).not.toHaveBeenCalled();
     expect(none.healthRecords()).toEqual([]);
   });
 
@@ -1038,6 +1276,10 @@ describe("server plugin runtime", () => {
         health: { status: "degraded", message: "tool unavailable", details: { retry: true } },
       },
     ]);
+    await expect(runtime.inspectHealth(["degraded"])).resolves.toEqual([{
+      pluginId: "degraded",
+      health: { status: "degraded", message: "tool unavailable", details: { retry: true } },
+    }]);
 
     await runtime.stop();
 

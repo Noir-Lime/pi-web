@@ -133,6 +133,11 @@ export interface CreateServerPluginRuntimeOptions {
   hostCapabilities?: readonly PluginCapabilityProvision[];
   /** Core-owned capabilities materialized separately for each exact declaring plugin. */
   hostCapabilityFactories?: readonly ServerPluginHostCapabilityFactory[];
+  /**
+   * Exact host capabilities activated together after early workspace-provider
+   * topology is complete. Plugins requiring one remain staged until resume.
+   */
+  lateHostCapabilities?: readonly PluginCapability[];
   /** Isolated unit/package tests may opt out; production always enforces Terminal. */
   enforceRequiredTerminal?: boolean;
 }
@@ -172,7 +177,13 @@ interface InternalHostCapabilityFactory {
   create: (context: ServerPluginHostCapabilityContext) => ServerPluginHostCapabilityInstance;
 }
 
-type InternalCapabilityDeclaration = InternalCapabilityProvision | InternalHostCapabilityFactory;
+interface InternalLateHostCapability {
+  capability: PluginCapability;
+  key: string;
+  source: "late-host";
+}
+
+type InternalCapabilityDeclaration = InternalCapabilityProvision | InternalHostCapabilityFactory | InternalLateHostCapability;
 
 type InternalHostCapabilityInstance = ServerPluginHostCapabilityInstance;
 
@@ -210,6 +221,7 @@ export class ServerPluginRuntime {
   private activePlugins: ActiveServerPlugin[] = [];
   private stagedPlugins: StagedServerPlugin[] = [];
   private lifetimesAborted = false;
+  private lateHostCapabilitiesResumed = false;
   private stopped = false;
 
   private constructor(
@@ -222,6 +234,7 @@ export class ServerPluginRuntime {
     private readonly noticeSink: ((source: string, input: ServerPluginNoticeInput) => void) | undefined,
     hostCapabilities: readonly InternalCapabilityProvision[],
     hostCapabilityFactories: readonly InternalHostCapabilityFactory[],
+    lateHostCapabilities: readonly InternalLateHostCapability[],
     private readonly enforceRequiredTerminal: boolean,
   ) {
     for (const provision of hostCapabilities) {
@@ -229,6 +242,7 @@ export class ServerPluginRuntime {
       this.activeCapabilitiesByKey.set(provision.key, provision);
     }
     for (const factory of hostCapabilityFactories) this.registerHostCapability(factory);
+    for (const capability of lateHostCapabilities) this.registerHostCapability(capability);
   }
 
   static async activate(
@@ -245,6 +259,7 @@ export class ServerPluginRuntime {
       options.noticeSink,
       snapshotHostCapabilities(options.hostCapabilities),
       snapshotHostCapabilityFactories(options.hostCapabilityFactories),
+      snapshotLateHostCapabilities(options.lateHostCapabilities),
       options.enforceRequiredTerminal !== false && options.safeStart !== "none",
     );
     try {
@@ -295,6 +310,40 @@ export class ServerPluginRuntime {
     return parseCapabilityValue(parsed, provision.value, `Server capability ${formatCapability(parsed)}`);
   }
 
+  /**
+   * Registers every declared late host factory atomically, then resumes the
+   * plugins staged on those capabilities. This boundary is intentionally one-shot.
+   */
+  async resumeWithHostCapabilityFactories(
+    factories: readonly ServerPluginHostCapabilityFactory[],
+  ): Promise<void> {
+    if (this.stopped || this.lifetimesAborted) {
+      throw new Error("Server plugin runtime cannot resume after shutdown begins");
+    }
+    if (this.lateHostCapabilitiesResumed) {
+      throw new Error("Server plugin late host capabilities have already resumed");
+    }
+
+    const snapshottedFactories = snapshotHostCapabilityFactories(factories);
+    const lateDeclarations = [...this.declaredCapabilitiesByKey.values()]
+      .filter((declaration): declaration is InternalLateHostCapability => declaration.source === "late-host");
+    const factoriesByKey = new Map(snapshottedFactories.map((factory) => [factory.key, factory]));
+    for (const factory of snapshottedFactories) {
+      if (!lateDeclarations.some(({ key }) => key === factory.key)) {
+        throw new Error(`Host capability ${formatCapability(factory.capability)} was not declared for late registration`);
+      }
+    }
+    for (const declaration of lateDeclarations) {
+      if (!factoriesByKey.has(declaration.key)) {
+        throw new Error(`Late host capability ${formatCapability(declaration.capability)} was not registered`);
+      }
+    }
+
+    this.lateHostCapabilitiesResumed = true;
+    for (const factory of snapshottedFactories) this.declaredCapabilitiesByKey.set(factory.key, factory);
+    await this.startStagedPlugins(false);
+  }
+
   /** Cancels plugin lifetimes while retaining publications for consumer cleanup. */
   beginShutdown(): void {
     if (this.lifetimesAborted) return;
@@ -305,9 +354,11 @@ export class ServerPluginRuntime {
     }
   }
 
-  async inspectHealth(): Promise<readonly ServerPluginHealthInspection[]> {
+  async inspectHealth(pluginIds?: readonly string[]): Promise<readonly ServerPluginHealthInspection[]> {
+    const selectedPluginIds = pluginIds === undefined ? undefined : new Set(pluginIds);
     const inspections: ServerPluginHealthInspection[] = [];
     for (const active of this.activePlugins) {
+      if (selectedPluginIds !== undefined && !selectedPluginIds.has(active.entry.id)) continue;
       const callback = active.activation.health?.bind(active.activation);
       if (callback === undefined) {
         inspections.push(Object.freeze({ pluginId: active.entry.id, health: Object.freeze({ status: "healthy" }) }));
@@ -362,7 +413,7 @@ export class ServerPluginRuntime {
       .filter((entry) => entry.serverModule !== undefined)
       .sort(requiredTerminalFirst);
     for (const entry of serverEntries) await this.stageEntry(entry);
-    await this.startStagedPlugins();
+    await this.startStagedPlugins(true);
 
     if (this.enforceRequiredTerminal) {
       try {
@@ -454,7 +505,7 @@ export class ServerPluginRuntime {
     }
   }
 
-  private async startStagedPlugins(): Promise<void> {
+  private async startStagedPlugins(allowLateHostWait: boolean): Promise<void> {
     const pending = new Map(this.stagedPlugins.map((plugin) => [plugin.entry.id, plugin]));
     while (pending.size > 0) {
       let progressed = false;
@@ -482,20 +533,55 @@ export class ServerPluginRuntime {
       }
       if (progressed) continue;
 
-      const cycle = findCapabilityCycle(pending, this.declaredCapabilitiesByKey);
-      const cycleIds = cycle.length === 0 ? [candidates[0]?.entry.id].filter((id): id is string => id !== undefined) : cycle;
-      for (const pluginId of cycleIds) {
-        const staged = pending.get(pluginId);
-        if (staged === undefined) continue;
-        pending.delete(pluginId);
-        const cyclicRequirement = (staged.plugin.requires ?? []).find((requirement) => cycleIds.includes(requirement.pluginId));
-        const error = new Error(cyclicRequirement === undefined
-          ? `Server plugin ${pluginId} has an unresolved capability dependency cycle`
-          : `Server plugin ${pluginId} requires ${formatCapability(cyclicRequirement)} in a capability dependency cycle`);
-        const message = await this.failBeforeStart(staged, error);
-        if (this.enforceRequiredTerminal && pluginId === REQUIRED_TERMINAL_PLUGIN_ID) {
-          throw requiredTerminalError(`Required Terminal server entry failed during start: ${message}`, error);
+      const cycleIds = findCapabilityCycle(pending, this.declaredCapabilitiesByKey);
+      if (cycleIds.length > 0) {
+        for (const pluginId of cycleIds) {
+          const staged = pending.get(pluginId);
+          if (staged === undefined) continue;
+          pending.delete(pluginId);
+          const cyclicRequirement = (staged.plugin.requires ?? []).find((requirement) => cycleIds.includes(requirement.pluginId));
+          const error = new Error(cyclicRequirement === undefined
+            ? `Server plugin ${pluginId} has an unresolved capability dependency cycle`
+            : `Server plugin ${pluginId} requires ${formatCapability(cyclicRequirement)} in a capability dependency cycle`);
+          const message = await this.failBeforeStart(staged, error);
+          if (this.enforceRequiredTerminal && pluginId === REQUIRED_TERMINAL_PLUGIN_ID) {
+            throw requiredTerminalError(`Required Terminal server entry failed during start: ${message}`, error);
+          }
         }
+        continue;
+      }
+
+      if (allowLateHostWait) {
+        const providerCycles = candidates.flatMap((staged) => {
+          if (staged.activation.workspaceProvider === undefined) return [];
+          const lateCapability = findLateHostDependency(staged, pending, this.declaredCapabilitiesByKey);
+          return lateCapability === undefined ? [] : [{ staged, lateCapability }];
+        });
+        if (providerCycles.length > 0) {
+          for (const { staged, lateCapability } of providerCycles) {
+            pending.delete(staged.entry.id);
+            const error = new Error(
+              `Server plugin ${staged.entry.id} contributes a workspace provider that depends on late host capability ${formatCapability(lateCapability)} in a capability dependency cycle`,
+            );
+            const message = await this.failBeforeStart(staged, error);
+            if (this.enforceRequiredTerminal && staged.entry.id === REQUIRED_TERMINAL_PLUGIN_ID) {
+              throw requiredTerminalError(`Required Terminal server entry failed during start: ${message}`, error);
+            }
+          }
+          continue;
+        }
+        if (candidates.every((staged) => (
+          findLateHostDependency(staged, pending, this.declaredCapabilitiesByKey) !== undefined
+        ))) return;
+      }
+
+      const unresolved = candidates[0];
+      if (unresolved === undefined) return;
+      pending.delete(unresolved.entry.id);
+      const error = new Error(`Server plugin ${unresolved.entry.id} has an unresolved capability dependency cycle`);
+      const message = await this.failBeforeStart(unresolved, error);
+      if (this.enforceRequiredTerminal && unresolved.entry.id === REQUIRED_TERMINAL_PLUGIN_ID) {
+        throw requiredTerminalError(`Required Terminal server entry failed during start: ${message}`, error);
       }
     }
   }
@@ -510,7 +596,10 @@ export class ServerPluginRuntime {
       if (provision === undefined) {
         return new Error(`Server plugin ${staged.entry.id} requires unavailable capability ${formatCapability(requirement)}`);
       }
-      if (this.activeCapabilitiesByKey.has(key) || provision.source === "host" || provision.source === "host-factory") continue;
+      if (this.activeCapabilitiesByKey.has(key)
+        || provision.source === "host"
+        || provision.source === "host-factory"
+        || provision.source === "late-host") continue;
       if (!pending.has(requirement.pluginId)) {
         return new Error(`Server plugin ${staged.entry.id} requires ${formatCapability(requirement)}, but provider plugin ${requirement.pluginId} did not start`);
       }
@@ -948,6 +1037,24 @@ function snapshotHostCapabilities(value: readonly PluginCapabilityProvision[] | 
   return internalProvisions({ provides: provisions }, "host");
 }
 
+function snapshotLateHostCapabilities(
+  value: readonly PluginCapability[] | undefined,
+): readonly InternalLateHostCapability[] {
+  if (value === undefined) return Object.freeze([]);
+  if (!Array.isArray(value)) throw new Error("Late host capabilities must be an array");
+  const seen = new Set<string>();
+  const capabilities: InternalLateHostCapability[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.hasOwn(value, index)) throw new Error("Late host capabilities must not be sparse");
+    const capability = snapshotUnknownCapability(value[index], `Late host capabilities[${String(index)}]`);
+    const key = capabilityKey(capability);
+    if (seen.has(key)) throw new Error(`Late host capability ${formatCapability(capability)} is configured more than once`);
+    seen.add(key);
+    capabilities.push(Object.freeze({ capability, key, source: "late-host" as const }));
+  }
+  return Object.freeze(capabilities);
+}
+
 function snapshotHostCapabilityFactories(
   value: readonly ServerPluginHostCapabilityFactory[] | undefined,
 ): readonly InternalHostCapabilityFactory[] {
@@ -1096,6 +1203,27 @@ function createCapabilityResolver(
       );
     },
   });
+}
+
+function findLateHostDependency(
+  staged: StagedServerPlugin,
+  pending: ReadonlyMap<string, StagedServerPlugin>,
+  declared: ReadonlyMap<string, InternalCapabilityDeclaration>,
+  visiting: ReadonlySet<string> = new Set<string>(),
+): PluginCapability | undefined {
+  if (visiting.has(staged.entry.id)) return undefined;
+  const nextVisiting = new Set(visiting);
+  nextVisiting.add(staged.entry.id);
+  for (const requirement of staged.plugin.requires ?? []) {
+    const declaration = declared.get(capabilityKey(requirement));
+    if (declaration?.source === "late-host") return declaration.capability;
+    if (declaration?.source !== "plugin") continue;
+    const provider = pending.get(requirement.pluginId);
+    if (provider === undefined) continue;
+    const lateCapability = findLateHostDependency(provider, pending, declared, nextVisiting);
+    if (lateCapability !== undefined) return lateCapability;
+  }
+  return undefined;
 }
 
 function findCapabilityCycle(
