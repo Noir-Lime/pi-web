@@ -365,6 +365,8 @@ async function createSessionDaemonRuntime() {
           sessions,
           unreadStore,
           pluginBackends,
+          workspaceProviders,
+          workspaceRemovals,
           closeServer: () => app.close(),
         },
         onFailure: () => { process.exitCode = 1; },

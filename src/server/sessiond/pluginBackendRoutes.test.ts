@@ -48,6 +48,34 @@ describe("session daemon paired plugin backend routes", () => {
     expect(onWorkspacesMutated).toHaveBeenCalledOnce();
   });
 
+  it("does not dispatch a request admitted before quiesce after backend shutdown", async () => {
+    let quiescing = false;
+    app.addHook("onRequest", (_request, reply, done) => {
+      if (!quiescing) done();
+      else void reply.code(503).send({ error: "Session daemon is shutting down" });
+    });
+    const projectResolution = deferred<Project>();
+    const projects = { requireProject: vi.fn(() => projectResolution.promise) };
+    const peerRequest = vi.fn(() => ({ shouldNotRun: true }));
+    const backends = registryFor(peerRequest);
+    const workspaceId = await folderWorkspaceId();
+    registerPairedPluginBackendRoutes(app, { projects, backends, onWorkspacesMutated: vi.fn() });
+    const response = app.inject({
+      method: "POST",
+      url: `/paired-plugin-backends/board/projects/${encodeURIComponent(project.id)}/workspaces/${workspaceId}/cards.summary`,
+      payload: { revision: "server-r1", input: null },
+    });
+    await vi.waitFor(() => { expect(projects.requireProject).toHaveBeenCalledOnce(); });
+
+    quiescing = true;
+    await backends.closeAll("test quiesce");
+    projectResolution.resolve(project);
+
+    await expect(response).resolves.toMatchObject({ statusCode: 503 });
+    expect((await response).json()).toMatchObject({ code: "shutdown", pluginId: "board" });
+    expect(peerRequest).not.toHaveBeenCalled();
+  });
+
   it("does not register the retired owner-backed route", async () => {
     const request = vi.fn<PluginBackendRegistry["request"]>();
     registerPairedPluginBackendRoutes(app, { projects: projectReader(), backends: { request }, onWorkspacesMutated: vi.fn() });
@@ -120,6 +148,13 @@ describe("session daemon paired plugin backend routes", () => {
     expect(observedSignal?.aborted).toBe(false);
   });
 });
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolvePromise: ((value: T) => void) | undefined;
+  const promise = new Promise<T>((resolve) => { resolvePromise = resolve; });
+  if (resolvePromise === undefined) throw new Error("Deferred promise was not initialized");
+  return { promise, resolve: resolvePromise };
+}
 
 function projectReader() {
   return {

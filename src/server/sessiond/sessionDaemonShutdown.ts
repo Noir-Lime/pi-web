@@ -13,6 +13,8 @@ export interface SessionDaemonShutdownDependencies {
   sessions: { dispose(): void | Promise<void> };
   unreadStore: { flush(): void | Promise<void> };
   pluginBackends: { closeAll(): void | Promise<void> };
+  workspaceProviders: { closeAll(): void | Promise<void> };
+  workspaceRemovals: { closeAll(): void | Promise<void> };
   closeServer(): void | Promise<void>;
 }
 
@@ -27,9 +29,14 @@ export async function runSessionDaemonShutdown(options: SessionDaemonShutdownOpt
   const { dependencies } = options;
   const operations: readonly (readonly [string, () => void | Promise<void>])[] = [
     ["quiesce server", () => dependencies.quiesceServer()],
-    ["cancel server plugin lifetimes", () => dependencies.serverPlugins.beginShutdown()],
     ["dispose catalog refresher", () => dependencies.catalogRefresher.dispose()],
-    ["close plugin backend channels", () => dependencies.pluginBackends.closeAll()],
+    // Keep plugin lifetimes and required capabilities available until every
+    // admitted contribution callback and Terminal consumer has observed
+    // cancellation and drained.
+    ["close workspace removal work", () => dependencies.workspaceRemovals.closeAll()],
+    ["close plugin backend work", () => dependencies.pluginBackends.closeAll()],
+    ["close workspace provider work", () => dependencies.workspaceProviders.closeAll()],
+    ["cancel server plugin lifetimes", () => dependencies.serverPlugins.beginShutdown()],
     // Plugin capability cleanup must finish while its host-owned sessions remain available.
     ["stop server plugins", () => dependencies.serverPlugins.stop()],
     ["dispose sessions", () => dependencies.sessions.dispose()],

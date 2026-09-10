@@ -540,6 +540,8 @@ interface CreateSessionRuntimeOptions extends Pick<InternalStartSessionOptions, 
    * caller opens an existing one, so "open" is the default.
    */
   startupIntent?: "create" | "open";
+  /** Cancels host-owned startup before the runtime becomes publicly active. */
+  startupSignal?: AbortSignal;
 }
 
 /**
@@ -1461,7 +1463,7 @@ export class PiSessionService implements SessionRouteService {
     const active = await this.create(
       this.sessionManager.create(cwd),
       cwd,
-      { startupIntent: "create", creationProvenance: "host-one-shot" },
+      { startupIntent: "create", creationProvenance: "host-one-shot", startupSignal: signal },
     );
     const { session } = active.runtime;
     try {
@@ -1880,8 +1882,13 @@ export class PiSessionService implements SessionRouteService {
     session: PiAgentSession,
     request: { kind: ExtensionDialogKind; title: string; message?: string | undefined; options?: string[] | undefined; placeholder?: string | undefined },
     opts: ExtensionUIDialogOptions | undefined,
+    startupSignal?: AbortSignal,
   ): Promise<boolean | string | undefined> {
-    const signal = opts?.signal;
+    const signal = opts?.signal === undefined
+      ? startupSignal
+      : startupSignal === undefined
+        ? opts.signal
+        : AbortSignal.any([opts.signal, startupSignal]);
     // A pre-aborted signal dismisses the dialog before it ever opens.
     if (signal?.aborted === true) return extensionDialogCancelValue(request.kind);
     const timeoutMs = effectiveExtensionDialogTimeoutMs(opts?.timeout, this.extensionDialogsTimeoutMs);
@@ -3563,6 +3570,11 @@ export class PiSessionService implements SessionRouteService {
     });
     const active: ActiveSession<PiSessionRuntime> = { runtime, unsubscribe: noop };
     let boundSession = runtime.session;
+    const startupSignal = options.startupSignal;
+    const cancelStartup = (): void => { this.endSessionExtensionDialogs(boundSession.sessionId); };
+    if (startupSignal !== undefined && !startupSignal.aborted) {
+      startupSignal.addEventListener("abort", cancelStartup, { once: true });
+    }
     let notificationGeneration = options.notificationGeneration;
     let notificationOwnership: "disabled" | "external" | "registered" | "replacement" = options.notifications === "disabled"
       ? "disabled"
@@ -3591,6 +3603,7 @@ export class PiSessionService implements SessionRouteService {
     if (notificationGeneration !== undefined) this.notificationGenerationBySession.set(runtime.session, notificationGeneration);
 
     try {
+      startupSignal?.throwIfAborted();
       if (options.creationProvenance === "tracked-subsession") {
         await this.publishUnreadMutations(this.unreadStore.excludeSession(
           runtime.session.sessionId,
@@ -3599,8 +3612,10 @@ export class PiSessionService implements SessionRouteService {
       } else {
         await this.recoverSubsessionTrackingForOpenedSession(runtime.session);
       }
+      startupSignal?.throwIfAborted();
       startup.report(STARTUP_PHASE_EXTENSIONS);
-      await this.bindSessionExtensions(runtime.session, notificationGeneration);
+      await this.bindSessionExtensions(runtime.session, notificationGeneration, startupSignal);
+      startupSignal?.throwIfAborted();
       this.bindRuntime(active);
       runtime.setRebindSession(async (session) => {
         const priorGeneration = notificationGeneration;
@@ -3632,6 +3647,7 @@ export class PiSessionService implements SessionRouteService {
           throw error;
         }
       });
+      startupSignal?.throwIfAborted();
       this.active.set(runtime.session.sessionId, active);
       if (notificationOwnership === "replacement" && notificationGeneration !== undefined) {
         this.publishNotificationMutations(this.notificationStore.commitReplacement(notificationGeneration));
@@ -3670,14 +3686,17 @@ export class PiSessionService implements SessionRouteService {
         await runtime.dispose();
       }
       throw error;
+    } finally {
+      startupSignal?.removeEventListener("abort", cancelStartup);
     }
   }
 
   private async bindSessionExtensions(
     session: PiAgentSession,
     generation: SessionNotificationGeneration | undefined,
+    startupSignal?: AbortSignal,
   ): Promise<void> {
-    const uiContext = this.sessionUiContext(session, generation);
+    const uiContext = this.sessionUiContext(session, generation, startupSignal);
     // A `session_start` hook can park this bind on a dialog the browser has
     // not answered yet. On the initial create/open path the session becomes
     // active only after this returns, so register it for the duration: the
@@ -3705,6 +3724,7 @@ export class PiSessionService implements SessionRouteService {
   private sessionUiContext(
     session: PiAgentSession,
     generation: SessionNotificationGeneration | undefined,
+    startupSignal?: AbortSignal,
   ): ExtensionUIContext {
     const baseUiContext = session.extensionRunner.getUIContext();
     const notify: ExtensionUIContext["notify"] = (message, type) => {
@@ -3730,15 +3750,15 @@ export class PiSessionService implements SessionRouteService {
         if (property === "theme") return plainTextTheme;
         if (property === "confirm") {
           return (title: string, message: string, opts?: ExtensionUIDialogOptions) =>
-            this.openExtensionDialog(session, { kind: "confirm", title, message }, opts);
+            this.openExtensionDialog(session, { kind: "confirm", title, message }, opts, startupSignal);
         }
         if (property === "select") {
           return (title: string, options: string[], opts?: ExtensionUIDialogOptions) =>
-            this.openExtensionDialog(session, { kind: "select", title, options }, opts);
+            this.openExtensionDialog(session, { kind: "select", title, options }, opts, startupSignal);
         }
         if (property === "input") {
           return (title: string, placeholder: string | undefined, opts?: ExtensionUIDialogOptions) =>
-            this.openExtensionDialog(session, { kind: "input", title, placeholder }, opts);
+            this.openExtensionDialog(session, { kind: "input", title, placeholder }, opts, startupSignal);
         }
         const value: unknown = Reflect.get(target, property, receiver);
         return value;

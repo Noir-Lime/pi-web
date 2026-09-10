@@ -231,6 +231,46 @@ describe("PluginBackendRegistry", () => {
     expect(observedSignal?.aborted).toBe(true);
   });
 
+  it("aborts admitted direct requests and rejects new requests during shutdown", async () => {
+    let resolveStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolvePromise) => { resolveStarted = resolvePromise; });
+    let observedSignal: AbortSignal | undefined;
+    const callbackAborted = vi.fn();
+    const workspaces = providerRegistry([]);
+    const workspaceId = (await workspaces.resolve(project)).workspaces[0]?.id;
+    if (workspaceId === undefined) throw new Error("Expected folder workspace");
+    const registry = new PluginBackendRegistry({
+      contributions: [backendContribution("notes", ({ signal }) => new Promise((_resolve, rejectPromise) => {
+        observedSignal = signal;
+        resolveStarted?.();
+        signal.addEventListener("abort", () => {
+          callbackAborted();
+          const reason: unknown = signal.reason;
+          rejectPromise(reason instanceof Error ? reason : new Error("shutdown", { cause: reason }));
+        }, { once: true });
+      }))],
+      workspaces,
+    });
+    const request = {
+      pluginId: "notes",
+      moduleRevision: "notes-r1",
+      project,
+      workspaceId,
+      operation: "notes.wait",
+      input: null,
+    };
+    const pending = registry.request(request);
+    await started;
+
+    const closing = registry.closeAll("test shutdown");
+
+    await expect(pending).rejects.toMatchObject({ code: "shutdown", statusCode: 503 });
+    await closing;
+    expect(observedSignal?.aborted).toBe(true);
+    expect(callbackAborted).toHaveBeenCalledOnce();
+    await expect(registry.request(request)).rejects.toMatchObject({ code: "shutdown", statusCode: 503 });
+  });
+
   it("cancels workspace authority resolution before a direct callback starts", async () => {
     const controller = new AbortController();
     let resolveStarted: (() => void) | undefined;

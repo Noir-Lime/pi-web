@@ -56,6 +56,7 @@ export type PluginBackendRequestErrorCode =
   | "request-failed"
   | "request-timeout"
   | "request-cancelled"
+  | "shutdown"
   | "invalid-result";
 
 export class PluginBackendRequestError extends Error {
@@ -177,8 +178,10 @@ export class PluginBackendRegistry {
   private readonly channelAdmissions = new Set<ManagedPluginBackendChannelAdmission>();
   private readonly openingChannelControllers = new Set<AbortController>();
   private readonly openingChannelTasks = new Set<Promise<void>>();
+  private readonly requestTasks = new Set<Promise<JsonValue>>();
+  private readonly shutdown = new AbortController();
+  private closePromise: Promise<void> | undefined;
   private channelAdmissionCount = 0;
-  private channelShutdown = false;
   private readonly channelsByPlugin = new Map<string, number>();
   private readonly channelsByPluginWorkspace = new Map<string, number>();
 
@@ -203,14 +206,20 @@ export class PluginBackendRegistry {
   }
 
   async request(request: PluginBackendRequest, signal?: AbortSignal): Promise<JsonValue> {
+    if (this.channelsAreShuttingDown()) throw requestShutdownError(request.pluginId);
+    const operationSignal = signal === undefined
+      ? this.shutdown.signal
+      : AbortSignal.any([signal, this.shutdown.signal]);
+    const task = runBoundedPluginBackendOperation(
+      request.pluginId,
+      "dispatch",
+      this.dispatchTimeoutMs,
+      (dispatchSignal) => this.dispatch(request, dispatchSignal),
+      operationSignal,
+    );
+    this.requestTasks.add(task);
     try {
-      return await runBoundedPluginBackendOperation(
-        request.pluginId,
-        "dispatch",
-        this.dispatchTimeoutMs,
-        (dispatchSignal) => this.dispatch(request, dispatchSignal),
-        signal,
-      );
+      return await task;
     } catch (error) {
       if (signal?.aborted === true) {
         throw backendError(
@@ -220,10 +229,13 @@ export class PluginBackendRegistry {
           error,
         );
       }
+      if (this.channelsAreShuttingDown()) throw requestShutdownError(request.pluginId, error);
       if (error instanceof PluginBackendTimeoutError) {
         throw backendError("request-timeout", 504, boundedErrorMessage(error), error);
       }
       throw error;
+    } finally {
+      this.requestTasks.delete(task);
     }
   }
 
@@ -397,14 +409,19 @@ export class PluginBackendRegistry {
     }
   }
 
-  async closeAll(reason = "Session daemon shutdown"): Promise<void> {
-    this.channelShutdown = true;
+  closeAll(reason = "Session daemon shutdown"): Promise<void> {
+    this.closePromise ??= this.performCloseAll(reason);
+    return this.closePromise;
+  }
+
+  private async performCloseAll(reason: string): Promise<void> {
+    if (!this.shutdown.signal.aborted) this.shutdown.abort(new DOMException(reason, "AbortError"));
     const admissions = [...this.channelAdmissions];
     for (const admission of admissions) admission.abort(reason);
     for (const controller of this.openingChannelControllers) {
       if (!controller.signal.aborted) controller.abort(new DOMException(reason, "AbortError"));
     }
-    await Promise.allSettled([...this.openingChannelTasks]);
+    await Promise.allSettled([...this.requestTasks, ...this.openingChannelTasks]);
     const channels = [...this.channels];
     const results = await Promise.allSettled(channels.map(async (channel) => {
       await channel.fail("shutdown", reason, 1012);
@@ -437,7 +454,7 @@ export class PluginBackendRegistry {
   }
 
   private channelsAreShuttingDown(): boolean {
-    return this.channelShutdown;
+    return this.shutdown.signal.aborted;
   }
 
   private async dispatch(request: PluginBackendRequest, dispatchSignal: AbortSignal): Promise<JsonValue> {
@@ -989,6 +1006,15 @@ async function runBoundedPluginBackendOperation<T>(
       controller.abort(new DOMException("Plugin backend operation completed", "AbortError"));
     }
   }
+}
+
+function requestShutdownError(pluginId: string, cause?: unknown): PluginBackendRequestError {
+  return backendError(
+    "shutdown",
+    503,
+    `Server plugin ${pluginId} backend requests are shutting down`,
+    cause,
+  );
 }
 
 function backendError(

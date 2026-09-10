@@ -441,6 +441,36 @@ describe("WorkspaceProviderRegistry", () => {
     expect(resolution.diagnostics[0]?.message).toContain(`not an accessible directory: ${hostPath("/gone")}`);
   });
 
+  it("aborts admitted provider work and rejects new provider work during shutdown", async () => {
+    let listedSignal: AbortSignal | undefined;
+    let resolveStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolvePromise) => { resolveStarted = resolvePromise; });
+    const callbackAborted = vi.fn();
+    const { registry, logger } = registryFixture([contribution("owner", provider({
+      probe: () => Promise.resolve("claim"),
+      list: (_project, signal) => new Promise((_resolve, rejectPromise) => {
+        listedSignal = signal;
+        resolveStarted?.();
+        signal.addEventListener("abort", () => {
+          callbackAborted();
+          const reason: unknown = signal.reason;
+          rejectPromise(reason instanceof Error ? reason : new Error("shutdown", { cause: reason }));
+        }, { once: true });
+      }),
+    }))]);
+    const pending = registry.resolve(project);
+    await started;
+
+    const closing = registry.closeAll("provider shutdown");
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError", message: "provider shutdown" });
+    await closing;
+    expect(listedSignal?.aborted).toBe(true);
+    expect(callbackAborted).toHaveBeenCalledOnce();
+    expect(logger.warn).not.toHaveBeenCalled();
+    await expect(registry.resolve(project)).rejects.toMatchObject({ name: "AbortError", message: "provider shutdown" });
+  });
+
   it("propagates caller cancellation through removal resolution and planning", async () => {
     let mode: "ready" | "list" | "prepare" = "ready";
     let listedSignal: AbortSignal | undefined;

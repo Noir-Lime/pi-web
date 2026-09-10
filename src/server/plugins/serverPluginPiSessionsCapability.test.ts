@@ -3,6 +3,17 @@ import { describe, expect, it, vi } from "vitest";
 import { PI_WEB_HOST_PI_SESSIONS_CAPABILITY } from "../../server-plugin-api.js";
 import type { WorkspaceListing } from "../../shared/apiTypes.js";
 import type { Project } from "../types.js";
+import { PendingExtensionDialogStore } from "../sessions/pendingExtensionDialogStore.js";
+import { PiSessionService } from "../sessions/piSessionService.js";
+import {
+  CapturingSessionEventHub,
+  emptyArchiveStore,
+  fakeRuntime,
+  runtimeCreator,
+  sessionGateway,
+  sessionRecord,
+  testModelRuntime,
+} from "../sessions/piSessionService.testSupport.js";
 import { createServerPluginPiSessionsCapabilityFactory } from "./serverPluginPiSessionsCapability.js";
 
 const project: Project = {
@@ -190,6 +201,68 @@ describe("server plugin PI sessions capability", () => {
     await fixture.instance.dispose?.(AbortSignal.timeout(1_000));
   });
 
+  it("settles capability cleanup when lifetime cancellation interrupts a real startup dialog", async () => {
+    const store = new PendingExtensionDialogStore({ createDialogId: () => "startup-dialog" });
+    const fake = fakeRuntime("session-1");
+    const confirmAnswers: (boolean | string | undefined)[] = [];
+    fake.session.bindExtensions = (bindings) => {
+      fake.calls.bindExtensions.push(bindings);
+      if (bindings.uiContext === undefined) return Promise.resolve();
+      return bindings.uiContext.confirm("Proceed at startup?", "Really?").then((answer) => {
+        confirmAnswers.push(answer);
+      });
+    };
+    const events = new CapturingSessionEventHub();
+    const sessions = new PiSessionService(events, {
+      agentDir: "/tmp/pi-web-test-agent",
+      modelRuntime: testModelRuntime,
+      sessionManager: sessionGateway([sessionRecord("session-1")]),
+      archiveStore: emptyArchiveStore(),
+      createAgentRuntime: runtimeCreator(fake.runtime),
+      pendingExtensionDialogStore: store,
+      extensionDialogsTimeoutMs: 0,
+      heartbeatIntervalMs: 60_000,
+    });
+    const lifetime = new AbortController();
+    const factory = createServerPluginPiSessionsCapabilityFactory({
+      projects: { requireProject: () => Promise.resolve(project) },
+      workspaces: {
+        resolve: () => Promise.resolve({
+          status: "folder" as const,
+          projectId: project.id,
+          workspaces: [workspace()],
+          diagnostics: [],
+        }),
+      },
+      sessions,
+    });
+    const instance = factory.create({
+      pluginId: "run-consumer",
+      packageRoot: "/plugins/run-consumer",
+      lifetimeSignal: lifetime.signal,
+    });
+    const capability = PI_WEB_HOST_PI_SESSIONS_CAPABILITY.parse(instance.value);
+    const running = capability.run({ projectId: project.id, workspaceId: "workspace-1", prompt: "Must not start" });
+    const rejected = expect(running).rejects.toThrow("is no longer active");
+    await vi.waitFor(() => { expect(store.pendingDialogs("session-1")).toHaveLength(1); });
+
+    lifetime.abort(new DOMException("Plugin stopped", "AbortError"));
+    if (instance.dispose === undefined) throw new Error("Expected PI session capability cleanup");
+    await expect(instance.dispose(AbortSignal.timeout(1_000))).resolves.toBeUndefined();
+    await rejected;
+
+    expect(store.pendingDialogs("session-1")).toEqual([]);
+    expect(confirmAnswers).toEqual([false]);
+    expect(fake.calls.prompt).toEqual([]);
+    expect(fake.calls.abort).toBe(1);
+    expect(fake.calls.dispose).toBe(1);
+    expect(sessions.activeCount()).toBe(0);
+    expect(events.globalEvents.some((event) => event.type === "session.created")).toBe(false);
+    await sessions.dispose();
+    expect(fake.calls.abort).toBe(1);
+    expect(fake.calls.dispose).toBe(1);
+  });
+
   it("reclaims a session when lifetime cancellation wins the final startup await", async () => {
     const started = deferred<{ id: string; completion: Promise<void> }>();
     const fixture = harness({ startOneShotRun: () => started.promise });
@@ -200,10 +273,12 @@ describe("server plugin PI sessions capability", () => {
     started.resolve({ id: "session-late", completion: Promise.resolve() });
 
     await expect(running).rejects.toThrow("is no longer active");
+    expect(fixture.sessions.abort).toHaveBeenCalledOnce();
     expect(fixture.sessions.abort).toHaveBeenCalledWith({
       id: "session-late",
       cwd: resolve("/repo/worktree"),
     });
+    expect(fixture.sessions.stop).toHaveBeenCalledOnce();
     expect(fixture.sessions.stop).toHaveBeenCalledWith({
       id: "session-late",
       cwd: resolve("/repo/worktree"),

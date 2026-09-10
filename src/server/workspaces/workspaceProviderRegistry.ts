@@ -133,6 +133,9 @@ export class WorkspaceProviderRegistry {
   private readonly providerTimeoutMs: number;
   private readonly pathInspector: WorkspacePathInspector;
   private readonly pendingResolutions = new Map<string, Promise<WorkspaceProviderAuthorityResolution>>();
+  private readonly shutdown = new AbortController();
+  private readonly providerOperations = new Set<Promise<unknown>>();
+  private closePromise: Promise<void> | undefined;
 
   constructor(private readonly options: WorkspaceProviderRegistryOptions) {
     this.contributions = Object.freeze([...options.contributions]
@@ -153,6 +156,7 @@ export class WorkspaceProviderRegistry {
    * callers observe completion so ownership and topology are never cached.
    */
   async resolve(project: Project, signal?: AbortSignal): Promise<WorkspaceProviderAuthorityResolution> {
+    this.assertAccepting();
     const input = snapshotProject(project);
     // A cancellable request must own its resolution work. Sharing it would let
     // one disconnected caller abort another caller's authority lookup.
@@ -207,6 +211,7 @@ export class WorkspaceProviderRegistry {
     workspaceId: string,
     signal?: AbortSignal,
   ): Promise<WorkspaceProviderRemovalTarget> {
+    this.assertAccepting();
     const input = snapshotProject(project);
     if (workspaceId === "") throw providerRemovalError("workspace-not-found", 404, "Workspace not found");
     const diagnostics: WorkspaceProviderDiagnostic[] = [];
@@ -225,16 +230,16 @@ export class WorkspaceProviderRegistry {
       const contribution = selection.contribution;
       let validated: ValidatedProviderWorkspace[];
       try {
-        const listed: unknown = await runBoundedProviderOperation(
+        const listed: unknown = await this.runProviderOperation(
           contribution.pluginId,
           "list",
-          this.providerTimeoutMs,
           (operationSignal) => contribution.provider.list(input, operationSignal),
           signal,
         );
         validated = await validateProviderWorkspaces(input, contribution, listed, this.pathInspector, signal);
       } catch (error) {
         if (signal?.aborted === true) throw abortError(signal);
+        this.throwIfShuttingDown();
         if (error instanceof WorkspaceProviderTimeoutError) {
           throw providerRemovalError("resolution-timeout", 504, boundedErrorMessage(error), error);
         }
@@ -271,10 +276,9 @@ export class WorkspaceProviderRegistry {
         prepare: async () => {
           let value: unknown;
           try {
-            value = await runBoundedProviderOperation(
+            value = await this.runProviderOperation(
               contribution.pluginId,
               "prepareRemove",
-              this.providerTimeoutMs,
               (operationSignal) => callback(Object.freeze({
                 project: input,
                 workspace: current.providerWorkspace,
@@ -284,6 +288,7 @@ export class WorkspaceProviderRegistry {
             );
           } catch (error) {
             if (signal?.aborted === true) throw abortError(signal);
+            this.throwIfShuttingDown();
             if (error instanceof WorkspaceProviderTimeoutError) {
               throw providerRemovalError("preparation-timeout", 504, boundedErrorMessage(error), error);
             }
@@ -321,10 +326,9 @@ export class WorkspaceProviderRegistry {
 
     for (const contribution of candidates) {
       try {
-        const claim = await runBoundedProviderOperation(
+        const claim = await this.runProviderOperation(
           contribution.pluginId,
           "probe",
-          this.providerTimeoutMs,
           (signal) => contribution.provider.probe(project, signal),
           dispatchSignal,
         );
@@ -334,6 +338,7 @@ export class WorkspaceProviderRegistry {
         if (claim === "claim") claimants.push(contribution);
       } catch (error) {
         if (dispatchSignal?.aborted === true) throw abortError(dispatchSignal);
+        this.throwIfShuttingDown();
         const message = errorMessage(error);
         diagnostics.push(freezeDiagnostic({
           code: "probe-failed",
@@ -368,10 +373,9 @@ export class WorkspaceProviderRegistry {
     dispatchSignal?: AbortSignal,
   ): Promise<WorkspaceProviderAuthorityResolution> {
     try {
-      const listed: unknown = await runBoundedProviderOperation(
+      const listed: unknown = await this.runProviderOperation(
         contribution.pluginId,
         "list",
-        this.providerTimeoutMs,
         (signal) => contribution.provider.list(project, signal),
         dispatchSignal,
       );
@@ -385,6 +389,7 @@ export class WorkspaceProviderRegistry {
       });
     } catch (error) {
       if (dispatchSignal?.aborted === true) throw abortError(dispatchSignal);
+      this.throwIfShuttingDown();
       const message = errorMessage(error);
       diagnostics.push(freezeDiagnostic({
         code: "list-failed",
@@ -398,6 +403,50 @@ export class WorkspaceProviderRegistry {
       );
       return degradedResolution(project, diagnostics, contribution.pluginId);
     }
+  }
+
+  /** Rejects new provider work, cancels admitted callbacks, and waits for their host-side bounds to settle. */
+  closeAll(reason = "Session daemon shutdown"): Promise<void> {
+    this.closePromise ??= this.closeProviderOperations(reason);
+    return this.closePromise;
+  }
+
+  private async closeProviderOperations(reason: string): Promise<void> {
+    if (!this.shutdown.signal.aborted) this.shutdown.abort(new DOMException(reason, "AbortError"));
+    await Promise.allSettled([...this.providerOperations]);
+  }
+
+  private async runProviderOperation<T>(
+    pluginId: string,
+    operation: ProviderOperation,
+    callback: (signal: AbortSignal) => T | Promise<T>,
+    parentSignal?: AbortSignal,
+  ): Promise<T> {
+    this.assertAccepting();
+    const signal = parentSignal === undefined
+      ? this.shutdown.signal
+      : AbortSignal.any([parentSignal, this.shutdown.signal]);
+    const pending = runBoundedProviderOperation(
+      pluginId,
+      operation,
+      this.providerTimeoutMs,
+      callback,
+      signal,
+    );
+    this.providerOperations.add(pending);
+    try {
+      return await pending;
+    } finally {
+      this.providerOperations.delete(pending);
+    }
+  }
+
+  private assertAccepting(): void {
+    this.throwIfShuttingDown();
+  }
+
+  private throwIfShuttingDown(): void {
+    if (this.shutdown.signal.aborted) throw abortError(this.shutdown.signal);
   }
 }
 
