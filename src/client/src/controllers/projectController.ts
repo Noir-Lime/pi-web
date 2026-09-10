@@ -14,13 +14,13 @@ export interface ProjectTrustChoice {
 }
 
 export interface ProjectControllerDependencies {
-  api?: Pick<typeof defaultApi, "projects" | "addProject" | "closeProject" | "setWorkspaceTrust">;
+  api?: Pick<typeof defaultApi, "projects" | "addProject" | "closeProject" | "workspaces" | "setWorkspaceTrust">;
   navigateToProject?: (project: Project | undefined, options?: NavigationDestinationOptions) => Promise<boolean>;
   captureNavigation?: () => NavigationSelection;
 }
 
 export class ProjectController {
-  private readonly api: Pick<typeof defaultApi, "projects" | "addProject" | "closeProject" | "setWorkspaceTrust">;
+  private readonly api: NonNullable<ProjectControllerDependencies["api"]>;
   private readonly navigateToProject: ProjectControllerDependencies["navigateToProject"];
   private readonly captureNavigation: ProjectControllerDependencies["captureNavigation"];
   private readonly browserErrors: BrowserErrorReporter;
@@ -64,17 +64,19 @@ export class ProjectController {
       this.browserErrors.report(machineBrowserErrorScope(machineId), String(error));
       return;
     }
-    if (selectedMachineId(this.getState()) !== machineId) return;
-
     try {
-      const projects = this.getState().projects;
-      this.setState({ projects: [...projects.filter((p) => p.id !== project.id), project], projectDialogOpen: false });
-      let navigated = true;
-      if (this.navigateToProject !== undefined) navigated = await this.navigateToProject(project, { expected });
-      else await this.workspaces.selectProject(project);
-      if (navigated && trustChoice?.changed === true) {
+      if (selectedMachineId(this.getState()) === machineId) {
+        const projects = this.getState().projects;
+        this.setState({ projects: [...projects.filter((p) => p.id !== project.id), project], projectDialogOpen: false });
+      }
+      // The explicit decision belongs to creation, not to the navigation that
+      // may have been superseded. Persist it before selecting the project.
+      if (trustChoice?.changed === true) {
         await this.applyTrustChoice(project, trustChoice.trusted, machineId);
       }
+      if (selectedMachineId(this.getState()) !== machineId) return;
+      if (this.navigateToProject !== undefined) await this.navigateToProject(project, { expected });
+      else await this.workspaces.selectProject(project);
     } catch (error) {
       this.browserErrors.report(projectBrowserErrorScope(machineId, project.id), String(error));
     }
@@ -83,14 +85,12 @@ export class ProjectController {
   /**
    * Pin the dialog's trust choice once the project's main workspace exists.
    * The write goes through the id-based trust route (server-resolved path),
-   * never a client-chosen path; without a main workspace the project simply
-   * keeps its default trust.
+   * never a client-chosen path or the currently selected workspace.
    */
   private async applyTrustChoice(project: Project, trusted: boolean, machineId: string): Promise<void> {
-    const state = this.getState();
-    if (selectedMachineId(state) !== machineId || state.selectedProject?.id !== project.id) return;
-    const mainWorkspace = state.workspaces.find((workspace) => workspace.projectId === project.id && workspace.isMain);
-    if (mainWorkspace === undefined) return;
+    const workspaces = await this.api.workspaces(project.id, machineId);
+    const mainWorkspace = workspaces.find((workspace) => workspace.projectId === project.id && workspace.isMain);
+    if (mainWorkspace === undefined) throw new Error(`Cannot save trust choice for project ${project.id}: main workspace unavailable`);
     await this.api.setWorkspaceTrust(project.id, mainWorkspace.id, trusted, machineId);
   }
 

@@ -98,6 +98,7 @@ const PANEL_EDGE_COLUMNS_WIDTH_PX = 2;
 const DESKTOP_SIDE_BY_SIDE_MEDIA_QUERY = "(min-width: 1181px)";
 const NAVIGATION_SCOPES = ["machine", "project", "workspace", "session", "tool", "view"] as const;
 const ROUTE_RESTORE_SCOPE = NAVIGATION_SCOPES;
+const ROUTE_SELECTION_SCOPE = ["machine", "project", "workspace", "session"] as const;
 const WORKSPACE_SURFACE_SCOPE = ["tool", "view"] as const;
 
 type WorkspaceRouteUrlPublication = "current-url" | "deferred";
@@ -283,6 +284,7 @@ export class PiWebApp extends LitElement {
   private navigationSelectionSeq = 0;
   private modelDialogInstanceId = 0;
   private routeRestoreSeq = 0;
+  private routeSelectionRestoreSeq = 0;
   private navigationGeneration = 0;
   private observedNavigationRoute: ParsedAppRoute | undefined;
   private readonly navigationFieldGenerations: Record<NavigationScope, number> = {
@@ -680,19 +682,30 @@ export class PiWebApp extends LitElement {
     const machineBeforeRestore = selectedMachineId(this.state);
     const routeSurface = parsedRoute.projectId === undefined || parsedRoute.projectId === "" ? emptyWorkspaceRouteSurface() : surface;
     const navigation = this.beginNavigationOperation(ROUTE_RESTORE_SCOPE);
+    const selectionFreshness = this.beginNavigationOperation(ROUTE_SELECTION_SCOPE);
+    // A matching selection reuses its existing join (which may still be loading).
+    // Only a restore that needs selection work supersedes that work's owner.
+    if (!this.routeMatchesCurrentSelection(parsedRoute)) this.routeSelectionRestoreSeq += 1;
+    const selectionRestoreSeq = this.routeSelectionRestoreSeq;
+    // Keep selection ordering separate from finalization, which surface-only
+    // navigation may retire even while the same selection is still loading.
+    const selectionNavigation: NavigationFreshness = {
+      ...selectionFreshness,
+      isCurrent: () => selectionRestoreSeq === this.routeSelectionRestoreSeq && selectionFreshness.isCurrent(),
+    };
     const restoreSeq = ++this.routeRestoreSeq;
     this.routeRestoreDepth += 1;
     try {
       const machineResolved = await this.restoreRouteMachine(parsedRoute, false);
       if (!machineResolved) {
-        if (!this.isCurrentRouteRestore(restoreSeq, navigation)) return;
+        if (!selectionNavigation.isCurrent()) return;
         this.workspaces.clearSelection({ updateUrl: false });
         const machineId = parsedRoute.machineId ?? "local";
         this.browserErrors.report(machineBrowserErrorScope(machineId), `Machine not found: ${machineId}`);
         return;
       }
       await this.loadPluginsForSelectedMachine();
-      if (!this.isCurrentRouteRestore(restoreSeq, navigation)) return;
+      if (!selectionNavigation.isCurrent()) return;
       const route = resolveAppRoute(parsedRoute, (value) => this.plugins.resolveWorkspacePanelRouteId(value, selectedMachineId(this.state)));
       const unavailableToolRoute = parsedRoute.tool !== undefined && route.tool === undefined;
       const unavailablePanelViewRoute = parsedRoute.view !== undefined && parsedRoute.view !== "chat" && route.view === undefined;
@@ -709,10 +722,14 @@ export class PiWebApp extends LitElement {
         navigation,
         ...(restoredWorkspaceIdentity === undefined ? {} : { restoredWorkspaceIdentity }),
       };
-      this.setState({
-        workspaceTool: route.tool ?? this.state.workspaceTool,
-        mainView: this.resolveRestoredMainView(restoredMainView) ?? route.view ?? this.defaultRouteView(),
-      });
+      // A newer surface may retire route finalization without retiring the
+      // hierarchy load needed by that same workspace/session destination.
+      if (this.isCurrentRouteRestore(restoreSeq, navigation)) {
+        this.setState({
+          workspaceTool: route.tool ?? this.state.workspaceTool,
+          mainView: this.resolveRestoredMainView(restoredMainView) ?? route.view ?? this.defaultRouteView(),
+        });
+      }
       if (route.projectId === undefined || route.projectId === "") {
         this.workspaces.clearSelection({ updateUrl: false });
         await this.finishWorkspaceRouteRestore(routeSurface, {
@@ -740,7 +757,28 @@ export class PiWebApp extends LitElement {
         });
         return;
       }
-      await this.workspaces.selectProject(project, { workspaceId: route.workspaceId, sessionId: route.sessionId, updateUrl: false, navigation });
+      const loadedWorkspace = urlPublication === "deferred"
+        && this.state.selectedProject?.id === project.id
+        && route.workspaceId !== undefined
+        ? this.state.workspaces.find((workspace) => workspace.projectId === project.id && workspace.id === route.workspaceId)
+        : undefined;
+      const loadedSession = loadedWorkspace !== undefined
+        && this.state.selectedWorkspace?.projectId === loadedWorkspace.projectId
+        && this.state.selectedWorkspace.id === loadedWorkspace.id
+        && route.sessionId !== undefined
+        ? this.sessions.preferredSession(loadedWorkspace.path, this.state.sessions, route.sessionId)
+        : undefined;
+      // In-app navigation published this known destination before reconciliation.
+      // Re-enter at the deepest loaded parent instead of blanking and relisting its
+      // unchanged ancestors. Current-URL restores still validate through their
+      // normal workspace and session listing requests.
+      if (loadedSession !== undefined) {
+        await this.sessions.selectSession(loadedSession, { updateUrl: false, navigation: selectionNavigation });
+      } else if (loadedWorkspace !== undefined) {
+        await this.workspaces.selectWorkspace(loadedWorkspace, { sessionId: route.sessionId, updateUrl: false, navigation: selectionNavigation });
+      } else {
+        await this.workspaces.selectProject(project, { workspaceId: route.workspaceId, sessionId: route.sessionId, updateUrl: false, navigation: selectionNavigation });
+      }
       if (!this.isCurrentRouteRestore(restoreSeq, navigation)) return;
       await this.finishWorkspaceRouteRestore(routeSurface, finishOptions);
     } finally {
@@ -1000,7 +1038,7 @@ export class PiWebApp extends LitElement {
     return this.state.selectedMachine?.id === routeMachineId;
   }
 
-  private routeMatchesCurrentSelection(route: AppRoute): boolean {
+  private routeMatchesCurrentSelection(route: Pick<AppRoute, "machineId" | "projectId" | "workspaceId" | "sessionId">): boolean {
     return (route.machineId ?? "local") === (this.state.selectedMachine?.id ?? "local")
       && route.workspaceId !== undefined
       && route.workspaceId !== ""
@@ -1120,7 +1158,11 @@ export class PiWebApp extends LitElement {
     return (current.machineId ?? "local") === expected.machineId
       && current.projectId === expected.projectId
       && current.workspaceId === expected.workspaceId
-      && current.sessionId === expected.sessionId
+      // Restoration accepts abbreviated session IDs; guarded handoffs must
+      // recognize the same resolved identity without relaxing hierarchy checks.
+      && (current.sessionId === undefined
+        ? expected.sessionId === undefined
+        : sessionMatchesRouteTarget(expected.sessionId, current.sessionId))
       && current.tool === expected.tool
       && current.view === expected.view;
   }
@@ -1298,7 +1340,8 @@ export class PiWebApp extends LitElement {
       || this.state.selectedWorkspace?.id !== workspace.id
       || this.state.selectedProject?.id !== workspace.projectId) {
       if (!this.routeRestoreInProgress) this.rememberCurrentMachineNavigation();
-      await this.commitAndRestoreNavigation(destination);
+      if (!await this.commitAndRestoreNavigation(destination)) return;
+      this.replaceNavigationUrl();
       return;
     }
 
@@ -2195,6 +2238,7 @@ export class PiWebApp extends LitElement {
   }
 
   private async loadPluginsForMachine(machine: Machine): Promise<void> {
+    const urlAtLoad = currentBrowserUrl();
     await this.ensureGatewayPluginsLoaded();
     if (machine.kind !== "remote" || this.loadedMachinePluginIds.has(machine.id)) return;
     const runtime = this.state.machineRuntimes[machine.id];
@@ -2203,8 +2247,7 @@ export class PiWebApp extends LitElement {
       console.warn(message);
       this.verifiedPluginModeByMachine.delete(machine.id);
       this.clearRequiredTerminal(machine.id);
-      const selectionChanged = this.reconcileWorkspacePanelSelection();
-      if (selectionChanged && !this.routeRestoreInProgress) this.updateUrl({ replace: true });
+      this.reconcilePluginLoadSelection(urlAtLoad);
       this.setRequiredPluginFailure(machine.id, message);
       return;
     }
@@ -2224,7 +2267,7 @@ export class PiWebApp extends LitElement {
   }
 
   private async registerExternalPlugins(label: string, load: () => Promise<ExternalPluginLoadResult>, machineId = "local"): Promise<boolean> {
-    const routeAtLoad = readRoute();
+    const urlAtLoad = currentBrowserUrl();
     try {
       const result = await load();
       if (result.terminalMode === "recovery-disabled") {
@@ -2244,8 +2287,7 @@ export class PiWebApp extends LitElement {
       if (requiredTerminalLoadFailure !== undefined) {
         this.verifiedPluginModeByMachine.delete(machineId);
         this.clearRequiredTerminal(machineId);
-        const selectionChanged = this.reconcileWorkspacePanelSelection();
-        if (selectionChanged && !this.routeRestoreInProgress) this.updateUrl({ replace: true });
+        this.reconcilePluginLoadSelection(urlAtLoad);
         this.applyPreferredTheme(false);
         this.setRequiredPluginFailure(machineId, `Required Terminal plugin failed to load: ${errorMessage(requiredTerminalLoadFailure.error)}. Open Settings for recovery guidance.`);
         this.requestUpdate();
@@ -2326,11 +2368,7 @@ export class PiWebApp extends LitElement {
         this.verifiedPluginModeByMachine.set(machineId, "required");
         this.clearRequiredPluginFailure(machineId);
       }
-      const selectionChanged = this.reconcileWorkspacePanelSelection();
-      if (selectionChanged
-        && !this.routeRestoreInProgress
-        && this.routeLocationMatchesUrl(routeAtLoad)
-        && this.navigationSelectionMatchesUrl(navigationSelectionFromState(this.state))) this.updateUrl({ replace: true });
+      this.reconcilePluginLoadSelection(urlAtLoad);
       this.applyPreferredTheme(false);
       this.requestUpdate();
       return complete;
@@ -2338,13 +2376,20 @@ export class PiWebApp extends LitElement {
       console.warn(`Failed to load ${label}`, error);
       this.verifiedPluginModeByMachine.delete(machineId);
       this.clearRequiredTerminal(machineId);
-      const selectionChanged = this.reconcileWorkspacePanelSelection();
-      if (selectionChanged && !this.routeRestoreInProgress) this.updateUrl({ replace: true });
+      this.reconcilePluginLoadSelection(urlAtLoad);
       this.applyPreferredTheme(false);
       this.setRequiredPluginFailure(machineId, `Failed to load ${label}: ${errorMessage(error)}`);
       this.requestUpdate();
       return false;
     }
+  }
+
+  private reconcilePluginLoadSelection(urlAtLoad: string): void {
+    // Check before reconciling: even a fallback's local surface change belongs
+    // to the initiating destination, including its contribution query.
+    if (currentBrowserUrl() !== urlAtLoad) return;
+    const selectionChanged = this.reconcileWorkspacePanelSelection();
+    if (selectionChanged && !this.routeRestoreInProgress) this.updateUrl({ replace: true });
   }
 
   private setRequiredPluginFailure(machineId: string, message: string): void {
@@ -2775,7 +2820,7 @@ export class PiWebApp extends LitElement {
     const session = this.state.selectedSession;
     if (session === undefined) return;
     const origin: ModelDialogOrigin = { machineId: selectedMachineId(this.state), sessionId: session.id, cwd: session.cwd };
-    const { models, catalog } = await this.loadModelDialogData();
+    const [{ models, catalog }, defaults] = await Promise.all([this.loadModelDialogData(), this.sessions.getSessionDefaults()]);
     if (!this.modelDialogOriginIsCurrent(origin)) return;
     const selectedValue = this.currentModelValue();
     this.setState({
@@ -2783,6 +2828,8 @@ export class PiWebApp extends LitElement {
         instanceId: ++this.modelDialogInstanceId,
         origin,
         title: "Select Model",
+        defaultsLoading: defaults === undefined,
+        ...(defaults?.defaultProvider !== undefined && defaults.defaultModel !== undefined ? { defaultValue: `${defaults.defaultProvider}/${defaults.defaultModel}` } : {}),
         ...(selectedValue !== undefined ? { selectedValue } : {}),
         options: this.modelDialogOptions(models),
         catalog,
@@ -2928,16 +2975,45 @@ export class PiWebApp extends LitElement {
   }
 
   private async openThinkingDialog() {
-    const levels = await this.sessions.listThinkingLevels();
+    const session = this.state.selectedSession;
+    if (session === undefined) return;
+    const origin: ModelDialogOrigin = { machineId: selectedMachineId(this.state), sessionId: session.id, cwd: session.cwd };
+    const [levels, defaults] = await Promise.all([this.sessions.listThinkingLevels(), this.sessions.getSessionDefaults()]);
+    if (!this.modelDialogOriginIsCurrent(origin)) return;
     const current = this.state.status?.thinkingLevel ?? "off";
     this.setState({
       thinkingDialog: {
         title: "Select Thinking Level",
+        origin,
+        defaultsLoading: defaults === undefined,
+        ...(defaults?.defaultThinkingLevel === undefined ? {} : { defaultValue: defaults.defaultThinkingLevel }),
         selectedValue: current,
         options: levels.map((level) => { const description = thinkingDescription(level); return { value: level, label: `${level}${level === current ? " ✓ current" : ""}`, ...(description === undefined ? {} : { description }) }; }),
       },
     });
   }
+
+  private readonly handleSetDefaultModel = async (value: string): Promise<void> => {
+    const dialog = this.currentModelDialog();
+    if (dialog === undefined) return;
+    const separator = value.indexOf("/");
+    if (separator < 1) return;
+    const defaults = await this.sessions.setSessionDefaults({ provider: value.slice(0, separator), modelId: value.slice(separator + 1) });
+    const current = this.currentModelDialog();
+    if (defaults === undefined || current?.instanceId !== dialog.instanceId) return;
+    if (defaults.defaultProvider !== undefined && defaults.defaultModel !== undefined) {
+      this.setState({ modelDialog: { ...current, defaultValue: `${defaults.defaultProvider}/${defaults.defaultModel}` } });
+    }
+  };
+
+  private readonly handleSetDefaultThinking = async (value: string): Promise<void> => {
+    const dialog = this.state.thinkingDialog;
+    if (dialog?.origin === undefined || !this.modelDialogOriginIsCurrent(dialog.origin)) return;
+    if (value !== "off" && value !== "minimal" && value !== "low" && value !== "medium" && value !== "high" && value !== "xhigh" && value !== "max") return;
+    const defaults = await this.sessions.setSessionDefaults({ thinkingLevel: value });
+    if (defaults?.defaultThinkingLevel === undefined || this.state.thinkingDialog !== dialog || !this.modelDialogOriginIsCurrent(dialog.origin)) return;
+    this.setState({ thinkingDialog: { ...dialog, defaultValue: defaults.defaultThinkingLevel } });
+  };
 
   private async pickThinking(value: string) {
     this.setState({ thinkingDialog: undefined });
@@ -3167,8 +3243,8 @@ export class PiWebApp extends LitElement {
             <prompt-editor .sessionId=${state.selectedSession.id} .cwd=${state.selectedWorkspace?.path} .machineId=${selectedMachineId(state)} .projectId=${state.selectedWorkspace?.projectId} .workspaceId=${state.selectedWorkspace?.id} .attachmentsFolder=${workspaceEffectiveAttachmentsFolder(state.selectedWorkspace?.effectiveConfig, this.workspaceAttachmentsDefaultFolder)} .disabled=${state.selectedSession.archived === true} .canSteer=${state.status?.isStreaming === true} .isCompacting=${state.status?.isCompacting === true} .canStop=${state.status?.isStreaming === true || state.status?.isBashRunning === true || state.status?.isCompacting === true || (state.status?.pendingMessageCount ?? 0) > 0} .status=${state.status} .availableThinkingLevels=${state.availableThinkingLevels} .sending=${state.sendingPrompts[state.selectedSession.id] === true} .onSend=${this.handleSendPrompt} .onStop=${this.handleStopActiveWork} .onSelectModel=${this.handleSelectModel} .onSelectThinking=${this.handleSelectThinking}></prompt-editor>
             ${this.renderStatusBar(state)}
             ${state.commandDialog !== undefined ? html`<command-picker .title=${state.commandDialog.title} .options=${state.commandDialog.options} .onPick=${(value: string) => this.sessions.respondToCommand(state.commandDialog?.requestId ?? "", value)} .onCancel=${() => { this.sessions.cancelCommand(); }}></command-picker>` : null}
-            ${state.modelDialog !== undefined ? html`<model-picker title=${state.modelDialog.title} .options=${state.modelDialog.options} .catalog=${state.modelDialog.catalog} .selectedValue=${state.modelDialog.selectedValue} .onPick=${(value: string) => { void this.pickModel(value); }} .onToggleEnabled=${this.handleToggleModelEnabled} .onSetScope=${this.handleSetModelScope} .onCancel=${() => { this.setState({ modelDialog: undefined }); }}></model-picker>` : null}
-            ${state.thinkingDialog !== undefined ? html`<command-picker title=${state.thinkingDialog.title} .options=${state.thinkingDialog.options} .selectedValue=${state.thinkingDialog.selectedValue} .onPick=${(value: string) => { void this.pickThinking(value); }} .onCancel=${() => { this.setState({ thinkingDialog: undefined }); }}></command-picker>` : null}
+            ${state.modelDialog !== undefined ? html`<model-picker title=${state.modelDialog.title} .options=${state.modelDialog.options} .catalog=${state.modelDialog.catalog} .defaultValue=${state.modelDialog.defaultValue} .defaultsLoading=${state.modelDialog.defaultsLoading === true} .onSetDefault=${this.handleSetDefaultModel} .selectedValue=${state.modelDialog.selectedValue} .onPick=${(value: string) => { void this.pickModel(value); }} .onToggleEnabled=${this.handleToggleModelEnabled} .onSetScope=${this.handleSetModelScope} .onCancel=${() => { this.setState({ modelDialog: undefined }); }}></model-picker>` : null}
+            ${state.thinkingDialog !== undefined ? html`<command-picker title=${state.thinkingDialog.title} .options=${state.thinkingDialog.options} .defaultValue=${state.thinkingDialog.defaultValue} .defaultsLoading=${state.thinkingDialog.defaultsLoading === true} .onSetDefault=${this.handleSetDefaultThinking} .selectedValue=${state.thinkingDialog.selectedValue} .onPick=${(value: string) => { void this.pickThinking(value); }} .onCancel=${() => { this.setState({ thinkingDialog: undefined }); }}></command-picker>` : null}
           ` : html`<div class="empty">${this.sessionEmptyMessage()}</div>`}
         </main>
         ${this.renderWorkspacePanelEdgeControl()}

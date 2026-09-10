@@ -26,7 +26,6 @@ import type {
 export type {
   WorkspaceProviderAuthorityResolution,
   WorkspaceProviderDiagnostic,
-  WorkspaceProviderDiagnosticCode,
 } from "../../shared/apiTypes.js";
 
 const DEFAULT_PROVIDER_TIMEOUT_MS = 10_000;

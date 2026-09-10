@@ -70,6 +70,8 @@ export class TerminalPanel extends LitElement {
   private channelReconnectAttempt = 0;
   private channelReconnectTimer: number | undefined;
   private loadAbort: AbortController | undefined;
+  private loadTerminalChanges: Map<string, TerminalInfo | undefined> | undefined;
+  private pendingStartNavigationGeneration: number | undefined;
   private loadRetryTimer: number | undefined;
   private loadRetryAttempt = 0;
   private commandRunLoadAbort: AbortController | undefined;
@@ -198,6 +200,17 @@ export class TerminalPanel extends LitElement {
     if (this.hasPendingCommandRuns()) this.updateCommandRunPolling(true);
     this.loadVisibleWorkspaceTerminals();
     if (this.shouldReloadForRequestedTerminal()) void this.loadTerminals();
+    // A list can settle before the host finishes resolving the workspace URL.
+    // Its selection write is correctly rejected then; reconcile with the latest
+    // context even when the routed/remembered terminal IDs have not changed.
+    if (!this.loading
+      && this.observedWorkspaceScope !== undefined
+      && this.loadedWorkspaceScope === this.observedWorkspaceScope
+      && this.selectedId === undefined
+      && this.terminals.length > 0
+      && this.pendingStartNavigationGeneration !== this.terminalNavigationGeneration) {
+      this.selectPreferredLoadedTerminal({ replaceUrl: true });
+    }
     this.applyAutoStartRequest();
     this.ensureTerminalView();
   }
@@ -222,6 +235,11 @@ export class TerminalPanel extends LitElement {
     this.loadAbort?.abort();
     const controller = new AbortController();
     this.loadAbort = controller;
+    // List snapshots must not erase creates or resurrect closes that settle
+    // while the request is in flight.
+    const terminalChanges = new Map<string, TerminalInfo | undefined>();
+    this.loadTerminalChanges = terminalChanges;
+    const navigationGeneration = this.terminalNavigationGeneration;
     this.loading = true;
     this.error = undefined;
     try {
@@ -233,13 +251,22 @@ export class TerminalPanel extends LitElement {
       if (!this.workspaceIsCurrent(scope, generation, runtime) || controller.signal.aborted) return;
       this.loadedWorkspaceScope = scope;
       this.loadRetryAttempt = 0;
-      this.terminals = terminals;
+      const reconciledTerminals = new Map(terminals.map((terminal) => [terminal.id, terminal]));
+      for (const [id, terminal] of terminalChanges) {
+        if (terminal === undefined) reconciledTerminals.delete(id);
+        else reconciledTerminals.set(id, terminal);
+      }
+      this.terminals = [...reconciledTerminals.values()];
       this.commandRuns = commandRuns;
-      runtime.updateTerminals(context, terminals);
-      this.selectPreferredLoadedTerminal({ replaceUrl: true });
+      runtime.updateTerminals(context, this.terminals);
+      if (navigationGeneration === this.terminalNavigationGeneration
+        && this.pendingStartNavigationGeneration !== this.terminalNavigationGeneration) {
+        this.selectPreferredLoadedTerminal({ replaceUrl: true });
+      }
       this.updateCommandRunPolling(this.hasPendingCommandRuns(commandRuns));
       const shouldAutoStart = this.consumeAutoStart(scope);
-      if (terminals.length === 0 && shouldAutoStart) await this.startTerminal();
+      if (this.terminals.length === 0 && shouldAutoStart
+        && this.pendingStartNavigationGeneration !== this.terminalNavigationGeneration) await this.startTerminal();
     } catch (error) {
       if (!controller.signal.aborted && this.workspaceIsCurrent(scope, generation, runtime)) {
         this.loadedWorkspaceScope = undefined;
@@ -247,7 +274,10 @@ export class TerminalPanel extends LitElement {
         this.scheduleWorkspaceLoadRetry(scope, generation, runtime);
       }
     } finally {
-      if (this.loadAbort === controller) this.loadAbort = undefined;
+      if (this.loadAbort === controller) {
+        this.loadAbort = undefined;
+        this.loadTerminalChanges = undefined;
+      }
       if (!controller.signal.aborted && this.workspaceIsCurrent(scope, generation, runtime)) this.loading = false;
     }
   }
@@ -269,9 +299,12 @@ export class TerminalPanel extends LitElement {
     if (request === undefined) return false;
     const key = JSON.stringify([scope, request]);
     const shouldAutoStart = this.consumedAutoStartRequest !== key;
+    // Reject stale host contexts before consuming the request or creating a process.
+    // As with terminal selection, legacy void-returning hosts remain accepted.
+    const navigationResult: unknown = this.context?.navigation?.set("start", undefined, { replace: true });
+    if (navigationResult === false) return false;
     this.consumedAutoStartRequest = key;
     this.requestedAutoStartRequest = undefined;
-    this.context?.navigation?.set("start", undefined, { replace: true });
     return shouldAutoStart;
   }
 
@@ -305,6 +338,8 @@ export class TerminalPanel extends LitElement {
   private cancelWorkspaceRequests(): void {
     this.loadAbort?.abort();
     this.loadAbort = undefined;
+    this.loadTerminalChanges = undefined;
+    this.pendingStartNavigationGeneration = undefined;
     this.loading = false;
     this.clearWorkspaceLoadRetryTimer();
     for (const controller of this.operationAborts) controller.abort();
@@ -378,17 +413,20 @@ export class TerminalPanel extends LitElement {
     this.terminalNavigationGeneration += 1;
     const operation = this.beginScopedOperation();
     if (operation === undefined) return;
+    this.pendingStartNavigationGeneration = operation.terminalNavigationGeneration;
     this.error = undefined;
     try {
       const size = this.measureTerminalSize() ?? DEFAULT_TERMINAL_SIZE;
       const terminal = await this.peerClient(operation.context).create(size, operation.controller.signal);
       if (!this.operationIsCurrent(operation)) return;
-      this.terminals = [...this.terminals, terminal];
+      this.loadTerminalChanges?.set(terminal.id, terminal);
+      this.terminals = [...this.terminals.filter((existing) => existing.id !== terminal.id), terminal];
       operation.runtime.updateTerminals(operation.context, this.terminals);
       if (this.operationTerminalNavigationIsCurrent(operation)) this.selectTerminal(terminal.id);
     } catch (error) {
       if (this.operationIsCurrent(operation)) this.error = errorMessage(error);
     } finally {
+      if (this.pendingStartNavigationGeneration === operation.terminalNavigationGeneration) this.pendingStartNavigationGeneration = undefined;
       this.finishScopedOperation(operation);
     }
   }
@@ -401,7 +439,9 @@ export class TerminalPanel extends LitElement {
       await this.peerClient(operation.context).close(id, operation.controller.signal);
       if (!this.operationIsCurrent(operation)) return;
       const next = this.terminals.filter((terminal) => terminal.id !== id);
-      const selectionChanged = this.selectedId === id || this.requestedTerminalId === id;
+      this.loadTerminalChanges?.set(id, undefined);
+      const selectionChanged = this.operationTerminalNavigationIsCurrent(operation)
+        && (this.selectedId === id || this.requestedTerminalId === id);
       const nextSelectedId = selectionChanged ? selectFallbackTerminal(next)?.id : undefined;
       const selectionPublished = !selectionChanged
         || this.publishTerminalSelection(operation.context, operation.runtime, nextSelectedId, { replace: true });
