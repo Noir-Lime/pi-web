@@ -2,8 +2,8 @@ import type { JsonObject, PiWebPlugin, WorkspacePanelContext } from "@jmfederico
 
 const summaries = new Map<string, string>();
 
-const plugin: PiWebPlugin = {
-  apiVersion: 3,
+const plugin = {
+  apiVersion: 4,
   name: "Example Workspace Provider",
   activate: ({ pluginId, runtimePluginId, html }) => ({
     contributions: {
@@ -42,7 +42,7 @@ const plugin: PiWebPlugin = {
       ],
     },
   }),
-};
+} satisfies PiWebPlugin;
 
 export default plugin;
 

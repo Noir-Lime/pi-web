@@ -1,5 +1,6 @@
 import type {
   JsonValue,
+  PluginCapability,
   PluginPeer,
   PiWebPlugin,
   Workspace,
@@ -11,10 +12,43 @@ import type {
   WorkspacePanelFiles,
 } from "@jmfederico/pi-web/plugin-api";
 
+interface FixtureIdentityCapabilityV1 {
+  readonly version: 1;
+  readonly label: string;
+}
+
+const identityCapability: PluginCapability<FixtureIdentityCapabilityV1, 1> = Object.freeze({
+  pluginId: "fixture-provider",
+  id: "identity",
+  version: 1,
+  parse(value: unknown): FixtureIdentityCapabilityV1 {
+    if (typeof value !== "object" || value === null || Reflect.get(value, "version") !== 1 || typeof Reflect.get(value, "label") !== "string") {
+      throw new Error("Invalid fixture identity capability");
+    }
+    return Object.freeze({ version: 1, label: Reflect.get(value, "label") });
+  },
+});
+
+const publishedCapability: PluginCapability<FixtureIdentityCapabilityV1, 1> = Object.freeze({
+  pluginId: "browser-declaration-fixture",
+  id: "identity",
+  version: 1,
+  parse: identityCapability.parse,
+});
+
 const plugin: PiWebPlugin = {
-  apiVersion: 3,
+  apiVersion: 4,
   name: "Browser declaration fixture",
-  activate: (context) => ({
+  requires: [identityCapability],
+  activate: async (context) => ({
+    provides: [{ capability: publishedCapability, value: { version: 1, label: context.pluginId } }],
+    start: ({ capabilities, signal }) => {
+      if (signal.aborted || context.lifetimeSignal.aborted) return;
+      capabilities.resolve(identityCapability);
+    },
+    dispose: (signal) => {
+      if (signal.aborted) return;
+    },
     contributions: {
       actions: [{
         id: "identity",
@@ -67,7 +101,7 @@ function openPeerChannel(context: WorkspacePanelContext): void {
 }
 
 const echoJson = (value: JsonValue): JsonValue => value;
-export { capabilityV1, echoJson, openPeerChannel, plugin, requestOwnerBackend, requestPeer };
+export { capabilityV1, echoJson, identityCapability, openPeerChannel, plugin, publishedCapability, requestOwnerBackend, requestPeer };
 export type {
   BrowserWorkspace,
   ExtendedWorkspaceFiles,

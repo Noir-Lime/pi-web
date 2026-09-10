@@ -5,9 +5,14 @@ import type {
   FileTreeResponse,
   MoveWorkspaceFileOptions,
   MoveWorkspaceFileResponse,
+  PiWebPlugin,
   PluginActivationContext,
   PluginActivationResult,
+  PluginCapability,
+  PluginCapabilityProvision,
+  PluginCapabilityResolver,
   PluginContributions,
+  PluginStartContext,
   Workspace,
   WorkspaceBackend,
   PluginPeerChannel,
@@ -79,7 +84,7 @@ declare class ImplementedWorkspacePanelFiles implements WorkspacePanelFiles {
 
 describe("public browser plugin API", () => {
   it("keeps host-owned activation and workspace snapshots readonly", () => {
-    expectTypeOf<keyof PluginActivationResult>().toEqualTypeOf<"contributions">();
+    expectTypeOf<keyof PluginActivationResult>().toEqualTypeOf<"contributions" | "provides" | "start" | "dispose">();
     expectTypeOf<ReadonlyKeys<PluginActivationContext>>().toEqualTypeOf<keyof PluginActivationContext>();
     expectTypeOf<ReadonlyKeys<Workspace>>().toEqualTypeOf<keyof Workspace>();
     expectTypeOf<ReadonlyKeys<WorkspaceProviderMetadata>>().toEqualTypeOf<keyof WorkspaceProviderMetadata>();
@@ -91,6 +96,21 @@ describe("public browser plugin API", () => {
     expectTypeOf<keyof WorkspaceRemovalPresentation>().toEqualTypeOf<"actionLabel" | "confirmation">();
     expectTypeOf<WritableKeys<PluginActivationResult>>().toEqualTypeOf<keyof PluginActivationResult>();
     expectTypeOf<WritableKeys<PluginContributions>>().toEqualTypeOf<keyof PluginContributions>();
+  });
+
+  it("exposes the v4 dependency-ready browser lifecycle and shared capability contracts", () => {
+    expectTypeOf<PiWebPlugin["apiVersion"]>().toEqualTypeOf<4>();
+    expectTypeOf<PluginActivationContext["apiVersion"]>().toEqualTypeOf<4>();
+    expectTypeOf<keyof PiWebPlugin>().toEqualTypeOf<"apiVersion" | "name" | "requires" | "activate">();
+    expectTypeOf<keyof PluginCapability>().toEqualTypeOf<"pluginId" | "id" | "version" | "parse">();
+    expectTypeOf<keyof PluginCapabilityProvision>().toEqualTypeOf<"capability" | "value">();
+    expectTypeOf<keyof PluginCapabilityResolver>().toEqualTypeOf<"resolve">();
+    expectTypeOf<keyof PluginStartContext>().toEqualTypeOf<"capabilities" | "signal">();
+    expectTypeOf<ReadonlyKeys<PluginActivationContext>>().toEqualTypeOf<keyof PluginActivationContext>();
+    expectTypeOf<ReadonlyKeys<PluginCapability>>().toEqualTypeOf<keyof PluginCapability>();
+    expectTypeOf<ReadonlyKeys<PluginCapabilityProvision>>().toEqualTypeOf<keyof PluginCapabilityProvision>();
+    expectTypeOf<ReadonlyKeys<PluginCapabilityResolver>>().toEqualTypeOf<keyof PluginCapabilityResolver>();
+    expectTypeOf<ReadonlyKeys<PluginStartContext>>().toEqualTypeOf<keyof PluginStartContext>();
   });
 
   it("adds a discriminated workspace-files capability without breaking the existing v2 structural surface", () => {

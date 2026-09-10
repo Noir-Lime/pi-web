@@ -1,28 +1,51 @@
 import type { TemplateResult } from "lit";
-import type { DeleteWorkspaceFileResponse, FileContentResponse, FileTreeResponse, JsonValue, MachineKind, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, PiWebStatusResponse, TerminalCommandRunHandle, WorkspaceProviderMetadata, WorkspaceRemovalPresentation, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse } from "./shared/pluginApiTypes.js";
-export type { FileContentMediaType, FileContentResponse, FileTreeEntry, FileTreeResponse, JsonObject, JsonPrimitive, JsonValue, MachineKind, PiWebComponentStatus, PiWebDockerMode, PiWebInstallationInfo, PiWebInstallationKind, PiWebReleaseStatus, PiWebServiceComponent, PiWebStatusMessage, PiWebStatusResponse, PiWebStatusSeverity, PiWebVersionResponse, TerminalCommandRun, TerminalCommandRunHandle, TerminalCommandRunStatus, WorkspaceProviderCapabilities, WorkspaceProviderMetadata, WorkspaceRemovalPresentation, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse, DeleteWorkspaceFileResponse, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, } from "./shared/pluginApiTypes.js";
+import type { DeleteWorkspaceFileResponse, FileContentResponse, FileTreeResponse, JsonValue, MachineKind, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, PiWebStatusResponse, PluginCapability, PluginCapabilityProvision, TerminalCommandRunHandle, WorkspaceProviderMetadata, WorkspaceRemovalPresentation, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse } from "./shared/pluginApiTypes.js";
+export type { FileContentMediaType, FileContentResponse, FileTreeEntry, FileTreeResponse, JsonObject, JsonPrimitive, JsonValue, MachineKind, PiWebComponentStatus, PiWebDockerMode, PiWebInstallationInfo, PiWebInstallationKind, PiWebReleaseStatus, PiWebServiceComponent, PiWebStatusMessage, PiWebStatusResponse, PiWebStatusSeverity, PiWebVersionResponse, PluginCapability, PluginCapabilityProvision, TerminalCommandRun, TerminalCommandRunHandle, TerminalCommandRunStatus, WorkspaceProviderCapabilities, WorkspaceProviderMetadata, WorkspaceRemovalPresentation, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse, DeleteWorkspaceFileResponse, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, } from "./shared/pluginApiTypes.js";
 export type PluginId = string;
 export type LocalContributionId = string;
 export type QualifiedContributionId = string;
 export type HtmlTemplateTag = (strings: TemplateStringsArray, ...values: unknown[]) => TemplateResult;
 export type SvgTemplateTag = (strings: TemplateStringsArray, ...values: unknown[]) => TemplateResult;
+type MaybePromise<T> = T | Promise<T>;
 export interface PiWebPlugin {
-    apiVersion: 3;
+    apiVersion: 4;
     name: string;
-    activate: (context: PluginActivationContext) => PluginActivationResult;
+    /** Exact capability versions that must be active before this plugin starts. */
+    requires?: readonly PluginCapability[];
+    activate: (context: PluginActivationContext) => MaybePromise<PluginActivationResult>;
 }
 /** Host-owned frozen values supplied once during browser plugin activation. */
 export interface PluginActivationContext {
-    readonly apiVersion: 3;
+    readonly apiVersion: 4;
     /** Stable package/source identity, including on federated machines. */
     readonly pluginId: PluginId;
     /** Host-unique identity for qualified contribution references in this runtime. */
     readonly runtimePluginId: PluginId;
     readonly html: HtmlTemplateTag;
     readonly svg: SvgTemplateTag;
+    /** Signal for this bounded activation invocation, not the plugin lifetime. */
+    readonly signal: AbortSignal;
+    /** Aborted before failed-start rollback or browser-host shutdown disposal. */
+    readonly lifetimeSignal: AbortSignal;
+}
+/** Resolver containing only the exact capability requirements declared by a plugin. */
+export interface PluginCapabilityResolver {
+    readonly resolve: <Value>(capability: PluginCapability<Value>) => Value;
+}
+/** Frozen values supplied after every declared dependency is active. */
+export interface PluginStartContext {
+    readonly capabilities: PluginCapabilityResolver;
+    /** Signal for this bounded start invocation, not the plugin lifetime. */
+    readonly signal: AbortSignal;
 }
 export interface PluginActivationResult {
     contributions: PluginContributions;
+    /** Typed capability values owned by this plugin and published only after start succeeds. */
+    provides?: readonly PluginCapabilityProvision[];
+    /** Initialize resources after every exact declared capability requirement is active. */
+    start?(context: PluginStartContext): MaybePromise<void>;
+    /** Release resources within one host-bounded disposal invocation. */
+    dispose?(signal: AbortSignal): MaybePromise<void>;
 }
 export interface PluginContributions {
     actions?: PluginAction[];

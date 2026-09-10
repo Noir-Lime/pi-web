@@ -1,23 +1,31 @@
 import type { TemplateResult } from "lit";
 import type { AppAction } from "../actions";
 import type { DeleteWorkspaceFileResponse, FileContentResponse, FileTreeResponse, JsonValue, Machine, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, TerminalCommandRunHandle, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse, Workspace } from "../api";
+import type { PluginCapability, PluginCapabilityProvision } from "../../../shared/pluginApiTypes";
 import type { AppState } from "../appState";
 import type { SettingsSection } from "../settingsRoute";
 import type { LocalContributionId, PluginId, QualifiedContributionId } from "./ids";
 
+export type { PluginCapability, PluginCapabilityProvision } from "../../../shared/pluginApiTypes";
 export type { LocalContributionId, PluginId, QualifiedContributionId } from "./ids";
 export type HtmlTemplateTag = (strings: TemplateStringsArray, ...values: unknown[]) => TemplateResult;
 export type SvgTemplateTag = (strings: TemplateStringsArray, ...values: unknown[]) => TemplateResult;
 
-export interface PiWebPluginRegistration {
+export interface PiWebPluginRegistrationDeclaration {
   id: PluginId;
-  plugin: PiWebPlugin;
   machineId?: string;
   sourcePluginId?: PluginId;
+  /** Host-attributed package discovery metadata. */
+  manifestSource?: string;
+  manifestScope?: string;
+  machineSpecific?: boolean;
+}
+
+export interface PiWebPluginRegistration extends PiWebPluginRegistrationDeclaration {
+  plugin: PiWebPlugin;
   backendRevision?: string;
   pairedRequestVersion?: 1;
   pairedChannelVersion?: 1;
-  machineSpecific?: boolean;
 }
 
 export interface WorkspacePluginBinding {
@@ -28,24 +36,43 @@ export interface WorkspacePluginBinding {
   pairedChannelVersion?: 1;
 }
 
+type MaybePromise<T> = T | Promise<T>;
+
 export interface PiWebPlugin {
-  apiVersion: 3;
+  apiVersion: 4;
   name: string;
-  activate: (context: PluginActivationContext) => PluginActivationResult;
+  requires?: readonly PluginCapability[];
+  activate: (context: PluginActivationContext) => MaybePromise<PluginActivationResult>;
 }
 
 export interface PluginActivationContext {
-  readonly apiVersion: 3;
+  readonly apiVersion: 4;
   /** Stable package/source identity, including on federated machines. */
   readonly pluginId: PluginId;
   /** Host-unique identity for qualified contribution references in this runtime. */
   readonly runtimePluginId: PluginId;
   readonly html: HtmlTemplateTag;
   readonly svg: SvgTemplateTag;
+  /** Signal for this bounded activation invocation, not the plugin lifetime. */
+  readonly signal: AbortSignal;
+  /** Aborted before failed-start rollback or browser-host shutdown disposal. */
+  readonly lifetimeSignal: AbortSignal;
+}
+
+export interface PluginCapabilityResolver {
+  readonly resolve: <Value>(capability: PluginCapability<Value>) => Value;
+}
+
+export interface PluginStartContext {
+  readonly capabilities: PluginCapabilityResolver;
+  readonly signal: AbortSignal;
 }
 
 export interface PluginActivationResult {
   contributions: PluginContributions;
+  provides?: readonly PluginCapabilityProvision[];
+  start?(context: PluginStartContext): MaybePromise<void>;
+  dispose?(signal: AbortSignal): MaybePromise<void>;
 }
 
 export interface PluginContributions {

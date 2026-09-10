@@ -36,9 +36,9 @@ import { corePlugin } from "../plugins/core";
 import { themePackPlugin } from "../plugins/themes";
 import { loadExternalPlugins, type ExternalPluginLoadResult } from "../plugins/external";
 import { REQUIRED_TERMINAL_PLUGIN_ID, type TerminalPluginMode } from "../../../shared/requiredTerminalPlugin";
-import { PluginRegistry, installPluginRuntimeScope, installWorkspaceLabelScope, installWorkspacePanelScope } from "../plugins/registry";
+import { PluginRegistry, installPluginRuntimeScope, installWorkspaceLabelScope, installWorkspacePanelScope, type BrowserPluginLifecyclePhase, type PluginRegistrationFailure } from "../plugins/registry";
 import { createPluginPeer, createPluginWorkspaceBackend } from "../plugins/workspaceBackend";
-import { requiredTerminalUnavailableError, snapshotRequiredTerminalBrowserFacade, type RequiredTerminalBrowserComposition, type WorkspaceContributionNavigationV1 } from "../plugins/requiredTerminalFacade";
+import { REQUIRED_TERMINAL_BROWSER_FACADE_CAPABILITY, requiredTerminalUnavailableError, type RequiredTerminalBrowserComposition, type WorkspaceContributionNavigationV1 } from "../plugins/requiredTerminalFacade";
 import { createWorkspaceFiles as createPluginWorkspaceFiles } from "../plugins/workspaceFiles";
 import { contributionQueryFromRecord, isContributionQueryLocalKey, patchContributionQueryRecord, readContributionQuery, readContributionQueryRecord, setContributionQueryKey, writeContributionQueryRecord, type ContributionQueryRecord } from "../namespacedQueryArgs";
 import { AppShellController } from "../appShell/appShellController";
@@ -300,6 +300,13 @@ export class PiWebApp extends LitElement {
   private remoteRouteRestoreInProgress = false;
   private readonly plugins = createPluginRegistry((pluginId, machineId) =>
     this.pluginContributionAvailable(pluginId, machineId));
+  private readonly builtInPluginsReady = this.plugins.registerBatch([
+    { id: "core", plugin: corePlugin },
+    { id: "themes", plugin: themePackPlugin },
+  ]).then(({ failures }) => {
+    if (failures.length > 0) throw failures[0]?.error;
+    this.requestUpdate();
+  });
   private readonly loadedMachinePluginIds = new Set<string>();
   private readonly machinePluginLoadPromises = new Map<string, Promise<void>>();
   private gatewayPluginLoadPromise: Promise<void> | undefined;
@@ -446,6 +453,11 @@ export class PiWebApp extends LitElement {
     window.removeEventListener("keydown", this.onKeyDown, GLOBAL_SHORTCUT_LISTENER_OPTIONS);
     this.systemLightThemeMedia?.removeEventListener("change", this.onSystemLightThemeChange);
     this.keyboard.reset();
+    // A custom element can be removed before its constructor-scheduled built-in
+    // batch reaches the registration queue. The shutdown owns that rejection.
+    void this.builtInPluginsReady.catch(() => undefined);
+    this.plugins.beginShutdown();
+    void this.plugins.dispose();
     this.auth.dispose();
     this.sessions.dispose();
     this.notifications.dispose();
@@ -2164,7 +2176,7 @@ export class PiWebApp extends LitElement {
     const existing = this.gatewayPluginLoadPromise;
     if (existing !== undefined) return existing;
     this.gatewayPluginLoadAttemptComplete = false;
-    const load = this.loadExternalPlugins().then((complete) => {
+    const load = this.builtInPluginsReady.then(() => this.loadExternalPlugins()).then((complete) => {
       this.gatewayPluginLoadAttemptComplete = true;
       if (!complete && this.gatewayPluginLoadPromise === load) this.gatewayPluginLoadPromise = undefined;
     });
@@ -2228,6 +2240,8 @@ export class PiWebApp extends LitElement {
       for (const failure of result.failures) {
         console.warn(`Failed to load PI WEB plugin ${failure.entry.id} (${failure.entry.module})`, failure.error);
       }
+      const declarations = result.declarations;
+      const registryImportFailures = externalRegistryFailures(result, declarations);
       const requiredTerminalLoadFailure = result.terminalMode === "required"
         ? result.failures.find(({ entry }) => entry.id === REQUIRED_TERMINAL_PLUGIN_ID)
         : undefined;
@@ -2241,47 +2255,70 @@ export class PiWebApp extends LitElement {
         this.requestUpdate();
         return false;
       }
+
       const terminalRuntimeId = machineId === "local"
         ? REQUIRED_TERMINAL_PLUGIN_ID
         : machineScopedBundledPluginId(machineId, REQUIRED_TERMINAL_PLUGIN_ID);
-      for (const registration of result.registrations) {
-        const isRequiredTerminal = result.terminalMode === "required" && registration.id === terminalRuntimeId;
+      if (result.terminalMode === "required") {
+        let terminalFailurePhase: BrowserPluginLifecyclePhase = "validate";
         try {
-          const requiredBinding = isRequiredTerminal ? requiredTerminalPluginBinding(registration) : undefined;
-          if (this.plugins.hasPlugin(registration.id)) {
-            if (!isRequiredTerminal) continue;
+          const terminalRegistration = result.registrations.find(({ id }) => id === terminalRuntimeId);
+          if (this.plugins.hasPlugin(terminalRuntimeId)) {
             const known = this.knownRequiredTerminalByMachine.get(machineId);
-            if (known === undefined || requiredBinding === undefined || !sameWorkspacePluginBinding(known.binding, requiredBinding)) {
-              throw new Error("Required Terminal revision changed after browser activation; reload PI WEB to activate the new paired revision");
+            if (known === undefined) throw new Error("Required Terminal browser capability was not retained after activation");
+            if (terminalRegistration !== undefined) {
+              const requiredBinding = requiredTerminalPluginBinding(terminalRegistration, machineId);
+              if (!sameWorkspacePluginBinding(known.binding, requiredBinding)) {
+                throw new Error("Required Terminal revision changed after browser activation; reload PI WEB to activate the new paired revision");
+              }
             }
             this.requiredTerminalByMachine.set(machineId, known);
-            continue;
-          }
-          let requiredFacade: ReturnType<typeof snapshotRequiredTerminalBrowserFacade> | undefined;
-          this.plugins.register(registration, isRequiredTerminal ? (activation) => {
-            requiredFacade = snapshotRequiredTerminalBrowserFacade(Reflect.get(activation, "requiredTerminalFacade"));
-          } : undefined);
-          if (isRequiredTerminal) {
-            if (requiredFacade === undefined) throw new Error("Required Terminal browser facade activation was not captured");
-            if (requiredBinding === undefined) throw new Error("Required Terminal browser backend binding was not captured");
-            const composition = Object.freeze({
-              binding: requiredBinding,
-              facade: requiredFacade,
+          } else {
+            if (terminalRegistration === undefined) throw new Error("Required Terminal browser registration is unavailable");
+            const requiredBinding = requiredTerminalPluginBinding(terminalRegistration, machineId);
+            const terminalDeclaration = declarations.find(({ id }) => id === terminalRuntimeId);
+            if (terminalDeclaration === undefined) throw new Error("Required Terminal browser declaration is unavailable");
+            const terminalBatch = await this.plugins.registerBatch([terminalRegistration], {
+              declarations: [terminalDeclaration],
+              failures: registryImportFailures.filter(({ declaration }) => declaration.id === terminalRuntimeId),
+              requiredCapabilities: [{
+                registrationPluginId: terminalRuntimeId,
+                capability: REQUIRED_TERMINAL_BROWSER_FACADE_CAPABILITY,
+              }],
             });
+            const terminalFailure = terminalBatch.failures.find(({ declaration }) => declaration.id === terminalRuntimeId);
+            if (terminalFailure !== undefined) {
+              terminalFailurePhase = terminalFailure.phase;
+              throw terminalFailure.error;
+            }
+            const facade = this.plugins.resolveCapability(terminalRuntimeId, REQUIRED_TERMINAL_BROWSER_FACADE_CAPABILITY);
+            const composition = Object.freeze({ binding: requiredBinding, facade });
             this.knownRequiredTerminalByMachine.set(machineId, composition);
             this.requiredTerminalByMachine.set(machineId, composition);
           }
         } catch (error) {
           complete = false;
-          console.warn(`Failed to register PI WEB plugin ${registration.id}`, error);
-          if (isRequiredTerminal) {
-            this.verifiedPluginModeByMachine.delete(machineId);
-            this.clearRequiredTerminal(machineId);
-            this.setRequiredPluginFailure(machineId, `Required Terminal plugin failed to activate: ${errorMessage(error)}. Open Settings for recovery guidance.`);
-            break;
-          }
+          console.warn(`Failed to register PI WEB plugin ${terminalRuntimeId} during ${terminalFailurePhase}`, error);
+          this.verifiedPluginModeByMachine.delete(machineId);
+          this.clearRequiredTerminal(machineId);
+          this.setRequiredPluginFailure(machineId, `Required Terminal plugin failed during browser ${terminalFailurePhase}: ${errorMessage(error)}. Open Settings for recovery guidance.`);
         }
       }
+
+      if (result.terminalMode !== "required" || this.terminalAvailableForMachine(machineId)) {
+        const ordinaryRegistrations = result.registrations.filter(({ id }) => id !== terminalRuntimeId);
+        const ordinaryDeclarations = declarations.filter(({ id }) => id !== terminalRuntimeId);
+        const ordinaryBatch = await this.plugins.registerBatch(ordinaryRegistrations, {
+          declarations: ordinaryDeclarations,
+          failures: registryImportFailures.filter(({ declaration }) => declaration.id !== terminalRuntimeId),
+        });
+        for (const failure of ordinaryBatch.failures) {
+          if (failure.phase === "import") continue;
+          complete = false;
+          console.warn(`Failed to register PI WEB plugin ${failure.declaration.id} during ${failure.phase}`, failure.error);
+        }
+      }
+
       if (result.terminalMode === "required" && (!this.plugins.hasPlugin(terminalRuntimeId) || !this.terminalAvailableForMachine(machineId))) {
         complete = false;
         this.verifiedPluginModeByMachine.delete(machineId);
@@ -3162,10 +3199,7 @@ function modelValueFromStatus(status: AppState["status"]): string | undefined {
 }
 
 function createPluginRegistry(isContributionEnabled: (pluginId: string, machineId: string | undefined) => boolean): PluginRegistry {
-  const registry = new PluginRegistry({ isContributionEnabled });
-  registry.register({ id: "core", plugin: corePlugin });
-  registry.register({ id: "themes", plugin: themePackPlugin });
-  return registry;
+  return new PluginRegistry({ isContributionEnabled });
 }
 
 function coreWorkspacePluginBinding(): WorkspacePluginBinding {
@@ -3325,6 +3359,16 @@ function remoteRouteRestoreRetryDelay(attempt: number): number {
   return REMOTE_ROUTE_RESTORE_RETRY_DELAYS_MS[index] ?? 30_000;
 }
 
+function externalRegistryFailures(
+  result: ExternalPluginLoadResult,
+  declarations: ExternalPluginLoadResult["declarations"],
+): PluginRegistrationFailure[] {
+  return result.failures.flatMap((failure) => {
+    const declaration = declarations.find((candidate) => (candidate.sourcePluginId ?? candidate.id) === failure.entry.id);
+    return declaration === undefined ? [] : [{ declaration, phase: "import" as const, error: failure.error }];
+  });
+}
+
 function sameWorkspacePluginBinding(left: WorkspacePluginBinding, right: WorkspacePluginBinding): boolean {
   return left.registrationPluginId === right.registrationPluginId
     && left.sourcePluginId === right.sourcePluginId
@@ -3333,12 +3377,22 @@ function sameWorkspacePluginBinding(left: WorkspacePluginBinding, right: Workspa
     && left.pairedChannelVersion === right.pairedChannelVersion;
 }
 
-function requiredTerminalPluginBinding(registration: PiWebPluginRegistration): WorkspacePluginBinding {
-  if ((registration.sourcePluginId ?? registration.id) !== REQUIRED_TERMINAL_PLUGIN_ID
+function requiredTerminalPluginBinding(registration: PiWebPluginRegistration, machineId: string): WorkspacePluginBinding {
+  const expectedRuntimeId = machineId === "local"
+    ? REQUIRED_TERMINAL_PLUGIN_ID
+    : machineScopedBundledPluginId(machineId, REQUIRED_TERMINAL_PLUGIN_ID);
+  const machineScopeMatches = machineId === "local"
+    ? registration.machineId === undefined && registration.sourcePluginId === undefined
+    : registration.machineId === machineId && registration.sourcePluginId === REQUIRED_TERMINAL_PLUGIN_ID;
+  if (registration.id !== expectedRuntimeId
+    || !machineScopeMatches
+    || registration.machineSpecific !== true
+    || (registration.manifestSource !== undefined && registration.manifestSource !== "bundled")
+    || (registration.manifestScope !== undefined && registration.manifestScope !== "bundled")
     || registration.backendRevision === undefined
     || registration.pairedRequestVersion !== 1
     || registration.pairedChannelVersion !== 1) {
-    throw new Error("Required Terminal browser entry does not have matching peer request/channel capabilities");
+    throw new Error("Required Terminal browser entry does not have bundled identity, machine scope, and matching peer request/channel capabilities");
   }
   return Object.freeze({
     registrationPluginId: registration.id,
