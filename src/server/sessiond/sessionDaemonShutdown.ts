@@ -29,10 +29,11 @@ export async function runSessionDaemonShutdown(options: SessionDaemonShutdownOpt
     ["quiesce server", () => dependencies.quiesceServer()],
     ["cancel server plugin lifetimes", () => dependencies.serverPlugins.beginShutdown()],
     ["dispose catalog refresher", () => dependencies.catalogRefresher.dispose()],
-    ["dispose sessions", () => dependencies.sessions.dispose()],
     ["close plugin backend channels", () => dependencies.pluginBackends.closeAll()],
-    ["close server", () => dependencies.closeServer()],
+    // Plugin capability cleanup must finish while its host-owned sessions remain available.
     ["stop server plugins", () => dependencies.serverPlugins.stop()],
+    ["dispose sessions", () => dependencies.sessions.dispose()],
+    ["close server", () => dependencies.closeServer()],
     ["dispose auth", () => dependencies.auth.dispose()],
     ["flush session unread state", () => dependencies.unreadStore.flush()],
   ];

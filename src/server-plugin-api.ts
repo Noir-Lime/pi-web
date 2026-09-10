@@ -165,6 +165,47 @@ export const PI_WEB_HOST_WORKSPACES_CAPABILITY: PluginCapability<PiWebHostWorksp
   parse: snapshotPiWebHostWorkspacesV1,
 });
 
+/** Bounded input for one host-owned Pi session run in current workspace authority. */
+export interface PiWebHostPiSessionRunInput {
+  /** Opaque current project id, limited to 512 characters. */
+  readonly projectId: string;
+  /** Opaque current workspace id, limited to 512 characters. */
+  readonly workspaceId: string;
+  /** Non-empty initial prompt, limited to 64 KiB of UTF-8. */
+  readonly prompt: string;
+}
+
+/** Detached final outcome for one host-owned Pi session run. */
+export type PiWebHostPiSessionRunCompletion =
+  | { readonly status: "completed" }
+  | {
+      readonly status: "failed";
+      /** Non-empty host-projected failure text, limited to 4 KiB of UTF-8. */
+      readonly error: string;
+    }
+  | { readonly status: "cancelled" };
+
+/** Detached identity and completion for one visible, transcript-preserving Pi session. */
+export interface PiWebHostPiSessionRun {
+  readonly sessionId: string;
+  readonly completion: Promise<PiWebHostPiSessionRunCompletion>;
+}
+
+/** Package-attributed admission to bounded, one-shot, host-governed Pi sessions. */
+export interface PiWebHostPiSessionsV1 {
+  readonly version: 1;
+  /** Re-resolve current authority, start one session, and admit its initial prompt. */
+  readonly run: (input: PiWebHostPiSessionRunInput) => Promise<PiWebHostPiSessionRun>;
+}
+
+/** Exact PI sessions v1 capability supplied separately for each declaring server plugin. */
+export const PI_WEB_HOST_PI_SESSIONS_CAPABILITY: PluginCapability<PiWebHostPiSessionsV1, 1> = Object.freeze({
+  pluginId: "pi-web.host",
+  id: "pi-sessions",
+  version: 1,
+  parse: snapshotPiWebHostPiSessionsV1,
+});
+
 /** Resolver containing only the exact capability requirements declared by a plugin. */
 export interface ServerPluginCapabilityResolver {
   readonly resolve: <Value>(capability: PluginCapability<Value>) => Value;
@@ -378,6 +419,58 @@ function snapshotPiWebHostWorkspacesV1(value: unknown): PiWebHostWorkspacesV1 {
   });
 }
 
+function snapshotPiWebHostPiSessionsV1(value: unknown): PiWebHostPiSessionsV1 {
+  if (typeof value !== "object" || value === null) throw invalidPiWebHostPiSessions();
+  const version: unknown = Reflect.get(value, "version");
+  const run: unknown = Reflect.get(value, "run");
+  if (version !== 1 || typeof run !== "function") throw invalidPiWebHostPiSessions();
+  return Object.freeze({
+    version: 1,
+    run: async (input: PiWebHostPiSessionRunInput) => {
+      const requested = snapshotPiWebHostPiSessionRunInput(input);
+      const result: unknown = await Reflect.apply(run, value, [requested]);
+      return snapshotPiWebHostPiSessionRun(result);
+    },
+  });
+}
+
+function snapshotPiWebHostPiSessionRunInput(value: unknown): PiWebHostPiSessionRunInput {
+  if (!isPublicJsonObject(value)) throw new Error("PI WEB host PI sessions capability v1 run input must be an object");
+  const supportedKeys = new Set(["projectId", "workspaceId", "prompt"]);
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string" || !supportedKeys.has(key)) {
+      throw new Error(`Unsupported PI WEB host PI sessions capability v1 run input field: ${String(key)}`);
+    }
+  }
+  if (!Object.hasOwn(value, "projectId") || !Object.hasOwn(value, "workspaceId") || !Object.hasOwn(value, "prompt")) {
+    throw new Error("PI WEB host PI sessions capability v1 run input must contain projectId, workspaceId, and prompt");
+  }
+  const projectId = requiredBoundedPiSessionString(Reflect.get(value, "projectId"), "projectId", 512);
+  const workspaceId = requiredBoundedPiSessionString(Reflect.get(value, "workspaceId"), "workspaceId", 512);
+  const prompt = requiredBoundedPiSessionUtf8String(Reflect.get(value, "prompt"), "prompt", 64 * 1024);
+  return Object.freeze({ projectId, workspaceId, prompt });
+}
+
+function snapshotPiWebHostPiSessionRun(value: unknown): PiWebHostPiSessionRun {
+  if (!isPublicJsonObject(value)) throw new Error("PI WEB host PI sessions capability v1 must return a run object");
+  const sessionId = requiredBoundedPiSessionString(Reflect.get(value, "sessionId"), "returned sessionId", 512);
+  const completionValue: unknown = Reflect.get(value, "completion");
+  if (!isPromiseLike(completionValue)) {
+    throw new Error("PI WEB host PI sessions capability v1 run must expose completion");
+  }
+  const completion = Promise.resolve(completionValue).then(snapshotPiWebHostPiSessionRunCompletion);
+  return Object.freeze({ sessionId, completion });
+}
+
+function snapshotPiWebHostPiSessionRunCompletion(value: unknown): PiWebHostPiSessionRunCompletion {
+  if (!isPublicJsonObject(value)) throw new Error("PI WEB host PI sessions capability v1 completion must be an object");
+  const status: unknown = Reflect.get(value, "status");
+  if (status === "completed" || status === "cancelled") return Object.freeze({ status });
+  if (status !== "failed") throw new Error("PI WEB host PI sessions capability v1 completion status is invalid");
+  const error = requiredBoundedPiSessionUtf8String(Reflect.get(value, "error"), "completion error", 4 * 1024);
+  return Object.freeze({ status, error });
+}
+
 function snapshotPiWebHostWorkspaceSelection(value: unknown): PiWebHostWorkspaceSelection {
   if (!isPublicJsonObject(value)) throw new Error("PI WEB host workspaces capability v1 selection must be an object");
   const supportedKeys = new Set(["projectId", "workspaceId"]);
@@ -513,6 +606,44 @@ function requiredPublicString(value: unknown, label: string): string {
   return value;
 }
 
+function requiredBoundedPiSessionString(value: unknown, label: string, maxLength: number): string {
+  if (typeof value !== "string" || value === "") {
+    throw new Error(`PI WEB host PI sessions capability v1 ${label} must be a non-empty string`);
+  }
+  if (value.length > maxLength) {
+    throw new Error(`PI WEB host PI sessions capability v1 ${label} must be at most ${String(maxLength)} characters`);
+  }
+  return value;
+}
+
+function requiredBoundedPiSessionUtf8String(value: unknown, label: string, maxBytes: number): string {
+  if (typeof value !== "string" || value === "") {
+    throw new Error(`PI WEB host PI sessions capability v1 ${label} must be a non-empty string`);
+  }
+  if (publicStringExceedsUtf8ByteLimit(value, maxBytes)) {
+    throw new Error(`PI WEB host PI sessions capability v1 ${label} must be at most ${String(maxBytes)} UTF-8 bytes`);
+  }
+  return value;
+}
+
+function publicStringExceedsUtf8ByteLimit(value: string, maxBytes: number): boolean {
+  let bytes = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const codePoint = value.codePointAt(index);
+    if (codePoint === undefined) break;
+    if (codePoint > 0xffff) index += 1;
+    bytes += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+    if (bytes > maxBytes) return true;
+  }
+  return false;
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (typeof value === "object" && value !== null) || typeof value === "function"
+    ? typeof Reflect.get(value, "then") === "function"
+    : false;
+}
+
 function isPublicJsonValue(value: unknown, ancestors: Set<object>): value is JsonValue {
   if (value === null || typeof value === "string" || typeof value === "boolean") return true;
   if (typeof value === "number") return Number.isFinite(value);
@@ -549,4 +680,8 @@ function invalidPiWebHostState(): Error {
 
 function invalidPiWebHostWorkspaces(): Error {
   return new Error("PI WEB host workspaces capability v1 must expose resolve");
+}
+
+function invalidPiWebHostPiSessions(): Error {
+  return new Error("PI WEB host PI sessions capability v1 must expose run");
 }

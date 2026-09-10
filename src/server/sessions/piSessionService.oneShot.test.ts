@@ -1,0 +1,150 @@
+import { describe, expect, it, vi } from "vitest";
+import { PiSessionService, type PiSessionRuntime } from "./piSessionService.js";
+import {
+  CapturingSessionEventHub,
+  fakeRuntime,
+  runtimeCreator,
+  sessionGateway,
+  sessionRef,
+  testModelRuntime,
+  type RuntimeCreator,
+} from "./piSessionService.testSupport.js";
+
+const TEST_AGENT_DIR = "/tmp/pi-web-test-agent";
+
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+describe("PiSessionService host-owned one-shot runs", () => {
+  it("atomically starts a visible non-delegating session and returns its prompt completion", async () => {
+    const prompt = deferred();
+    const hub = new CapturingSessionEventHub();
+    const promptCall = vi.fn(() => {
+      expect(hub.globalEvents.some((event) => event.type === "session.created")).toBe(false);
+      return prompt.promise;
+    });
+    const fake = fakeRuntime("session-1", { prompt: promptCall });
+    let delegationToolsEnabled: boolean | undefined;
+    const createAgentRuntime: RuntimeCreator = async (_createRuntime, options) => {
+      delegationToolsEnabled = options.delegationToolsEnabled;
+      await Promise.resolve();
+      return fake.runtime;
+    };
+    const service = new PiSessionService(hub, {
+      agentDir: TEST_AGENT_DIR,
+      modelRuntime: testModelRuntime,
+      createAgentRuntime,
+      sessionManager: sessionGateway([]),
+      heartbeatIntervalMs: 60_000,
+    });
+
+    const run = await service.startOneShotRun(
+      "/workspace",
+      "Do the bounded work",
+      new AbortController().signal,
+    );
+    let settled = false;
+    void run.completion.then(() => { settled = true; });
+    await Promise.resolve();
+
+    expect(run.id).toBe("session-1");
+    expect(promptCall).toHaveBeenCalledWith("Do the bounded work", undefined);
+    expect(settled).toBe(false);
+    expect(delegationToolsEnabled).toBe(false);
+    expect(hub.globalEvents.some((event) => (
+      event.type === "session.created"
+      && event.session.id === "session-1"
+      && event.session.cwd === "/workspace"
+    ))).toBe(true);
+
+    prompt.resolve();
+    await run.completion;
+    await service.stop(sessionRef(run.id));
+    expect(fake.calls.abort).toBe(1);
+    expect(fake.calls.dispose).toBe(1);
+    await service.dispose();
+  });
+
+  it("projects prompt failures through the normal session error channel and rejects completion", async () => {
+    const failure = new Error("model unavailable");
+    const fake = fakeRuntime("session-1", { prompt: () => Promise.reject(failure) });
+    const hub = new CapturingSessionEventHub();
+    const service = new PiSessionService(hub, {
+      agentDir: TEST_AGENT_DIR,
+      modelRuntime: testModelRuntime,
+      createAgentRuntime: runtimeCreator(fake.runtime),
+      sessionManager: sessionGateway([]),
+      heartbeatIntervalMs: 60_000,
+    });
+
+    const run = await service.startOneShotRun(
+      "/workspace",
+      "Do the work",
+      new AbortController().signal,
+    );
+    await expect(run.completion).rejects.toBe(failure);
+
+    expect(hub.sessionEvents).toContainEqual({
+      sessionId: run.id,
+      event: { type: "session.error", message: "model unavailable" },
+    });
+    await service.stop(sessionRef(run.id));
+    await service.dispose();
+  });
+
+  it("rejects a pre-cancelled lifetime before constructing a session", async () => {
+    const fake = fakeRuntime("session-1");
+    const createAgentRuntime = vi.fn(runtimeCreator(fake.runtime));
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: TEST_AGENT_DIR,
+      modelRuntime: testModelRuntime,
+      createAgentRuntime,
+      sessionManager: sessionGateway([]),
+      heartbeatIntervalMs: 60_000,
+    });
+    const lifetime = new AbortController();
+    lifetime.abort(new DOMException("Plugin stopped", "AbortError"));
+
+    await expect(service.startOneShotRun("/workspace", "Must not start", lifetime.signal))
+      .rejects.toThrow("Plugin stopped");
+    expect(createAgentRuntime).not.toHaveBeenCalled();
+    expect(service.activeCount()).toBe(0);
+    await service.dispose();
+  });
+
+  it("cleans up without admitting a prompt when cancellation wins session startup", async () => {
+    const runtimeReady = deferred<PiSessionRuntime>();
+    const promptCall = vi.fn(() => Promise.resolve());
+    const fake = fakeRuntime("session-1", { prompt: promptCall });
+    const createAgentRuntime: RuntimeCreator = async () => await runtimeReady.promise;
+    const hub = new CapturingSessionEventHub();
+    const service = new PiSessionService(hub, {
+      agentDir: TEST_AGENT_DIR,
+      modelRuntime: testModelRuntime,
+      createAgentRuntime,
+      sessionManager: sessionGateway([]),
+      heartbeatIntervalMs: 60_000,
+    });
+    const lifetime = new AbortController();
+
+    const starting = service.startOneShotRun("/workspace", "Must not start", lifetime.signal);
+    await Promise.resolve();
+    lifetime.abort(new DOMException("Plugin stopped", "AbortError"));
+    runtimeReady.resolve(fake.runtime);
+
+    await expect(starting).rejects.toThrow("Plugin stopped");
+    expect(promptCall).not.toHaveBeenCalled();
+    expect(fake.calls.abort).toBe(1);
+    expect(fake.calls.dispose).toBe(1);
+    expect(service.activeCount()).toBe(0);
+    expect(hub.globalEvents.some((event) => event.type === "session.created")).toBe(false);
+    await service.dispose();
+  });
+});

@@ -258,7 +258,7 @@ interface PersistedChildSubsessionLink {
   spawnedSessionId: string;
 }
 
-type SessionCreationProvenance = "tracked-subsession";
+type SessionCreationProvenance = "tracked-subsession" | "host-one-shot";
 
 interface StartSessionOptions {
   parentSession?: string;
@@ -1448,6 +1448,42 @@ export class PiSessionService implements SessionRouteService {
     return this.startSession(cwd, options);
   }
 
+  /** Atomically start and prompt one visible host-owned, non-delegating session. */
+  async startOneShotRun(
+    cwd: string,
+    text: unknown,
+    signal: AbortSignal,
+  ): Promise<{ readonly id: string; readonly completion: Promise<void> }> {
+    const promptText = requirePromptText(text);
+    signal.throwIfAborted();
+    const active = await this.create(
+      this.sessionManager.create(cwd),
+      cwd,
+      { startupIntent: "create", creationProvenance: "host-one-shot" },
+    );
+    const { session } = active.runtime;
+    try {
+      signal.throwIfAborted();
+      this.maybeGenerateSessionName(session, promptText);
+      const completion = this.beginPromptSubmission(session, promptText, undefined);
+      signal.throwIfAborted();
+      const created = this.announceCreatedSession(active, cwd);
+      signal.throwIfAborted();
+      return Object.freeze({ id: created.id, completion });
+    } catch (error) {
+      try {
+        await this.closeActive(session.sessionId);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          `Failed to clean up one-shot session ${session.sessionId} after startup failed`,
+          { cause: cleanupError },
+        );
+      }
+      throw error;
+    }
+  }
+
   private async startSession(cwd: string, options: InternalStartSessionOptions): Promise<ClientSession> {
     const active = await this.create(
       this.sessionManager.create(cwd, options.parentSession === undefined ? undefined : { parentSession: options.parentSession }),
@@ -1460,6 +1496,14 @@ export class PiSessionService implements SessionRouteService {
         ...(options.creationProvenance === undefined ? {} : { creationProvenance: options.creationProvenance }),
       },
     );
+    return this.announceCreatedSession(active, cwd, options.parentSession);
+  }
+
+  private announceCreatedSession(
+    active: ActiveSession<PiSessionRuntime>,
+    cwd: string,
+    parentSession?: string,
+  ): ClientSession {
     const { session } = active.runtime;
     const created: ClientSession = {
       id: session.sessionId,
@@ -1472,7 +1516,7 @@ export class PiSessionService implements SessionRouteService {
       firstMessage: "",
       // Include the parent so listeners can nest the new session in the tree
       // immediately, instead of showing it flat until the next reload.
-      ...(options.parentSession === undefined ? {} : { parentSessionPath: options.parentSession }),
+      ...(parentSession === undefined ? {} : { parentSessionPath: parentSession }),
     };
     // Broadcast so other clients (and the spawning agent's UI) can add the new
     // session to their list without a manual reload.
@@ -2479,15 +2523,19 @@ export class PiSessionService implements SessionRouteService {
   }
 
   private submitPrompt(session: PiAgentSession, text: string, behavior: QueuedPromptKind | undefined, images: ImageContent[] = [], echoUserMessage = true): Promise<void> {
+    return this.beginPromptSubmission(session, text, behavior, images, echoUserMessage).catch(() => undefined);
+  }
+
+  private beginPromptSubmission(session: PiAgentSession, text: string, behavior: QueuedPromptKind | undefined, images: ImageContent[] = [], echoUserMessage = true): Promise<void> {
     this.publishActivity(session, behavior === "steer" ? "steering queued" : behavior === "followUp" ? "message queued" : "prompt accepted", "active");
     if (behavior === undefined && echoUserMessage) this.events.publish(session.sessionId, { type: "message.append", message: userMessage(text, images) });
     const promptOptions = buildPromptOptions(behavior, images);
-    const promptPromise = this.runSessionEntryMutation(session, "send a prompt", () => session.prompt(text, promptOptions)).catch((error: unknown) => {
+    const promptPromise = this.runSessionEntryMutation(session, "send a prompt", () => session.prompt(text, promptOptions));
+    void promptPromise.catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
       this.publishActivity(session, "error", "error", message);
       this.events.publish(session.sessionId, { type: "session.error", message });
     });
-    void promptPromise;
     return promptPromise;
   }
 
@@ -3455,7 +3503,7 @@ export class PiSessionService implements SessionRouteService {
     startup: SessionStartupProgressReporter,
   ): Promise<ActiveSession<PiSessionRuntime>> {
     startup.report(STARTUP_PHASE_RUNTIME);
-    const delegationToolsEnabled = options.creationProvenance !== "tracked-subsession"
+    const delegationToolsEnabled = options.creationProvenance === undefined
       && await sessionAllowsDelegationTools(sessionManager, this.sessionManager);
     const runtime = await this.createAgentRuntime(this.createRuntime, {
       cwd,

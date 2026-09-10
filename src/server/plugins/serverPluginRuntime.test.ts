@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  PI_WEB_HOST_PI_SESSIONS_CAPABILITY,
   PI_WEB_HOST_STATE_CAPABILITY,
   PI_WEB_HOST_WORKSPACES_CAPABILITY,
 } from "../../server-plugin-api.js";
 import type {
   JsonValue,
+  PiWebHostPiSessionsV1,
   PiWebHostStateV1,
   PiWebHostWorkspacesV1,
   PiWebServerPlugin,
@@ -348,6 +350,7 @@ describe("server plugin runtime", () => {
     const runtime = await createServerPluginRuntime({
       catalog: { snapshot: () => Promise.resolve(testSnapshot([
         entry("late-omega"),
+        entry("late-pi"),
         entry("wrong-version"),
         entry("provider"),
         entry("late-beta"),
@@ -356,7 +359,7 @@ describe("server plugin runtime", () => {
         entry("late-alpha"),
       ])) },
       hostCapabilityFactories: [stateFactory],
-      lateHostCapabilities: [PI_WEB_HOST_WORKSPACES_CAPABILITY],
+      lateHostCapabilities: [PI_WEB_HOST_WORKSPACES_CAPABILITY, PI_WEB_HOST_PI_SESSIONS_CAPABILITY],
       importer: (url) => {
         const pluginId = pluginIdFromUrl(url);
         if (pluginId === "provider") {
@@ -377,15 +380,23 @@ describe("server plugin runtime", () => {
         }
         const requirement = pluginId === "wrong-version"
           ? workspacesV2
-          : PI_WEB_HOST_WORKSPACES_CAPABILITY;
+          : pluginId === "late-pi"
+            ? PI_WEB_HOST_PI_SESSIONS_CAPABILITY
+            : PI_WEB_HOST_WORKSPACES_CAPABILITY;
         const requirements = pluginId === "late-alpha" ? [service, requirement] : [requirement];
         return Promise.resolve({ default: plugin(pluginId, (context) => {
           lateContexts.set(pluginId, context.lifetimeSignal);
           return {
             start: ({ capabilities }) => {
               events.push(`start:${pluginId}`);
-              const resolved = capabilities.resolve(requirement);
-              if (pluginId !== "wrong-version") resolvedWorkspaces.set(pluginId, resolved);
+              if (pluginId === "late-pi") capabilities.resolve(PI_WEB_HOST_PI_SESSIONS_CAPABILITY);
+              else {
+                const workspaceRequirement = pluginId === "wrong-version"
+                  ? workspacesV2
+                  : PI_WEB_HOST_WORKSPACES_CAPABILITY;
+                const resolved = capabilities.resolve(workspaceRequirement);
+                if (pluginId !== "wrong-version") resolvedWorkspaces.set(pluginId, resolved);
+              }
               if (pluginId === "late-alpha" && capabilities.resolve(service).label !== "ready") {
                 throw new Error("provider capability was not ready");
               }
@@ -427,7 +438,21 @@ describe("server plugin runtime", () => {
         };
       },
     };
-    await runtime.resumeWithHostCapabilityFactories([lateFactory]);
+    const piSessionsFactory: ServerPluginHostCapabilityFactory<PiWebHostPiSessionsV1> = {
+      capability: PI_WEB_HOST_PI_SESSIONS_CAPABILITY,
+      create: () => ({
+        value: {
+          version: 1,
+          run: () => Promise.resolve({
+            sessionId: "session-1",
+            completion: Promise.resolve({ status: "completed" as const }),
+          }),
+        },
+      }),
+    };
+    await expect(runtime.resumeWithHostCapabilityFactories([lateFactory]))
+      .rejects.toThrow("Late host capability pi-web.host/pi-sessions v1 was not registered");
+    await runtime.resumeWithHostCapabilityFactories([lateFactory, piSessionsFactory]);
 
     expect(events).toEqual([
       "start:early-state",
@@ -438,6 +463,7 @@ describe("server plugin runtime", () => {
       "start:late-gamma",
       "dispose:late-gamma:true",
       "start:late-omega",
+      "start:late-pi",
     ]);
     expect(lateCleanups).toEqual(["late-gamma"]);
     expect(resolvedWorkspaces.has("late-alpha")).toBe(true);
@@ -448,17 +474,19 @@ describe("server plugin runtime", () => {
       expect.objectContaining({ pluginId: "late-beta", state: "failed", message: "late factory failed" }),
       expect.objectContaining({ pluginId: "late-gamma", state: "failed", message: "late start failed" }),
       expect.objectContaining({ pluginId: "late-omega", state: "active" }),
+      expect.objectContaining({ pluginId: "late-pi", state: "active" }),
       expect.objectContaining({ pluginId: "provider", state: "active" }),
       expect.objectContaining({ pluginId: "wrong-version", state: "failed" }),
     ]);
-    await expect(runtime.resumeWithHostCapabilityFactories([lateFactory]))
+    await expect(runtime.resumeWithHostCapabilityFactories([lateFactory, piSessionsFactory]))
       .rejects.toThrow("already resumed");
 
     runtime.beginShutdown();
     expect([...lateContexts.values()].every((signal) => signal.aborted)).toBe(true);
     await runtime.stop();
     expect(lateCleanups).toEqual(["late-gamma", "late-omega", "late-alpha"]);
-    expect(events.slice(-4)).toEqual([
+    expect(events.slice(-5)).toEqual([
+      "dispose:late-pi:true",
       "dispose:late-omega:true",
       "dispose:late-alpha:true",
       "dispose:provider",
@@ -1138,16 +1166,25 @@ describe("server plugin runtime", () => {
         resolve: () => Promise.reject(new Error("bundled safe start must not resolve workspaces")),
       },
     }));
+    const createBundledPiSessionsCapability = vi.fn(() => ({
+      value: {
+        version: 1 as const,
+        run: () => Promise.reject(new Error("bundled safe start must not run sessions")),
+      },
+    }));
     const bundledOnly = await createServerPluginRuntime({
       catalog: { snapshot: () => Promise.resolve(snapshot) },
       safeStart: "bundled-only",
       importer,
       logger: testLogger(),
-      lateHostCapabilities: [PI_WEB_HOST_WORKSPACES_CAPABILITY],
+      lateHostCapabilities: [PI_WEB_HOST_WORKSPACES_CAPABILITY, PI_WEB_HOST_PI_SESSIONS_CAPABILITY],
     });
     await bundledOnly.resumeWithHostCapabilityFactories([{
       capability: PI_WEB_HOST_WORKSPACES_CAPABILITY,
       create: createBundledLateHostCapability,
+    }, {
+      capability: PI_WEB_HOST_PI_SESSIONS_CAPABILITY,
+      create: createBundledPiSessionsCapability,
     }]);
 
     expect(imported).toEqual(["bundled"]);
@@ -1157,6 +1194,7 @@ describe("server plugin runtime", () => {
       expect.objectContaining({ pluginId: "local", state: "disabled", message: "disabled by bundled-only safe start" }),
     ]);
     expect(createBundledLateHostCapability).not.toHaveBeenCalled();
+    expect(createBundledPiSessionsCapability).not.toHaveBeenCalled();
     await bundledOnly.stop();
 
     imported.splice(0);
@@ -1170,23 +1208,33 @@ describe("server plugin runtime", () => {
         resolve: () => Promise.reject(new Error("safe start must not resolve workspaces")),
       },
     }));
+    const createPiSessionsCapability = vi.fn(() => ({
+      value: {
+        version: 1 as const,
+        run: () => Promise.reject(new Error("safe start must not run sessions")),
+      },
+    }));
     const none = await createServerPluginRuntime({
       catalog: noneCatalog,
       safeStart: "none",
       importer,
       logger: testLogger(),
       hostCapabilityFactories: [{ capability: PI_WEB_HOST_STATE_CAPABILITY, create: createHostCapability }],
-      lateHostCapabilities: [PI_WEB_HOST_WORKSPACES_CAPABILITY],
+      lateHostCapabilities: [PI_WEB_HOST_WORKSPACES_CAPABILITY, PI_WEB_HOST_PI_SESSIONS_CAPABILITY],
     });
     await none.resumeWithHostCapabilityFactories([{
       capability: PI_WEB_HOST_WORKSPACES_CAPABILITY,
       create: createLateHostCapability,
+    }, {
+      capability: PI_WEB_HOST_PI_SESSIONS_CAPABILITY,
+      create: createPiSessionsCapability,
     }]);
 
     expect(imported).toEqual([]);
     expect(noneCatalog.snapshot).not.toHaveBeenCalled();
     expect(createHostCapability).not.toHaveBeenCalled();
     expect(createLateHostCapability).not.toHaveBeenCalled();
+    expect(createPiSessionsCapability).not.toHaveBeenCalled();
     expect(none.healthRecords()).toEqual([]);
   });
 

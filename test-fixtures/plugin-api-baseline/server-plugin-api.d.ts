@@ -130,6 +130,38 @@ export interface PiWebHostWorkspacesV1 {
 }
 /** Exact workspaces v1 capability supplied separately for each declaring server plugin. */
 export declare const PI_WEB_HOST_WORKSPACES_CAPABILITY: PluginCapability<PiWebHostWorkspacesV1, 1>;
+/** Bounded input for one host-owned Pi session run in current workspace authority. */
+export interface PiWebHostPiSessionRunInput {
+    /** Opaque current project id, limited to 512 characters. */
+    readonly projectId: string;
+    /** Opaque current workspace id, limited to 512 characters. */
+    readonly workspaceId: string;
+    /** Non-empty initial prompt, limited to 64 KiB of UTF-8. */
+    readonly prompt: string;
+}
+/** Detached final outcome for one host-owned Pi session run. */
+export type PiWebHostPiSessionRunCompletion = {
+    readonly status: "completed";
+} | {
+    readonly status: "failed";
+    /** Non-empty host-projected failure text, limited to 4 KiB of UTF-8. */
+    readonly error: string;
+} | {
+    readonly status: "cancelled";
+};
+/** Detached identity and completion for one visible, transcript-preserving Pi session. */
+export interface PiWebHostPiSessionRun {
+    readonly sessionId: string;
+    readonly completion: Promise<PiWebHostPiSessionRunCompletion>;
+}
+/** Package-attributed admission to bounded, one-shot, host-governed Pi sessions. */
+export interface PiWebHostPiSessionsV1 {
+    readonly version: 1;
+    /** Re-resolve current authority, start one session, and admit its initial prompt. */
+    readonly run: (input: PiWebHostPiSessionRunInput) => Promise<PiWebHostPiSessionRun>;
+}
+/** Exact PI sessions v1 capability supplied separately for each declaring server plugin. */
+export declare const PI_WEB_HOST_PI_SESSIONS_CAPABILITY: PluginCapability<PiWebHostPiSessionsV1, 1>;
 /** Resolver containing only the exact capability requirements declared by a plugin. */
 export interface ServerPluginCapabilityResolver {
     readonly resolve: <Value>(capability: PluginCapability<Value>) => Value;

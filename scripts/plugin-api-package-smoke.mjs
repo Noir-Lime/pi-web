@@ -110,13 +110,14 @@ async function assertServerRuntimeApi(consumerRoot) {
   const fixturePath = join(consumerRoot, "server-runtime.mjs");
   await writeFile(fixturePath, `
     import {
+      PI_WEB_HOST_PI_SESSIONS_CAPABILITY,
       PI_WEB_HOST_STATE_CAPABILITY,
       PI_WEB_HOST_WORKSPACES_CAPABILITY,
     } from "@jmfederico/pi-web/server-plugin-api";
-    export default [PI_WEB_HOST_STATE_CAPABILITY, PI_WEB_HOST_WORKSPACES_CAPABILITY];
+    export default [PI_WEB_HOST_STATE_CAPABILITY, PI_WEB_HOST_WORKSPACES_CAPABILITY, PI_WEB_HOST_PI_SESSIONS_CAPABILITY];
   `, "utf8");
   const serverApi = await import(pathToFileURL(fixturePath).href);
-  const [stateCapability, workspacesCapability] = serverApi.default;
+  const [stateCapability, workspacesCapability, piSessionsCapability] = serverApi.default;
   if (!Object.isFrozen(stateCapability)
     || stateCapability?.pluginId !== "pi-web.host"
     || stateCapability?.id !== "state"
@@ -130,6 +131,13 @@ async function assertServerRuntimeApi(consumerRoot) {
     || workspacesCapability?.version !== 1
     || typeof workspacesCapability?.parse !== "function") {
     throw new Error("Installed server plugin API does not expose the exact pi-web.host/workspaces v1 token");
+  }
+  if (!Object.isFrozen(piSessionsCapability)
+    || piSessionsCapability?.pluginId !== "pi-web.host"
+    || piSessionsCapability?.id !== "pi-sessions"
+    || piSessionsCapability?.version !== 1
+    || typeof piSessionsCapability?.parse !== "function") {
+    throw new Error("Installed server plugin API does not expose the exact pi-web.host/pi-sessions v1 token");
   }
 }
 

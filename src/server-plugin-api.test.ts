@@ -1,11 +1,16 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
+  PI_WEB_HOST_PI_SESSIONS_CAPABILITY,
   PI_WEB_HOST_STATE_CAPABILITY,
   PI_WEB_HOST_WORKSPACES_CAPABILITY,
 } from "./server-plugin-api.js";
 import type {
   JsonObject,
+  PiWebHostPiSessionRun,
+  PiWebHostPiSessionRunCompletion,
+  PiWebHostPiSessionRunInput,
+  PiWebHostPiSessionsV1,
   PiWebHostStateV1,
   PiWebHostWorkspaceAuthority,
   PiWebHostWorkspaceSelection,
@@ -272,6 +277,60 @@ describe("public server plugin API", () => {
     }).resolve(selection)).rejects.toThrow("authority outside the requested selection");
   });
 
+  it("exports the exact frozen PI sessions v1 token and snapshots bounded run handles", async () => {
+    let resolveCompletion!: (value: PiWebHostPiSessionRunCompletion) => void;
+    const sourceCompletion = new Promise<PiWebHostPiSessionRunCompletion>((resolve) => { resolveCompletion = resolve; });
+    const run = vi.fn((runInput: PiWebHostPiSessionRunInput) => {
+      void runInput;
+      return Promise.resolve({
+        sessionId: "session-1",
+        completion: sourceCompletion,
+        runtime: { private: true },
+      });
+    });
+    const source = { version: 1 as const, run };
+    const sessions = PI_WEB_HOST_PI_SESSIONS_CAPABILITY.parse(source);
+    Reflect.set(source, "run", () => Promise.reject(new Error("mutated run was used")));
+
+    const input = { projectId: "project-1", workspaceId: "workspace-1", prompt: "Do the bounded work" };
+    const handle = await sessions.run(input);
+    resolveCompletion({ status: "failed", error: "model unavailable" });
+    const completion = await handle.completion;
+
+    expect(PI_WEB_HOST_PI_SESSIONS_CAPABILITY).toMatchObject({
+      pluginId: "pi-web.host",
+      id: "pi-sessions",
+      version: 1,
+    });
+    expect(Object.isFrozen(PI_WEB_HOST_PI_SESSIONS_CAPABILITY)).toBe(true);
+    expect(run).toHaveBeenCalledWith(input);
+    expect(Object.isFrozen(run.mock.calls[0]?.[0])).toBe(true);
+    expect(handle.sessionId).toBe("session-1");
+    expect(handle.completion).toBeInstanceOf(Promise);
+    expect(handle).not.toHaveProperty("runtime");
+    expect(Object.isFrozen(handle)).toBe(true);
+    expect(completion).toEqual({ status: "failed", error: "model unavailable" });
+    expect(Object.isFrozen(completion)).toBe(true);
+
+    expect(() => PI_WEB_HOST_PI_SESSIONS_CAPABILITY.parse({ version: 1 }))
+      .toThrow("must expose run");
+    await expect(Reflect.apply(sessions.run, sessions, [{ ...input, path: "/caller/path" }]))
+      .rejects.toThrow("Unsupported PI WEB host PI sessions capability v1 run input field: path");
+    await expect(sessions.run({ ...input, projectId: "x".repeat(513) }))
+      .rejects.toThrow("projectId must be at most 512 characters");
+    await expect(sessions.run({ ...input, prompt: "😀".repeat(16_385) }))
+      .rejects.toThrow("prompt must be at most 65536 UTF-8 bytes");
+    await expect(PI_WEB_HOST_PI_SESSIONS_CAPABILITY.parse({
+      version: 1,
+      run: () => ({ sessionId: "session-2", completion: { status: "completed" } }),
+    }).run(input)).rejects.toThrow("run must expose completion");
+    await expect(PI_WEB_HOST_PI_SESSIONS_CAPABILITY.parse({
+      version: 1,
+      run: () => ({ sessionId: "session-2", completion: Promise.resolve({ status: "unknown" }) }),
+    }).run(input).then(({ completion: invalidCompletion }) => invalidCompletion))
+      .rejects.toThrow("completion status is invalid");
+  });
+
   it("keeps host inputs readonly and concrete services out of the declaration surface", async () => {
     expectTypeOf<keyof ServerPluginActivationContext>().toEqualTypeOf<
       "apiVersion" | "pluginId" | "packageRoot" | "logger" | "settings" | "notices" | "execFile" | "signal" | "lifetimeSignal"
@@ -286,6 +345,12 @@ describe("public server plugin API", () => {
     expectTypeOf<keyof PiWebHostWorkspaceSelection>().toEqualTypeOf<"projectId" | "workspaceId">();
     expectTypeOf<keyof PiWebHostWorkspaceAuthority>().toEqualTypeOf<"project" | "workspace">();
     expectTypeOf<keyof PiWebHostWorkspacesV1>().toEqualTypeOf<"version" | "resolve">();
+    expectTypeOf<keyof PiWebHostPiSessionRunInput>().toEqualTypeOf<"projectId" | "workspaceId" | "prompt">();
+    expectTypeOf<keyof PiWebHostPiSessionRun>().toEqualTypeOf<"sessionId" | "completion">();
+    expectTypeOf<keyof PiWebHostPiSessionRunCompletion>().toEqualTypeOf<"status">();
+    expectTypeOf<keyof Extract<PiWebHostPiSessionRunCompletion, { status: "failed" }>>()
+      .toEqualTypeOf<"status" | "error">();
+    expectTypeOf<keyof PiWebHostPiSessionsV1>().toEqualTypeOf<"version" | "run">();
     expectTypeOf<keyof ServerPluginStartContext>().toEqualTypeOf<"capabilities" | "signal">();
     expectTypeOf<keyof ServerPluginActivation>().toEqualTypeOf<"workspaceProvider" | "peer" | "provides" | "start" | "dispose" | "health">();
     expectTypeOf<keyof ServerPluginNoticeScope>().toEqualTypeOf<"projectId" | "workspaceId" | "sessionId">();
@@ -328,6 +393,12 @@ describe("public server plugin API", () => {
     expectTypeOf<ReadonlyKeys<PiWebHostWorkspaceSelection>>().toEqualTypeOf<keyof PiWebHostWorkspaceSelection>();
     expectTypeOf<ReadonlyKeys<PiWebHostWorkspaceAuthority>>().toEqualTypeOf<keyof PiWebHostWorkspaceAuthority>();
     expectTypeOf<ReadonlyKeys<PiWebHostWorkspacesV1>>().toEqualTypeOf<keyof PiWebHostWorkspacesV1>();
+    expectTypeOf<ReadonlyKeys<PiWebHostPiSessionRunInput>>().toEqualTypeOf<keyof PiWebHostPiSessionRunInput>();
+    expectTypeOf<ReadonlyKeys<PiWebHostPiSessionRun>>().toEqualTypeOf<keyof PiWebHostPiSessionRun>();
+    expectTypeOf<ReadonlyKeys<PiWebHostPiSessionRunCompletion>>().toEqualTypeOf<keyof PiWebHostPiSessionRunCompletion>();
+    expectTypeOf<ReadonlyKeys<Extract<PiWebHostPiSessionRunCompletion, { status: "failed" }>>>()
+      .toEqualTypeOf<"status" | "error">();
+    expectTypeOf<ReadonlyKeys<PiWebHostPiSessionsV1>>().toEqualTypeOf<keyof PiWebHostPiSessionsV1>();
     expectTypeOf<ReadonlyKeys<ServerPluginStartContext>>().toEqualTypeOf<keyof ServerPluginStartContext>();
     expectTypeOf<ReadonlyKeys<ServerPluginLogger>>().toEqualTypeOf<keyof ServerPluginLogger>();
     expectTypeOf<ReadonlyKeys<ServerPluginNoticeReporterV1>>().toEqualTypeOf<keyof ServerPluginNoticeReporterV1>();
@@ -349,11 +420,11 @@ describe("public server plugin API", () => {
       readFile("src/server-plugin-api.ts", "utf8"),
       readFile("src/plugin-api.ts", "utf8"),
     ]);
-    expect(source).not.toMatch(/\b(?:Fastify|WorkspaceService|ProjectService|TerminalService|SessionDaemonClient)\b/u);
+    expect(source).not.toMatch(/\b(?:BackgroundService|Fastify|WorkspaceService|ProjectService|TerminalService|PiSessionService|SessionManager|SessionDaemonClient)\b/u);
     expect(source).not.toMatch(/event\s*bus|service\s*locator|registerRoute/iu);
     expect(source).toContain('from "./shared/pluginApiTypes.js";');
     expect(source).not.toContain("./shared/apiTypes.js");
-    expect(browserSource).not.toMatch(/PI_WEB_HOST_(?:STATE|WORKSPACES)_CAPABILITY|PiWebHost(?:State|Workspace|Workspaces)/u);
+    expect(browserSource).not.toMatch(/PI_WEB_HOST_(?:STATE|WORKSPACES|PI_SESSIONS)_CAPABILITY|PiWebHost(?:State|Workspace|Workspaces|PiSession|PiSessions)/u);
   });
 });
 

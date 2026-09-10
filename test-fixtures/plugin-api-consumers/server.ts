@@ -1,8 +1,10 @@
 import {
+  PI_WEB_HOST_PI_SESSIONS_CAPABILITY,
   PI_WEB_HOST_STATE_CAPABILITY,
   PI_WEB_HOST_WORKSPACES_CAPABILITY,
 } from "@jmfederico/pi-web/server-plugin-api";
 import type {
+  PiWebHostPiSessionsV1,
   PiWebHostStateV1,
   PiWebHostWorkspacesV1,
   PluginCapability,
@@ -35,7 +37,12 @@ const channelOnlyPeer: ServerPluginPeer = {
 const plugin: PiWebServerPlugin = {
   apiVersion: 3,
   name: "Server declaration fixture",
-  requires: [fixtureDependency, PI_WEB_HOST_STATE_CAPABILITY, PI_WEB_HOST_WORKSPACES_CAPABILITY],
+  requires: [
+    fixtureDependency,
+    PI_WEB_HOST_STATE_CAPABILITY,
+    PI_WEB_HOST_WORKSPACES_CAPABILITY,
+    PI_WEB_HOST_PI_SESSIONS_CAPABILITY,
+  ],
   activate: (context) => {
     context.notices?.record({
       severity: "info",
@@ -57,6 +64,14 @@ const plugin: PiWebServerPlugin = {
           workspaceId: "fixture-workspace",
         });
         context.logger.info(authority.workspace.label, { projectId: authority.project.id });
+        const piSessions: PiWebHostPiSessionsV1 = capabilities.resolve(PI_WEB_HOST_PI_SESSIONS_CAPABILITY);
+        const run = await piSessions.run({
+          projectId: authority.project.id,
+          workspaceId: authority.workspace.id,
+          prompt: "Inspect the current workspace",
+        });
+        const completion = await run.completion;
+        context.logger.info(completion.status, { sessionId: run.sessionId });
       },
       peer: {
         request: ({ workspace, operation, input }) => ({ workspaceId: workspace.id, operation, input }),

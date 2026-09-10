@@ -161,7 +161,7 @@ describe("sessiond persisted server plugin recovery", () => {
     expect(await readFile(disposedMarker, "utf8")).toContain("state for state-only is no longer active");
   }, 35_000);
 
-  it.skipIf(process.platform === "win32")("assembles early workspace providers before resuming late workspace consumers", async () => {
+  it.skipIf(process.platform === "win32")("assembles early workspace providers and sessions before one late consumer resume", async () => {
     const terminalPackageRoot = resolve("dist/pi-web-plugins/terminal");
     tempRoots.push(terminalPackageRoot);
     await buildTerminalPackage(resolve("pi-web-plugins/terminal"), terminalPackageRoot);
@@ -175,7 +175,8 @@ describe("sessiond persisted server plugin recovery", () => {
     const workspaceId = createHash("sha1").update(`${projectId}:main`).digest("hex").slice(0, 12);
     const eventsPath = join(root, "events.log");
     const authorityMarker = join(root, "workspace-authority.json");
-    const disposedMarker = join(root, "workspace-consumer-disposed.txt");
+    const runMarker = join(root, "pi-session-run.json");
+    const disposedMarker = join(root, "workspace-consumer-disposed.json");
     const serverApiUrl = pathToFileURL(resolve("src/server-plugin-api.ts")).href;
     await Promise.all([
       mkdir(projectPath, { recursive: true }),
@@ -254,29 +255,45 @@ describe("sessiond persisted server plugin recovery", () => {
     })}\n`, "utf8");
     await writeFile(join(consumerRoot, "server.mjs"), `
       import { appendFile, writeFile } from "node:fs/promises";
-      import { PI_WEB_HOST_WORKSPACES_CAPABILITY } from ${JSON.stringify(serverApiUrl)};
+      import {
+        PI_WEB_HOST_PI_SESSIONS_CAPABILITY,
+        PI_WEB_HOST_WORKSPACES_CAPABILITY
+      } from ${JSON.stringify(serverApiUrl)};
       let workspaces;
+      let piSessions;
+      let run;
       const selection = ${JSON.stringify({ projectId, workspaceId })};
       export default {
         apiVersion: 3,
         name: "Workspace consumer fixture",
-        requires: [PI_WEB_HOST_WORKSPACES_CAPABILITY],
+        requires: [PI_WEB_HOST_WORKSPACES_CAPABILITY, PI_WEB_HOST_PI_SESSIONS_CAPABILITY],
         activate() {
           return {
             async start({ capabilities }) {
               workspaces = capabilities.resolve(PI_WEB_HOST_WORKSPACES_CAPABILITY);
+              piSessions = capabilities.resolve(PI_WEB_HOST_PI_SESSIONS_CAPABILITY);
               const authority = await workspaces.resolve(selection);
+              run = await piSessions.run({ ...selection, prompt: "Report the current workspace name." });
               await writeFile(${JSON.stringify(authorityMarker)}, JSON.stringify(authority));
+              await writeFile(${JSON.stringify(runMarker)}, JSON.stringify({ sessionId: run.sessionId }));
               await appendFile(${JSON.stringify(eventsPath)}, "consumer:start\\n");
               console.error("WORKSPACE_CONSUMER_STARTED");
             },
             async dispose() {
+              const result = { completion: await run.completion };
               try {
                 await workspaces.resolve(selection);
-                await writeFile(${JSON.stringify(disposedMarker)}, "workspace authority remained active");
+                result.workspaceError = "workspace authority remained active";
               } catch (error) {
-                await writeFile(${JSON.stringify(disposedMarker)}, error instanceof Error ? error.message : String(error));
+                result.workspaceError = error instanceof Error ? error.message : String(error);
               }
+              try {
+                await piSessions.run({ ...selection, prompt: "must not start" });
+                result.piSessionsError = "PI sessions remained active";
+              } catch (error) {
+                result.piSessionsError = error instanceof Error ? error.message : String(error);
+              }
+              await writeFile(${JSON.stringify(disposedMarker)}, JSON.stringify(result));
             }
           };
         }
@@ -320,6 +337,9 @@ describe("sessiond persisted server plugin recovery", () => {
         },
       },
     });
+    const admittedRun = await readJsonObject(runMarker);
+    expect(typeof admittedRun["sessionId"]).toBe("string");
+    expect(admittedRun["sessionId"]).not.toBe("");
     expect(JSON.parse(await readFile(join(dataDir, "plugin-state", "b-state-early", "state.json"), "utf8")))
       .toEqual({ phase: "early" });
 
@@ -328,8 +348,14 @@ describe("sessiond persisted server plugin recovery", () => {
     children.delete(child);
 
     expect(exit).toEqual({ code: 0, signal: null });
-    expect(await readFile(disposedMarker, "utf8"))
+    const disposed = await readJsonObject(disposedMarker);
+    const completion = disposed["completion"];
+    expect(["completed", "failed", "cancelled"])
+      .toContain(isRecord(completion) ? completion["status"] : undefined);
+    expect(disposed["workspaceError"])
       .toContain("workspace authority for server plugin z-workspace-consumer is no longer active");
+    expect(disposed["piSessionsError"])
+      .toContain("PI session authority for server plugin z-workspace-consumer is no longer active");
     expect((await readFile(eventsPath, "utf8")).trim().split("\n")).toEqual([
       "provider:start",
       "state:start",
@@ -403,6 +429,16 @@ describe("sessiond persisted server plugin recovery", () => {
     expect(existsSync(stoppedMarker)).toBe(true);
   }, 35_000);
 });
+
+async function readJsonObject(path: string): Promise<Record<string, unknown>> {
+  const value: unknown = JSON.parse(await readFile(path, "utf8"));
+  if (!isRecord(value)) throw new Error(`Expected ${path} to contain a JSON object`);
+  return value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 function waitForOutput(child: FixtureChild, expected: string, timeoutMs: number): Promise<string> {
   return new Promise((resolvePromise, rejectPromise) => {
