@@ -11,7 +11,6 @@ import type {
   ServerPluginPeerRequestContext,
   ProjectInput,
   ProviderRemoveContext,
-  ProviderRequestContext,
   ServerPluginActivation,
   ServerPluginActivationContext,
   ServerPluginExecFileRequest,
@@ -1060,19 +1059,16 @@ function snapshotWorkspaceProvider(value: unknown): WorkspaceProvider {
     fallback: value["fallback"],
     probe: value["probe"],
     list: value["list"],
-    request: value["request"],
     prepareRemove: value["prepareRemove"],
   };
   if (!isWorkspaceProvider(candidate)) throw new IncompatibleServerPluginError("Server plugin workspaceProvider is invalid");
   const probe = candidate.probe.bind(value);
   const list = candidate.list.bind(value);
-  const request = candidate.request?.bind(value);
   const prepareRemove = candidate.prepareRemove?.bind(value);
   return Object.freeze({
     ...(candidate.fallback === undefined ? {} : { fallback: candidate.fallback }),
     probe: (project: ProjectInput, signal: AbortSignal) => probe(project, signal),
     list: (project: ProjectInput, signal: AbortSignal) => list(project, signal),
-    ...(request === undefined ? {} : { request: (context: ProviderRequestContext) => request(context) }),
     ...(prepareRemove === undefined ? {} : { prepareRemove: (context: ProviderRemoveContext) => prepareRemove(context) }),
   });
 }
@@ -1082,12 +1078,10 @@ function isWorkspaceProvider(value: unknown): value is WorkspaceProvider {
   const fallback = value["fallback"];
   const probe = value["probe"];
   const list = value["list"];
-  const request = value["request"];
   const prepareRemove = value["prepareRemove"];
   return (fallback === undefined || typeof fallback === "boolean")
     && typeof probe === "function"
     && typeof list === "function"
-    && (request === undefined || typeof request === "function")
     && (prepareRemove === undefined || typeof prepareRemove === "function");
 }
 

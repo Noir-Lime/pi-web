@@ -237,7 +237,6 @@ export interface WorkspaceProvider {
   fallback?: boolean;
   probe(project: ProjectInput, signal: AbortSignal): Promise<ProviderClaim>;
   list(project: ProjectInput, signal: AbortSignal): Promise<ProviderWorkspace[]>;
-  request?(context: ProviderRequestContext): Promise<ProviderResponse>;
   prepareRemove?(context: ProviderRemoveContext): Promise<WorkspaceRemovePlan>;
 }
 
@@ -265,18 +264,6 @@ export interface ProviderWorkspace {
   publicMetadata?: JsonObject;
   removal?: WorkspaceRemovalPresentation;
 }
-
-export interface ProviderRequestContext {
-  readonly project: ProjectInput;
-  /** Host-validated, frozen projection of one listed provider workspace. */
-  readonly workspace: Readonly<ProviderWorkspace>;
-  readonly operation: string;
-  readonly input: JsonValue;
-  readonly signal: AbortSignal;
-}
-
-/** Provider-private JSON result returned through the host's scoped bridge. */
-export type ProviderResponse = JsonValue;
 
 export interface ProviderRemoveContext {
   readonly project: ProjectInput;

@@ -101,19 +101,7 @@ describe("bundled Git package metadata", () => {
       workspaces: [{ path: root, isMain: true }],
     });
     expect(resolution.workspaces[0]).not.toHaveProperty("provider");
-    await expect(registry.request({
-      pluginId: "git",
-      moduleRevision: "disabled-revision",
-      project: {
-        id: "project-1",
-        name: "Project",
-        path: root,
-        createdAt: "2026-07-27T00:00:00.000Z",
-      },
-      workspaceId: resolution.workspaces[0]?.id ?? "missing",
-      operation: "status",
-      input: null,
-    })).rejects.toMatchObject({ code: "inactive-plugin", statusCode: 409 });
+    expect(runtime.pairedBackendContributions()).toEqual([]);
     expect(importer).not.toHaveBeenCalled();
     await runtime.stop();
   });

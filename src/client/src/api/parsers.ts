@@ -216,7 +216,6 @@ function optionalWorkspaceProviderMetadata(value: unknown): Workspace["provider"
   return Object.freeze({
     pluginId: requireString(value, "pluginId"),
     capabilities: Object.freeze({
-      request: requireBoolean(capabilities, "request"),
       remove: requireBoolean(capabilities, "remove"),
     }),
     ...optionalField("metadata", metadata === undefined ? undefined : parseJsonObject(metadata, "workspace provider metadata")),

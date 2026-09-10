@@ -499,7 +499,7 @@ function hostWorkspace(id: string, path: string, isMain: boolean): WorkspaceList
     path,
     label: id,
     isMain,
-    provider: { pluginId: "neutral", capabilities: { request: false, remove: true } },
+    provider: { pluginId: "neutral", capabilities: { remove: true } },
     removal: {
       actionLabel: "Disconnect",
       confirmation: "Disconnect this workspace?",

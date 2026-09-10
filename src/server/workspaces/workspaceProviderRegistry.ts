@@ -18,15 +18,6 @@ import type {
   WorkspaceProviderTier,
   WorkspaceRemovalHostState,
 } from "../../shared/apiTypes.js";
-import { isPiWebPluginId } from "../../shared/pluginIds.js";
-import {
-  cloneBoundedPluginBackendJson,
-  PLUGIN_BACKEND_DISPATCH_TIMEOUT_MS,
-  PLUGIN_BACKEND_REQUEST_TIMEOUT_MS,
-  PLUGIN_BACKEND_RESPONSE_JSON_MAX_BYTES,
-  requirePluginBackendOperation,
-  requirePluginBackendRevision,
-} from "../../shared/pluginBackendProtocol.js";
 import type {
   ServerPluginHealthInspection,
   ServerPluginProviderContribution,
@@ -38,10 +29,10 @@ export type {
   WorkspaceProviderDiagnosticCode,
 } from "../../shared/apiTypes.js";
 
-const DEFAULT_PROVIDER_TIMEOUT_MS = PLUGIN_BACKEND_REQUEST_TIMEOUT_MS;
+const DEFAULT_PROVIDER_TIMEOUT_MS = 10_000;
 
 type ProviderTier = WorkspaceProviderTier;
-type ProviderOperation = "probe" | "list" | "request" | "prepareRemove";
+type ProviderOperation = "probe" | "list" | "prepareRemove";
 
 export interface WorkspaceProviderRegistryLogger {
   warn(details: Record<string, unknown>, message: string): void;
@@ -54,22 +45,8 @@ export interface WorkspaceProviderRegistryOptions {
   contributions: readonly ServerPluginProviderContribution[];
   logger: WorkspaceProviderRegistryLogger;
   providerTimeoutMs?: number;
-  /** End-to-end deadline for owner re-resolution plus one backend request. */
-  requestTimeoutMs?: number;
   pathInspector?: WorkspacePathInspector;
 }
-
-export interface PluginBackendRequest {
-  pluginId: string;
-  moduleRevision: string;
-  project: Project;
-  workspaceId: string;
-  operation: string;
-  input: unknown;
-}
-
-/** Compatibility name retained for the legacy owner-backed dispatcher. */
-export type WorkspaceProviderRequest = PluginBackendRequest;
 
 /** Current owner snapshot used by the host-owned workspace removal orchestrator. */
 export interface WorkspaceProviderRemovalTarget {
@@ -102,43 +79,6 @@ export class WorkspaceProviderRemovalError extends Error {
   ) {
     super(message, options);
   }
-}
-
-export type PluginBackendRequestErrorCode =
-  | "inactive-plugin"
-  | "stale-plugin-revision"
-  | "invalid-operation"
-  | "invalid-input"
-  | "owner-conflict"
-  | "owner-mismatch"
-  | "workspace-not-found"
-  | "invalid-scope"
-  | "resolution-failed"
-  | "resolution-timeout"
-  | "operation-unavailable"
-  | "request-failed"
-  | "request-timeout"
-  | "request-cancelled"
-  | "invalid-result";
-
-export type WorkspaceProviderRequestErrorCode = PluginBackendRequestErrorCode;
-
-export class PluginBackendRequestError extends Error {
-  override name = "PluginBackendRequestError";
-
-  constructor(
-    readonly code: PluginBackendRequestErrorCode,
-    readonly statusCode: number,
-    message: string,
-    options: ErrorOptions = {},
-  ) {
-    super(message, options);
-  }
-}
-
-/** Compatibility subtype used by the legacy owner-backed dispatcher. */
-export class WorkspaceProviderRequestError extends PluginBackendRequestError {
-  override name = "WorkspaceProviderRequestError";
 }
 
 interface ParsedProviderWorkspace {
@@ -192,7 +132,6 @@ export function eligibleWorkspaceProviderContributions(
 export class WorkspaceProviderRegistry {
   private readonly contributions: readonly ServerPluginProviderContribution[];
   private readonly providerTimeoutMs: number;
-  private readonly requestTimeoutMs: number;
   private readonly pathInspector: WorkspacePathInspector;
   private readonly pendingResolutions = new Map<string, Promise<WorkspaceProviderAuthorityResolution>>();
 
@@ -200,7 +139,6 @@ export class WorkspaceProviderRegistry {
     this.contributions = Object.freeze([...options.contributions]
       .sort((left, right) => left.pluginId.localeCompare(right.pluginId)));
     this.providerTimeoutMs = positiveInteger(options.providerTimeoutMs, DEFAULT_PROVIDER_TIMEOUT_MS, "providerTimeoutMs");
-    this.requestTimeoutMs = positiveInteger(options.requestTimeoutMs, PLUGIN_BACKEND_DISPATCH_TIMEOUT_MS, "requestTimeoutMs");
     this.pathInspector = options.pathInspector ?? pathIsDirectory;
   }
 
@@ -262,27 +200,6 @@ export class WorkspaceProviderRegistry {
       workspaces: Object.freeze([folderWorkspace(input)]),
       diagnostics: Object.freeze([...diagnostics]),
     });
-  }
-
-  /**
-   * Re-resolve the current owner and its private workspace snapshot before
-   * invoking one bounded provider operation. Callers never supply owner data.
-   */
-  async request(request: WorkspaceProviderRequest, signal?: AbortSignal): Promise<JsonValue> {
-    try {
-      return await runBoundedProviderOperation(
-        request.pluginId,
-        "request",
-        this.requestTimeoutMs,
-        (operationSignal) => this.dispatchRequest(request, operationSignal),
-        signal,
-      );
-    } catch (error) {
-      if (error instanceof WorkspaceProviderTimeoutError) {
-        throw providerRequestError("request-timeout", 504, boundedErrorMessage(error), error);
-      }
-      throw error;
-    }
   }
 
   /** Re-resolve one live owner/target before host safety checks and provider planning. */
@@ -392,156 +309,6 @@ export class WorkspaceProviderRegistry {
       );
     }
     throw providerRemovalError("owner-unavailable", 409, `No workspace provider currently owns project ${input.id}`);
-  }
-
-  private async dispatchRequest(request: WorkspaceProviderRequest, dispatchSignal: AbortSignal): Promise<JsonValue> {
-    const pluginId = request.pluginId;
-    if (!isPiWebPluginId(pluginId)) {
-      throw providerRequestError("inactive-plugin", 409, `Server plugin is not active: ${pluginId}`);
-    }
-
-    const operation = parseRequestOperation(request.operation);
-    const moduleRevision = parseRequestRevision(request.moduleRevision, operation);
-    const activeContribution = this.contributions.find((contribution) => contribution.pluginId === pluginId);
-    if (activeContribution === undefined) {
-      throw providerRequestError("inactive-plugin", 409, `Server plugin ${pluginId} is not active for workspace backend operation ${operation}`);
-    }
-    if (activeContribution.moduleRevision !== moduleRevision) {
-      throw providerRequestError(
-        "stale-plugin-revision",
-        409,
-        `Server plugin ${pluginId} backend revision is stale for operation ${operation}; reload after the session daemon restarts`,
-      );
-    }
-    if (request.workspaceId === "") {
-      throw providerRequestError("workspace-not-found", 404, `Workspace not found for server plugin ${pluginId} operation ${operation}`);
-    }
-
-    let input: JsonValue;
-    try {
-      input = cloneBoundedPluginBackendJson(request.input, `Server plugin ${pluginId} operation ${operation} input`);
-    } catch (error) {
-      throw providerRequestError("invalid-input", 400, boundedErrorMessage(error), error);
-    }
-
-    const project = snapshotProject(request.project);
-    const diagnostics: WorkspaceProviderDiagnostic[] = [];
-    for (const tier of ["primary", "fallback"] as const) {
-      const selection = await this.selectInTier(project, tier, diagnostics, dispatchSignal);
-      if (selection.kind === "none") continue;
-      if (selection.kind === "conflict") {
-        throw providerRequestError(
-          "owner-conflict",
-          409,
-          `Workspace owner conflict prevents server plugin ${pluginId} operation ${operation}: ${selection.pluginIds.join(", ")}`,
-        );
-      }
-      if (selection.contribution.pluginId !== pluginId) {
-        throw providerRequestError(
-          "owner-mismatch",
-          409,
-          `Server plugin ${pluginId} does not own project ${project.id}; current owner is ${selection.contribution.pluginId}`,
-        );
-      }
-
-      const validated = await this.listRequestWorkspaces(project, selection.contribution, operation, dispatchSignal);
-      const target = validated.find(({ workspace }) => workspace.id === request.workspaceId);
-      if (target === undefined) {
-        throw providerRequestError(
-          "workspace-not-found",
-          404,
-          `Workspace ${request.workspaceId} is stale or unavailable for server plugin ${pluginId} operation ${operation}`,
-        );
-      }
-      const callback = selection.contribution.provider.request?.bind(selection.contribution.provider);
-      if (callback === undefined) {
-        throw providerRequestError(
-          "operation-unavailable",
-          501,
-          `Server plugin ${pluginId} does not provide workspace backend operations`,
-        );
-      }
-
-      let result: unknown;
-      try {
-        result = await runBoundedProviderOperation(
-          pluginId,
-          "request",
-          this.providerTimeoutMs,
-          (signal) => callback(Object.freeze({
-            project,
-            workspace: target.providerWorkspace,
-            operation,
-            input,
-            signal,
-          })),
-          dispatchSignal,
-        );
-      } catch (error) {
-        if (error instanceof WorkspaceProviderTimeoutError) {
-          throw providerRequestError("request-timeout", 504, boundedErrorMessage(error), error);
-        }
-        throw providerRequestError(
-          "request-failed",
-          502,
-          `Server plugin ${pluginId} operation ${operation} failed: ${boundedErrorMessage(error)}`,
-          error,
-        );
-      }
-
-      try {
-        return cloneBoundedPluginBackendJson(
-          result,
-          `Server plugin ${pluginId} operation ${operation} result`,
-          PLUGIN_BACKEND_RESPONSE_JSON_MAX_BYTES,
-        );
-      } catch (error) {
-        throw providerRequestError("invalid-result", 502, boundedErrorMessage(error), error);
-      }
-    }
-
-    const failedProbe = diagnostics.find((diagnostic) => diagnostic.pluginId === pluginId && diagnostic.code === "probe-failed");
-    if (failedProbe !== undefined) {
-      throw providerRequestError(
-        "resolution-failed",
-        502,
-        `Server plugin ${pluginId} owner resolution failed for operation ${operation}: ${boundedErrorMessage(failedProbe.message)}`,
-      );
-    }
-    throw providerRequestError(
-      "owner-mismatch",
-      409,
-      `Server plugin ${pluginId} does not own project ${project.id}`,
-    );
-  }
-
-  private async listRequestWorkspaces(
-    project: ProjectInput,
-    contribution: ServerPluginProviderContribution,
-    operation: string,
-    dispatchSignal: AbortSignal,
-  ): Promise<ValidatedProviderWorkspace[]> {
-    try {
-      const listed: unknown = await runBoundedProviderOperation(
-        contribution.pluginId,
-        "list",
-        this.providerTimeoutMs,
-        (signal) => contribution.provider.list(project, signal),
-        dispatchSignal,
-      );
-      return await validateProviderWorkspaces(project, contribution, listed, this.pathInspector, dispatchSignal);
-    } catch (error) {
-      if (dispatchSignal.aborted) throw abortError(dispatchSignal);
-      if (error instanceof WorkspaceProviderTimeoutError) {
-        throw providerRequestError("resolution-timeout", 504, boundedErrorMessage(error), error);
-      }
-      throw providerRequestError(
-        "resolution-failed",
-        502,
-        `Server plugin ${contribution.pluginId} could not resolve workspaces for operation ${operation}: ${boundedErrorMessage(error)}`,
-        error,
-      );
-    }
   }
 
   private async selectInTier(
@@ -681,10 +448,7 @@ async function validateProviderWorkspaces(
       : hostRemovalPresentation(project, contribution, candidate.key, path, removal);
     const provider = Object.freeze({
       pluginId: contribution.pluginId,
-      capabilities: Object.freeze({
-        request: contribution.provider.request !== undefined,
-        remove: removal !== undefined,
-      }),
+      capabilities: Object.freeze({ remove: removal !== undefined }),
       ...(metadata === undefined ? {} : { metadata }),
     });
     const workspace: WorkspaceListing = {
@@ -897,36 +661,6 @@ function cloneJsonValue(value: unknown, ancestors: Set<object>, label: string): 
   }
   if (isRecord(value)) return cloneJsonRecord(value, ancestors, label);
   throw new WorkspaceProviderContractError(`${label} must contain only JSON values`);
-}
-
-function parseRequestOperation(value: string): string {
-  try {
-    return requirePluginBackendOperation(value);
-  } catch (error) {
-    throw providerRequestError("invalid-operation", 400, boundedErrorMessage(error), error);
-  }
-}
-
-function parseRequestRevision(value: string, operation: string): string {
-  try {
-    return requirePluginBackendRevision(value);
-  } catch (error) {
-    throw providerRequestError(
-      "stale-plugin-revision",
-      409,
-      `Plugin backend revision is unavailable for operation ${operation}: ${boundedErrorMessage(error)}`,
-      error,
-    );
-  }
-}
-
-function providerRequestError(
-  code: WorkspaceProviderRequestErrorCode,
-  statusCode: number,
-  message: string,
-  cause?: unknown,
-): WorkspaceProviderRequestError {
-  return new WorkspaceProviderRequestError(code, statusCode, message, cause === undefined ? {} : { cause });
 }
 
 function providerRemovalError(

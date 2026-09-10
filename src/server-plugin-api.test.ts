@@ -14,7 +14,6 @@ import type {
   PiWebServerPlugin,
   ProjectInput,
   ProviderRemoveContext,
-  ProviderRequestContext,
   ProviderWorkspace,
   ServerPluginActivation,
   ServerPluginActivationContext,
@@ -102,10 +101,6 @@ describe("public server plugin API", () => {
           removal: { actionLabel: "Remove workspace", confirmation: "Remove secondary?" },
         }]);
       },
-      request(context) {
-        observedSignals.push(context.signal);
-        return Promise.resolve({ operation: context.operation, input: context.input });
-      },
       prepareRemove(context) {
         observedSignals.push(context.signal);
         return Promise.resolve({ title: "Remove secondary", command: "provider workspace remove secondary" });
@@ -162,7 +157,7 @@ describe("public server plugin API", () => {
 
     await exerciseActivation(activation, project, signal);
 
-    expect(observedSignals).toHaveLength(8);
+    expect(observedSignals).toHaveLength(7);
     expect(observedSignals.every((observed) => observed === signal)).toBe(true);
     expect(observedLifetimes).toEqual([lifetimeController.signal]);
   });
@@ -181,7 +176,7 @@ describe("public server plugin API", () => {
     expectTypeOf<keyof ServerPluginActivation>().toEqualTypeOf<"workspaceProvider" | "peer" | "provides" | "start" | "dispose" | "health">();
     expectTypeOf<keyof ServerPluginNoticeScope>().toEqualTypeOf<"projectId" | "workspaceId" | "sessionId">();
     expectTypeOf<keyof WorkspaceProvider>().toEqualTypeOf<
-      "fallback" | "probe" | "list" | "request" | "prepareRemove"
+      "fallback" | "probe" | "list" | "prepareRemove"
     >();
     expectTypeOf<keyof ServerPluginPeer>().toEqualTypeOf<"request" | "openChannel">();
     type EmptyNoticeScopeIsValid = Record<never, never> extends ServerPluginNoticeScope ? true : false;
@@ -221,13 +216,11 @@ describe("public server plugin API", () => {
     expectTypeOf<ReadonlyKeys<ServerPluginNoticeInput>>().toEqualTypeOf<keyof ServerPluginNoticeInput>();
     expectTypeOf<ReadonlyKeys<ServerPluginNoticeScope>>().toEqualTypeOf<keyof ServerPluginNoticeScope>();
     expectTypeOf<ReadonlyKeys<ProjectInput>>().toEqualTypeOf<keyof ProjectInput>();
-    expectTypeOf<ReadonlyKeys<ProviderRequestContext>>().toEqualTypeOf<keyof ProviderRequestContext>();
     expectTypeOf<ReadonlyKeys<ProviderRemoveContext>>().toEqualTypeOf<keyof ProviderRemoveContext>();
     expectTypeOf<ReadonlyKeys<ServerPluginPeerRequestContext>>().toEqualTypeOf<keyof ServerPluginPeerRequestContext>();
     expectTypeOf<ReadonlyKeys<ServerPluginPeerChannelOpenContext>>().toEqualTypeOf<keyof ServerPluginPeerChannelOpenContext>();
     expectTypeOf<ReadonlyKeys<ServerPluginPeerChannelCloseContext>>().toEqualTypeOf<keyof ServerPluginPeerChannelCloseContext>();
     expectTypeOf<ReadonlyKeys<ServerPluginPeerWorkspace>>().toEqualTypeOf<keyof ServerPluginPeerWorkspace>();
-    expectTypeOf<ReadonlyKeys<ProviderRequestContext["workspace"]>>().toEqualTypeOf<keyof ProviderWorkspace>();
     expectTypeOf<ReadonlyKeys<WorkspaceRemovalPresentation>>().toEqualTypeOf<keyof WorkspaceRemovalPresentation>();
     expectTypeOf<keyof WorkspaceRemovalPresentation>().toEqualTypeOf<"actionLabel" | "confirmation">();
     expectTypeOf<WritableKeys<ProviderWorkspace>>().toEqualTypeOf<keyof ProviderWorkspace>();
@@ -252,8 +245,6 @@ async function exerciseActivation(activation: ServerPluginActivation, input: Pro
   await provider.probe(input, signal);
   const [workspace] = await provider.list(input, signal);
   if (workspace === undefined) throw new Error("Expected fixture workspace");
-  const request: ProviderRequestContext = { project: input, workspace, operation: "status", input: { paths: [] }, signal };
-  await provider.request?.(request);
   await provider.prepareRemove?.({ project: input, workspace, signal });
   await activation.peer?.request?.({
     project: input,
@@ -265,7 +256,7 @@ async function exerciseActivation(activation: ServerPluginActivation, input: Pro
       isMain: workspace.isMain,
       provider: {
         pluginId: "neutral-fixture",
-        capabilities: { request: true, remove: false },
+        capabilities: { remove: false },
       },
     },
     operation: "status",

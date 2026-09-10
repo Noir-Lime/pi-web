@@ -14,7 +14,6 @@ import type {
   PluginContributions,
   PluginStartContext,
   Workspace,
-  WorkspaceBackend,
   PluginPeerChannel,
   PluginPeerChannelOptions,
   PluginPeerRequestOptions,
@@ -51,10 +50,6 @@ type ReadonlyKeys<Value> = {
 type WritableKeys<Value> = Exclude<keyof Value, ReadonlyKeys<Value>>;
 type IsOptional<Value, Key extends keyof Value> = Pick<Value, Key> extends Required<Pick<Value, Key>> ? false : true;
 
-interface ExistingV2WorkspaceBackend {
-  request(operation: string, input: import("@jmfederico/pi-web/plugin-api").JsonValue): Promise<import("@jmfederico/pi-web/plugin-api").JsonValue>;
-}
-
 interface ExistingV2WorkspaceFiles {
   readFile(path: string): Promise<FileContentResponse>;
   listFiles(path: string): Promise<FileTreeResponse>;
@@ -89,6 +84,7 @@ describe("public browser plugin API", () => {
     expectTypeOf<ReadonlyKeys<Workspace>>().toEqualTypeOf<keyof Workspace>();
     expectTypeOf<ReadonlyKeys<WorkspaceProviderMetadata>>().toEqualTypeOf<keyof WorkspaceProviderMetadata>();
     expectTypeOf<ReadonlyKeys<WorkspaceProviderCapabilities>>().toEqualTypeOf<keyof WorkspaceProviderCapabilities>();
+    expectTypeOf<keyof WorkspaceProviderCapabilities>().toEqualTypeOf<"remove">();
     expectTypeOf<ReadonlyKeys<WorkspaceRemovalPresentation>>().toEqualTypeOf<keyof WorkspaceRemovalPresentation>();
   });
 
@@ -125,7 +121,7 @@ describe("public browser plugin API", () => {
     expectTypeOf<ReadonlyKeys<Pick<WorkspaceFilesCapabilityV1, "capabilityVersion" | "defaultUploadFolder" | "maxInlinePreviewBytes">>>().toEqualTypeOf<"capabilityVersion" | "defaultUploadFolder" | "maxInlinePreviewBytes">();
   });
 
-  it("keeps the owner-backed helper unchanged and models peer capabilities as valid detectable combinations", () => {
+  it("exposes only package peers and models their capabilities as valid detectable combinations", () => {
     type PeerIsOptional = IsOptional<WorkspaceContext, "peer">;
     type PeerRequestIsOptional = IsOptional<PluginPeer, "request">;
     type PeerChannelIsOptional = IsOptional<PluginPeer, "openChannel">;
@@ -135,8 +131,7 @@ describe("public browser plugin API", () => {
     type RequestOnlyIsValid = { request: PeerRequest } extends PluginPeer ? true : false;
     type ChannelOnlyIsValid = { openChannel: PeerChannel } extends PluginPeer ? true : false;
     type BothCapabilitiesAreValid = { request: PeerRequest; openChannel: PeerChannel } extends PluginPeer ? true : false;
-    expectTypeOf<ExistingV2WorkspaceBackend>().toExtend<WorkspaceBackend>();
-    expectTypeOf<keyof WorkspaceBackend>().toEqualTypeOf<"request">();
+    expectTypeOf<keyof WorkspaceContext>().toEqualTypeOf<"machine" | "workspace" | "state" | "files" | "peer" | "host">();
     expectTypeOf<keyof PluginPeer>().toEqualTypeOf<"request" | "openChannel">();
     expectTypeOf<PeerIsOptional>().toEqualTypeOf<true>();
     expectTypeOf<PeerRequestIsOptional>().toEqualTypeOf<true>();

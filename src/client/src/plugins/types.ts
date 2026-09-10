@@ -142,10 +142,6 @@ export interface WorkspaceFilesCapabilityV1 extends WorkspaceFiles {
 
 export type WorkspaceFilesContextValue = LegacyWorkspaceFiles | WorkspaceFilesCapabilityV1;
 
-export interface WorkspaceBackend {
-  request(operation: string, input: JsonValue): Promise<JsonValue>;
-}
-
 export interface PluginPeerRequestOptions {
   readonly signal?: AbortSignal;
 }
@@ -187,7 +183,6 @@ export interface WorkspaceContext {
   workspace: Workspace;
   state: AppState;
   files: WorkspaceFilesContextValue;
-  backend?: WorkspaceBackend;
   peer?: PluginPeer;
   host: WorkspaceHost;
 }

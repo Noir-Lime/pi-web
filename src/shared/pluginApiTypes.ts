@@ -27,7 +27,6 @@ export interface PluginCapabilityProvision<Value = unknown, Version extends numb
 }
 
 export interface WorkspaceProviderCapabilities {
-  readonly request: boolean;
   /** True only when this specific workspace advertises removal. */
   readonly remove: boolean;
 }

@@ -33,11 +33,43 @@ import type {
   ServerPluginHealthInspection,
   ServerPluginPairedBackendContribution,
 } from "./serverPluginRuntime.js";
-import {
-  PluginBackendRequestError,
-  type PluginBackendRequest,
-  type WorkspaceProviderRegistry,
-} from "../workspaces/workspaceProviderRegistry.js";
+import type { WorkspaceProviderRegistry } from "../workspaces/workspaceProviderRegistry.js";
+
+export interface PluginBackendRequest {
+  pluginId: string;
+  moduleRevision: string;
+  project: Project;
+  workspaceId: string;
+  operation: string;
+  input: unknown;
+}
+
+export type PluginBackendRequestErrorCode =
+  | "inactive-plugin"
+  | "stale-plugin-revision"
+  | "invalid-operation"
+  | "invalid-input"
+  | "workspace-not-found"
+  | "invalid-scope"
+  | "resolution-failed"
+  | "operation-unavailable"
+  | "request-failed"
+  | "request-timeout"
+  | "request-cancelled"
+  | "invalid-result";
+
+export class PluginBackendRequestError extends Error {
+  override name = "PluginBackendRequestError";
+
+  constructor(
+    readonly code: PluginBackendRequestErrorCode,
+    readonly statusCode: number,
+    message: string,
+    options: ErrorOptions = {},
+  ) {
+    super(message, options);
+  }
+}
 
 export interface PluginBackendRegistryOptions {
   /** Healthy direct contributions from one immutable server-plugin snapshot. */

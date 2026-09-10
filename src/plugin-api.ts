@@ -242,11 +242,6 @@ export interface WorkspaceFilesCapabilityV1 extends WorkspaceFiles {
 export type WorkspaceFilesContextValue = LegacyWorkspaceFiles | WorkspaceFilesCapabilityV1;
 export type WorkspacePanelFiles = WorkspaceFiles;
 
-/** JSON-only request path to the server module that currently owns this workspace. */
-export interface WorkspaceBackend {
-  request(operation: string, input: JsonValue): Promise<JsonValue>;
-}
-
 export interface PluginPeerRequestOptions {
   /** Cancels this bounded request through local or federated host transport. */
   readonly signal?: AbortSignal;
@@ -300,8 +295,6 @@ export interface WorkspaceContext {
   workspace: Workspace;
   state?: PluginRuntimeState;
   files: WorkspaceFilesContextValue;
-  /** Legacy request helper for the server plugin that currently owns this workspace. */
-  backend?: WorkspaceBackend;
   /** Exact package-paired request/channel capabilities, independent of workspace ownership. */
   peer?: PluginPeer;
   host: WorkspaceHost;

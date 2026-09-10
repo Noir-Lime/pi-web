@@ -79,7 +79,7 @@ describe("PluginBackendRegistry", () => {
       label: "feature/paired",
       provider: {
         pluginId: "git",
-        capabilities: { request: false, remove: false },
+        capabilities: { remove: false },
         metadata: { branch: "feature/paired" },
       },
     });
@@ -113,45 +113,6 @@ describe("PluginBackendRegistry", () => {
       operation: "notes.summary",
       input: null,
     })).resolves.toEqual({ path: project.path, provider: null });
-  });
-
-  it("keeps owner-backed requests private and never redirects them when the same package adds a channel", async () => {
-    const request = vi.fn<NonNullable<WorkspaceProvider["request"]>>(({ workspace, operation }) => Promise.resolve({
-      privateData: workspace.data ?? null,
-      operation,
-    }));
-    const workspaces = providerRegistry([providerContribution("git", {
-      probe: () => Promise.resolve("claim"),
-      list: () => Promise.resolve([{
-        key: "main",
-        path: project.path,
-        label: "main",
-        isMain: true,
-        data: { head: "abc123" },
-      }]),
-      request,
-    })]);
-    const workspaceId = (await workspaces.resolve(project)).workspaces[0]?.id;
-    if (workspaceId === undefined) throw new Error("Expected provider workspace");
-    const paired = new PluginBackendRegistry({
-      contributions: [channelContribution("git", () => ({ receive: () => undefined }))],
-      workspaces,
-    });
-    const backendRequest = {
-      pluginId: "git",
-      moduleRevision: "git-r1",
-      project,
-      workspaceId,
-      operation: "git.status",
-      input: null,
-    };
-
-    await expect(paired.request(backendRequest))
-      .rejects.toMatchObject({ code: "operation-unavailable", statusCode: 501 });
-    expect(request).not.toHaveBeenCalled();
-    await expect(workspaces.request(backendRequest))
-      .resolves.toEqual({ privateData: { head: "abc123" }, operation: "git.status" });
-    expect(request).toHaveBeenCalledOnce();
   });
 
   it("attributes stale revisions, missing workspaces, and invalid JSON boundaries", async () => {

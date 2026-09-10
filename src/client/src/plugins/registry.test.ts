@@ -8,7 +8,7 @@ import { corePlugin } from "./core";
 import { PluginRegistry, installWorkspaceLabelScope, installWorkspacePanelScope } from "./registry";
 import { themePackPlugin } from "./themes";
 import type { PiWebPlugin, PluginActivationResult, PluginCapability, PluginRuntimeContext, QualifiedContributionId, ThemeTokens, WorkspaceFiles, WorkspaceHost, WorkspaceInvalidation, WorkspaceLabelContext, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePanelContribution, WorkspacePluginBinding } from "./types";
-import { createPluginPeer } from "./workspaceBackend";
+import { createPluginPeer } from "./pluginPeer";
 import type { PluginBackendRequestTarget } from "../api/pluginBackends";
 
 function createContext(statePatch: Partial<AppState> = {}) {
@@ -224,7 +224,7 @@ describe("PluginRegistry", () => {
 
     const owned = createContext({
       selectedMachine: testMachine("remote-1"),
-      selectedWorkspace: testWorkspace({ provider: { pluginId: "board-tools", capabilities: { request: true, remove: false } } }),
+      selectedWorkspace: testWorkspace({ provider: { pluginId: "board-tools", capabilities: { remove: false } } }),
     });
     const action = registry.getActions(owned.context)[0];
     expect(action).toMatchObject({ id: `${runtimePluginId}:open`, enabled: true });
@@ -233,7 +233,7 @@ describe("PluginRegistry", () => {
 
     const runtimeOwned = createContext({
       selectedMachine: testMachine("remote-1"),
-      selectedWorkspace: testWorkspace({ provider: { pluginId: runtimePluginId, capabilities: { request: true, remove: false } } }),
+      selectedWorkspace: testWorkspace({ provider: { pluginId: runtimePluginId, capabilities: { remove: false } } }),
     });
     expect(registry.getActions(runtimeOwned.context)[0]?.enabled).toBe(false);
   });
@@ -1671,7 +1671,7 @@ function createWorkspaceLabelContext(machineId: string, workspace = testWorkspac
     workspace,
     state: { ...initialAppState(), selectedMachine: testMachine(machineId) },
     files,
-    backend: { request: vi.fn(() => Promise.resolve(null)) },
+    peer: { request: vi.fn(() => Promise.resolve(null)) },
     host,
   };
 }
@@ -1683,16 +1683,16 @@ function createWorkspacePanelContext(machineId: string, prompt: WorkspacePanelCo
     workspace,
     state: { ...initialAppState(), selectedMachine: testMachine(machineId) },
     files: { readFile: vi.fn(), listFiles: vi.fn(), writeFile: vi.fn(), deleteFile: vi.fn(), moveFile: vi.fn() },
-    backend: { request: vi.fn(() => Promise.resolve(null)) },
+    peer: { request: vi.fn(() => Promise.resolve(null)) },
     prompt,
     terminal: { open: vi.fn(), runCommand: vi.fn() },
     host: { requestRender: vi.fn() },
   };
 }
 
-function requiredPluginPeer(backend: WorkspacePanelContext["peer"]): NonNullable<WorkspacePanelContext["peer"]> {
-  if (backend === undefined) throw new Error("Expected a paired workspace backend");
-  return backend;
+function requiredPluginPeer(peer: WorkspacePanelContext["peer"]): NonNullable<WorkspacePanelContext["peer"]> {
+  if (peer === undefined) throw new Error("Expected a package peer");
+  return peer;
 }
 
 function testFileContent(path = "README.md"): FileContentResponse {

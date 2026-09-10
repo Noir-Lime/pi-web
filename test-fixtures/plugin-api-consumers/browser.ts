@@ -4,7 +4,6 @@ import type {
   PluginPeer,
   PiWebPlugin,
   Workspace,
-  WorkspaceBackend,
   WorkspaceFiles,
   WorkspaceFilesCapabilityV1,
   WorkspaceFilesContextValue,
@@ -84,10 +83,6 @@ function capabilityV1(files: WorkspaceFilesContextValue): WorkspaceFilesCapabili
   return files.capabilityVersion === 1 ? files : undefined;
 }
 
-function requestOwnerBackend(backend: WorkspaceBackend): Promise<JsonValue> {
-  return backend.request("fixture.owner-summary", null);
-}
-
 async function requestPeer(context: WorkspacePanelContext): Promise<JsonValue | undefined> {
   const peer: PluginPeer | undefined = context.peer;
   if (peer?.request === undefined) return undefined;
@@ -101,7 +96,7 @@ function openPeerChannel(context: WorkspacePanelContext): void {
 }
 
 const echoJson = (value: JsonValue): JsonValue => value;
-export { capabilityV1, echoJson, identityCapability, openPeerChannel, plugin, publishedCapability, requestOwnerBackend, requestPeer };
+export { capabilityV1, echoJson, identityCapability, openPeerChannel, plugin, publishedCapability, requestPeer };
 export type {
   BrowserWorkspace,
   ExtendedWorkspaceFiles,

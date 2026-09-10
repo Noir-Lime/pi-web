@@ -23,7 +23,7 @@ describe("Info plugin copy-diagnostics action", () => {
           isMain: true,
           provider: {
             pluginId: "git",
-            capabilities: { request: true, remove: true },
+            capabilities: { remove: true },
             metadata: { branch: "main" },
           },
         },

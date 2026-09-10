@@ -2,7 +2,6 @@ import type { JsonValue, Workspace } from "../api";
 import {
   openPairedPluginBackendChannel,
   requestPairedPluginBackend,
-  requestPluginBackend,
   type PluginBackendChannel,
   type PluginBackendChannelOptions,
   type PluginBackendRequestOptions,
@@ -11,47 +10,30 @@ import {
 import type {
   PluginPeer,
   PluginPeerRequestOptions,
-  WorkspaceBackend,
   WorkspacePluginBinding,
 } from "./types";
 
-export type PluginBackendRequester = (
+export type PluginPeerRequester = (
   target: PluginBackendRequestTarget,
   operation: string,
   input: JsonValue,
   options?: PluginBackendRequestOptions,
 ) => Promise<JsonValue>;
 
-export type PluginBackendChannelOpener = (
+export type PluginPeerChannelOpener = (
   target: PluginBackendRequestTarget,
   operation: string,
   input: JsonValue,
   options: PluginBackendChannelOptions,
 ) => Promise<PluginBackendChannel>;
 
-/** Preserve the browser-v2 owner-backed helper independently of paired contributions. */
-export function createPluginWorkspaceBackend(
-  binding: WorkspacePluginBinding,
-  workspace: Pick<Workspace, "id" | "projectId" | "provider">,
-  machineId: string,
-  request: PluginBackendRequester = requestPluginBackend,
-): WorkspaceBackend | undefined {
-  const provider = workspace.provider;
-  if (provider?.pluginId !== binding.sourcePluginId || !provider.capabilities.request) return undefined;
-  const target = pluginBackendTarget(binding, workspace, machineId);
-  if (target === undefined) return undefined;
-  return {
-    request: (operation, input) => request(target, operation, input),
-  };
-}
-
 /** Expose only the capabilities contributed by this exact revision-paired package. */
 export function createPluginPeer(
   binding: WorkspacePluginBinding,
   workspace: Pick<Workspace, "id" | "projectId">,
   machineId: string,
-  request: PluginBackendRequester = requestPairedPluginBackend,
-  openChannel: PluginBackendChannelOpener = openPairedPluginBackendChannel,
+  request: PluginPeerRequester = requestPairedPluginBackend,
+  openChannel: PluginPeerChannelOpener = openPairedPluginBackendChannel,
 ): PluginPeer | undefined {
   if (binding.pairedRequestVersion !== 1 && binding.pairedChannelVersion !== 1) return undefined;
   const target = pluginBackendTarget(binding, workspace, machineId);

@@ -208,7 +208,6 @@ function parseProvider(value: unknown, workspaceLabel: string): NonNullable<Work
   return Object.freeze({
     pluginId: requirePluginId(value, "pluginId", label),
     capabilities: Object.freeze({
-      request: requireBoolean(capabilities, "request", `${label} capabilities`),
       remove: requireBoolean(capabilities, "remove", `${label} capabilities`),
     }),
     ...(metadata === undefined ? {} : { metadata }),

@@ -37,7 +37,7 @@ import { themePackPlugin } from "../plugins/themes";
 import { loadExternalPlugins, type ExternalPluginLoadResult } from "../plugins/external";
 import { REQUIRED_TERMINAL_PLUGIN_ID, type TerminalPluginMode } from "../../../shared/requiredTerminalPlugin";
 import { PluginRegistry, installPluginRuntimeScope, installWorkspaceLabelScope, installWorkspacePanelScope, type BrowserPluginLifecyclePhase, type PluginRegistrationFailure } from "../plugins/registry";
-import { createPluginPeer, createPluginWorkspaceBackend } from "../plugins/workspaceBackend";
+import { createPluginPeer } from "../plugins/pluginPeer";
 import { REQUIRED_TERMINAL_BROWSER_FACADE_CAPABILITY, requiredTerminalUnavailableError, type RequiredTerminalBrowserComposition, type WorkspaceContributionNavigationV1 } from "../plugins/requiredTerminalFacade";
 import { createWorkspaceFiles as createPluginWorkspaceFiles } from "../plugins/workspaceFiles";
 import { contributionQueryFromRecord, isContributionQueryLocalKey, patchContributionQueryRecord, readContributionQuery, readContributionQueryRecord, setContributionQueryKey, writeContributionQueryRecord, type ContributionQueryRecord } from "../namespacedQueryArgs";
@@ -1941,14 +1941,12 @@ export class PiWebApp extends LitElement {
   private createWorkspaceLabelContext(workspace: Workspace): WorkspaceLabelContext {
     const machine = pluginMachineFromState(this.state);
     const createContext = (binding: WorkspacePluginBinding): WorkspaceLabelContext => {
-      const backend = createPluginWorkspaceBackend(binding, workspace, machine.id);
       const peer = createPluginPeer(binding, workspace, machine.id);
       return installWorkspaceLabelScope({
         machine,
         workspace,
         state: this.state,
         files: this.createWorkspaceFiles(workspace, machine),
-        ...(backend === undefined ? {} : { backend }),
         ...(peer === undefined ? {} : { peer }),
         host: this.createWorkspaceHost(),
       }, createContext);
@@ -1983,14 +1981,12 @@ export class PiWebApp extends LitElement {
       // Retained panel contexts may outlive the visible surface. Terminal and
       // navigation mutations use this token; workspace data refreshes do not.
       const navigation = this.beginNavigationOperation(WORKSPACE_SURFACE_SCOPE);
-      const backend = createPluginWorkspaceBackend(binding, workspace, machineId);
       const peer = createPluginPeer(binding, workspace, machineId);
       return installWorkspacePanelScope({
         machine,
         workspace,
         state: this.state,
         files: this.createWorkspaceFiles(workspace, machine),
-        ...(backend === undefined ? {} : { backend }),
         ...(peer === undefined ? {} : { peer }),
         prompt: this.createPromptEditor(),
         terminal: this.workspaceTerminal(binding.registrationPluginId, workspace, machineId, navigation),
