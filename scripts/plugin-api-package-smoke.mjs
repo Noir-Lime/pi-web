@@ -13,8 +13,8 @@ const expectedPackageDeclarationPaths = [
   "plugin-api.d.ts",
   "server-plugin-api.d.ts",
 ].sort();
-const firstMinimalPluginPlatformVersion = "1.202609.1";
-const workspaceProviderExamplePiWebRange = `^${firstMinimalPluginPlatformVersion}`;
+const minimalPluginPlatformReleaseFloor = "2.202609.0";
+const workspaceProviderExamplePiWebRange = `^${minimalPluginPlatformReleaseFloor}`;
 const pluginConsumerCompilerModes = [
   {
     name: "NodeNext",
