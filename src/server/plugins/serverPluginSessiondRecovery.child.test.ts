@@ -82,7 +82,7 @@ describe("sessiond persisted server plugin recovery", () => {
 
   // Plugin stop on SIGTERM requires POSIX signal delivery; Windows
   // force-terminates the child without running shutdown handlers.
-  it.skipIf(process.platform === "win32")("stops activated plugins when SIGTERM arrives during sessiond startup", async () => {
+  it.skipIf(process.platform === "win32")("disposes activated plugins when SIGTERM arrives during sessiond startup", async () => {
     // This source-level child bypasses start:sessiond's build:plugins prerequisite.
     const terminalPackageRoot = resolve("dist/pi-web-plugins/terminal");
     tempRoots.push(terminalPackageRoot);
@@ -103,7 +103,7 @@ describe("sessiond persisted server plugin recovery", () => {
     await writeFile(join(pluginRoot, "server.mjs"), `
       import { writeFileSync } from "node:fs";
       export default {
-        apiVersion: 2,
+        apiVersion: 3,
         name: "Startup signal fixture",
         activate() {
           return {
@@ -112,7 +112,7 @@ describe("sessiond persisted server plugin recovery", () => {
               console.error("PLUGIN_STARTED");
               await new Promise((resolve) => setTimeout(resolve, 250));
             },
-            stop() {
+            dispose() {
               writeFileSync(${JSON.stringify(stoppedMarker)}, "stopped");
             }
           };

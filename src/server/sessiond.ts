@@ -47,6 +47,10 @@ import { PI_WEB_SESSION_ENV, sessionEnvironmentPromptSections } from "./sessions
 import { createServerPluginExecFile } from "./plugins/serverPluginExec.js";
 import { createServerPluginRuntime } from "./plugins/serverPluginRuntime.js";
 import {
+  REQUIRED_TERMINAL_SERVICE_CAPABILITY,
+  unavailableRequiredTerminalService,
+} from "./terminals/requiredTerminalService.js";
+import {
   eligiblePluginBackendContributions,
   PluginBackendRegistry,
 } from "./plugins/pluginBackendRegistry.js";
@@ -300,7 +304,9 @@ async function createSessionDaemonRuntime() {
       }),
     }));
     auth.subscribe((change) => { sessions.applyAuthChange(change); });
-    const terminals = serverPlugins.requiredTerminalService();
+    const terminals = serverPlugins.safeStartLevel() === "none"
+      ? unavailableRequiredTerminalService()
+      : serverPlugins.resolve(REQUIRED_TERMINAL_SERVICE_CAPABILITY);
     terminals.bindActivitySink({
       updateTerminal: (terminal) => { workspaceActivity.updateTerminal(terminal); },
       removeTerminal: (terminalId, cwd) => { workspaceActivity.removeTerminal(terminalId, cwd); },

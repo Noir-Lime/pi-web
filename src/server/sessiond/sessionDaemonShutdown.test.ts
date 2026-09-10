@@ -13,7 +13,10 @@ describe("session daemon shutdown", () => {
       onFailure,
       dependencies: {
         quiesceServer: () => { events.push("quiesce"); },
-        serverPlugins: { stop: () => { events.push("plugins"); throw failure; } },
+        serverPlugins: {
+          beginShutdown: () => { events.push("plugin-lifetimes"); },
+          stop: () => { events.push("plugins"); throw failure; },
+        },
         catalogRefresher: { dispose: () => { events.push("catalog"); } },
         auth: { dispose: () => { events.push("auth"); } },
         sessions: { dispose: () => { events.push("sessions"); } },
@@ -23,7 +26,7 @@ describe("session daemon shutdown", () => {
       },
     });
 
-    expect(events).toEqual(["quiesce", "catalog", "sessions", "channels", "server", "plugins", "auth", "unread"]);
+    expect(events).toEqual(["quiesce", "plugin-lifetimes", "catalog", "sessions", "channels", "server", "plugins", "auth", "unread"]);
     expect(onFailure).toHaveBeenCalledOnce();
     expect(logger.error).toHaveBeenCalledWith(
       { err: failure, operation: "stop server plugins" },

@@ -33,7 +33,7 @@ interface GitWorktreeInfo {
 }
 
 const plugin: PiWebServerPlugin = {
-  apiVersion: 2,
+  apiVersion: 3,
   name: "Git",
   activate(context) {
     return { workspaceProvider: createGitWorkspaceProvider(context) };

@@ -2,6 +2,8 @@ import type {
   JsonObject,
   JsonPrimitive,
   JsonValue,
+  PluginCapability,
+  PluginCapabilityProvision,
   WorkspaceProviderMetadata,
   WorkspaceRemovalPresentation,
 } from "./shared/pluginApiTypes.js";
@@ -10,6 +12,8 @@ export type {
   JsonObject,
   JsonPrimitive,
   JsonValue,
+  PluginCapability,
+  PluginCapabilityProvision,
   WorkspaceProviderMetadata,
   WorkspaceRemovalPresentation,
 };
@@ -18,14 +22,16 @@ type MaybePromise<T> = T | Promise<T>;
 
 /** Public server entry exported by a package's `serverModule`. */
 export interface PiWebServerPlugin {
-  apiVersion: 2;
+  apiVersion: 3;
   name: string;
+  /** Exact capability versions that must be active before this plugin starts. */
+  requires?: readonly PluginCapability[];
   activate(context: ServerPluginActivationContext): MaybePromise<ServerPluginActivation>;
 }
 
 /** Host-owned frozen values supplied during server plugin activation. */
 export interface ServerPluginActivationContext {
-  readonly apiVersion: 2;
+  readonly apiVersion: 3;
   readonly pluginId: string;
   readonly packageRoot: string;
   readonly logger: ServerPluginLogger;
@@ -39,9 +45,14 @@ export interface ServerPluginActivationContext {
   readonly execFile: (request: ServerPluginExecFileRequest) => Promise<ServerPluginExecFileResult>;
   /**
    * Signal for this activation invocation. It is aborted when activation times
-   * out or settles; it is not a plugin-lifetime shutdown signal.
+   * out or settles and must not be retained for lifetime cleanup.
    */
   readonly signal: AbortSignal;
+  /**
+   * Signal for the complete plugin lifetime. It is aborted as soon as host
+   * ingress quiesces, before bounded disposal begins.
+   */
+  readonly lifetimeSignal: AbortSignal;
 }
 
 export type ServerPluginNoticeSeverity = "info" | "warning" | "error";
@@ -65,8 +76,9 @@ export interface ServerPluginNoticeInput {
 
 /**
  * Optional versioned capability for recording host-owned server notices.
- * It is live during activation, start, and the active plugin lifetime, then is
- * revoked before failed-start rollback or ordinary stop cleanup begins.
+ * It remains live through activation, start, active operation, and shutdown
+ * dependency cleanup, then is revoked before failed-start rollback or this
+ * plugin's ordinary disposal begins.
  */
 export interface ServerPluginNoticeReporterV1 {
   readonly version: 1;
@@ -103,19 +115,33 @@ export interface ServerPluginExecFileResult {
   stderrTruncated: boolean;
 }
 
+/** Resolver containing only the exact capability requirements declared by a plugin. */
+export interface ServerPluginCapabilityResolver {
+  readonly resolve: <Value>(capability: PluginCapability<Value>) => Value;
+}
+
+/** Frozen values supplied once all declared dependencies are active. */
+export interface ServerPluginStartContext {
+  readonly capabilities: ServerPluginCapabilityResolver;
+  /** Signal for this bounded start invocation, not the plugin lifetime. */
+  readonly signal: AbortSignal;
+}
+
 /**
  * Signals passed to lifecycle callbacks are scoped to that single invocation
- * and are aborted when it times out or settles. They are not plugin-lifetime
- * shutdown signals; the host invokes `stop()` explicitly during shutdown.
+ * and are aborted when it times out or settles. Lifetime cancellation is
+ * supplied separately during activation and precedes bounded disposal.
  */
 export interface ServerPluginActivation {
   workspaceProvider?: WorkspaceProvider;
   /** Serve bounded requests and optional duplex channels from this package's paired browser entry. */
   peer?: ServerPluginPeer;
-  /** Initialize resources within one host-bounded start invocation. */
-  start?(signal: AbortSignal): MaybePromise<void>;
-  /** Release resources within one host-bounded stop invocation. */
-  stop?(signal: AbortSignal): MaybePromise<void>;
+  /** Typed capability values owned by this plugin and published only after start succeeds. */
+  provides?: readonly PluginCapabilityProvision[];
+  /** Initialize resources after every exact declared capability requirement is active. */
+  start?(context: ServerPluginStartContext): MaybePromise<void>;
+  /** Release resources within one host-bounded disposal invocation. */
+  dispose?(signal: AbortSignal): MaybePromise<void>;
   /** Inspect health within one host-bounded health invocation. */
   health?(signal: AbortSignal): MaybePromise<ServerPluginHealth>;
 }

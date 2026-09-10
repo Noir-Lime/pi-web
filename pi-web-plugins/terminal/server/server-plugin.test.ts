@@ -9,7 +9,12 @@ import type {
   ServerPluginActivationContext,
   ServerPluginNoticeInput,
 } from "@jmfederico/pi-web/server-plugin-api";
-import { activateTerminalPlugin, createTerminalPeer, terminalOutputFrames } from "./server-plugin.js";
+import {
+  activateTerminalPlugin,
+  createTerminalPeer,
+  TERMINAL_SERVICE_CAPABILITY,
+  terminalOutputFrames,
+} from "./server-plugin.js";
 import { TerminalService } from "./terminalService.js";
 
 const services: TerminalService[] = [];
@@ -58,7 +63,7 @@ describe.skipIf(process.platform === "win32")("Terminal peer server entry", () =
   it("reports a private host-composed command failure without exposing the intent on the run", async () => {
     const records: ServerPluginNoticeInput[] = [];
     const activation = activateTerminalPlugin(activationContext("pi-web.terminal", (input) => { records.push(input); }));
-    const run = activation.requiredTerminalService.runCommand({
+    const run = terminalServiceCapability(activation).runCommand({
       origin: "core",
       projectId: "project-1",
       workspaceId: "workspace-1",
@@ -83,7 +88,7 @@ describe.skipIf(process.platform === "win32")("Terminal peer server entry", () =
       }]);
     });
     expect(run).not.toHaveProperty("failureNotice");
-    await activation.stop?.(new AbortController().signal);
+    await activation.dispose?.(new AbortController().signal);
   });
 
   it("does not accept a failure-notice intent from the browser peer protocol", async () => {
@@ -108,7 +113,7 @@ describe.skipIf(process.platform === "win32")("Terminal peer server entry", () =
     });
     expect(records).toEqual([]);
     expect(runValue).not.toHaveProperty("failureNotice");
-    await activation.stop?.(new AbortController().signal);
+    await activation.dispose?.(new AbortController().signal);
   });
 
   it("attaches a bounded JSON channel for input, resize, output, and cleanup", async () => {
@@ -170,10 +175,12 @@ describe.skipIf(process.platform === "win32")("Terminal peer server entry", () =
     const activation = activateTerminalPlugin(activationContext("pi-web.terminal"));
     expect(typeof activation.peer?.request).toBe("function");
     expect(typeof activation.peer?.openChannel).toBe("function");
-    expect(typeof activation.requiredTerminalService.closeForCwd).toBe("function");
-    expect(typeof activation.requiredTerminalService.runCommand).toBe("function");
-    expect(typeof activation.requiredTerminalService.bindActivitySink).toBe("function");
-    await activation.stop?.(new AbortController().signal);
+    const capability = terminalServiceCapability(activation);
+    expect(typeof capability.closeForCwd).toBe("function");
+    expect(typeof capability.runCommand).toBe("function");
+    expect(typeof capability.bindActivitySink).toBe("function");
+    expect(activation).not.toHaveProperty("requiredTerminalService");
+    await activation.dispose?.(new AbortController().signal);
 
     expect(() => activateTerminalPlugin(activationContext("other"))).toThrow("must activate as plugin id pi-web.terminal");
 
@@ -240,7 +247,7 @@ function activationContext(
   recordNotice: (input: ServerPluginNoticeInput) => void = () => undefined,
 ): ServerPluginActivationContext {
   return Object.freeze({
-    apiVersion: 2,
+    apiVersion: 3,
     pluginId,
     packageRoot: process.cwd(),
     logger: Object.freeze({
@@ -253,7 +260,17 @@ function activationContext(
     notices: Object.freeze({ version: 1, record: recordNotice }),
     execFile: () => Promise.reject(new Error("not used")),
     signal: new AbortController().signal,
+    lifetimeSignal: new AbortController().signal,
   });
+}
+
+function terminalServiceCapability(activation: ReturnType<typeof activateTerminalPlugin>) {
+  const provision = activation.provides.find(({ capability }) => (
+    capability.pluginId === TERMINAL_SERVICE_CAPABILITY.pluginId
+      && capability.id === TERMINAL_SERVICE_CAPABILITY.id
+  ));
+  if (provision === undefined) throw new Error("Expected Terminal service capability provision");
+  return TERMINAL_SERVICE_CAPABILITY.parse(provision.value);
 }
 
 function jsonString(value: JsonValue, key: string): string {

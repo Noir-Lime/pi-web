@@ -1,6 +1,8 @@
 import type {
   JsonObject,
   JsonValue,
+  PluginCapability,
+  PluginCapabilityProvision,
   ServerPluginPeer,
   ServerPluginPeerChannel,
   ServerPluginPeerChannelOpenContext,
@@ -29,13 +31,19 @@ interface RequiredTerminalServiceContribution {
   bindActivitySink(sink: TerminalActivitySink): void;
 }
 
-/** Bundled Terminal's privileged host-only composition result; not part of the public server plugin API. */
+export const TERMINAL_SERVICE_CAPABILITY = Object.freeze({
+  pluginId: "pi-web.terminal",
+  id: "service",
+  version: 1,
+  parse: snapshotTerminalServiceCapability,
+}) satisfies PluginCapability<RequiredTerminalServiceContribution, 1>;
+
 interface TerminalActivation extends ServerPluginActivation {
-  requiredTerminalService: RequiredTerminalServiceContribution;
+  provides: readonly [PluginCapabilityProvision<RequiredTerminalServiceContribution, 1>];
 }
 
 const plugin: PiWebServerPlugin = {
-  apiVersion: 2,
+  apiVersion: 3,
   name: "Terminal",
   activate(context) {
     return activateTerminalPlugin(context);
@@ -58,19 +66,41 @@ export function activateTerminalPlugin(context: ServerPluginActivationContext): 
     runCommand: (options: RunTerminalCommandOptions) => service.runCommand(options),
     bindActivitySink: (sink: TerminalActivitySink) => { service.bindActivitySink(sink); },
   });
+  const serviceProvision = Object.freeze({
+    capability: TERMINAL_SERVICE_CAPABILITY,
+    value: requiredTerminalService,
+  }) satisfies PluginCapabilityProvision<RequiredTerminalServiceContribution, 1>;
   let stopped = false;
   return Object.freeze({
     peer: createTerminalPeer(service, context),
-    requiredTerminalService,
+    provides: Object.freeze([serviceProvision] as const),
     health: () => stopped
       ? Object.freeze({ status: "unhealthy" as const, message: "Terminal service is stopped" })
       : Object.freeze({ status: "healthy" as const }),
-    stop: () => {
+    dispose: () => {
       if (stopped) return;
       stopped = true;
       service.dispose();
     },
   });
+}
+
+function snapshotTerminalServiceCapability(value: unknown): RequiredTerminalServiceContribution {
+  if (!isRequiredTerminalServiceContribution(value)) {
+    throw new Error("Terminal service capability must expose closeForCwd, runCommand, and bindActivitySink");
+  }
+  return Object.freeze({
+    closeForCwd: (cwd: string) => { value.closeForCwd(cwd); },
+    runCommand: (options: RunTerminalCommandOptions) => value.runCommand(options),
+    bindActivitySink: (sink: TerminalActivitySink) => { value.bindActivitySink(sink); },
+  });
+}
+
+function isRequiredTerminalServiceContribution(value: unknown): value is RequiredTerminalServiceContribution {
+  if (typeof value !== "object" || value === null) return false;
+  return typeof Reflect.get(value, "closeForCwd") === "function"
+    && typeof Reflect.get(value, "runCommand") === "function"
+    && typeof Reflect.get(value, "bindActivitySink") === "function";
 }
 
 export function createTerminalPeer(

@@ -404,7 +404,7 @@ function isRuntimeState(value: unknown): value is ServerPluginRuntimeState {
 }
 
 function isLifecyclePhase(value: unknown): value is ServerPluginLifecyclePhase {
-  return value === "import" || value === "activate" || value === "validate" || value === "start" || value === "health" || value === "stop";
+  return value === "import" || value === "activate" || value === "validate" || value === "start" || value === "health" || value === "dispose";
 }
 
 function isCatalogDiagnosticCode(value: unknown): value is PiWebPluginCatalogDiagnosticCode {

@@ -138,7 +138,7 @@ describe("production build contents", () => {
         if (!isRecord(imported)) throw new Error(`Built server plugin did not import as a module: ${plugin.id}`);
         const pluginExport = imported["default"];
         if (!isRecord(pluginExport)) throw new Error(`Built server plugin has no default object export: ${plugin.id}`);
-        expect(pluginExport["apiVersion"]).toBe(2);
+        expect(pluginExport["apiVersion"]).toBe(3);
         expect(typeof pluginExport["activate"]).toBe("function");
       }
 

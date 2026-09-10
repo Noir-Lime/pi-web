@@ -2,6 +2,9 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type {
   JsonObject,
+  PluginCapability,
+  PluginCapabilityProvision,
+  ServerPluginCapabilityResolver,
   ServerPluginPeer,
   ServerPluginPeerChannel,
   ServerPluginPeerChannelCloseContext,
@@ -19,6 +22,7 @@ import type {
   ServerPluginExecFileResult,
   ServerPluginLogger,
   ServerPluginNoticeInput,
+  ServerPluginStartContext,
   ServerPluginNoticeReporterV1,
   ServerPluginNoticeScope,
   WorkspaceProvider,
@@ -36,6 +40,31 @@ const commandResult: ServerPluginExecFileResult = {
   stderrTruncated: false,
 };
 
+interface FixtureCapability {
+  readonly label: string;
+}
+
+const dependencyCapability = Object.freeze({
+  pluginId: "fixture.provider",
+  id: "service",
+  version: 1,
+  parse(value: unknown): FixtureCapability {
+    if (typeof value !== "object" || value === null || !("label" in value)) {
+      throw new Error("Fixture capability is invalid");
+    }
+    const label: unknown = value.label;
+    if (typeof label !== "string") throw new Error("Fixture capability is invalid");
+    return Object.freeze({ label });
+  },
+}) satisfies PluginCapability<FixtureCapability, 1>;
+
+const providedCapability = Object.freeze({
+  pluginId: "neutral-fixture",
+  id: "snapshot",
+  version: 2,
+  parse: dependencyCapability.parse,
+}) satisfies PluginCapability<FixtureCapability, 2>;
+
 type IfEqual<Left, Right, Then, Else = never> =
   (<Value>(value: Value) => Value extends Left ? 1 : 2) extends
   (<Value>(value: Value) => Value extends Right ? 1 : 2) ? Then : Else;
@@ -52,8 +81,9 @@ type ReadonlyKeys<Value> = {
 type WritableKeys<Value> = Exclude<keyof Value, ReadonlyKeys<Value>>;
 
 describe("public server plugin API", () => {
-  it("supports lifecycle-owned workspace providers and package-paired JSON capabilities", async () => {
+  it("supports lifecycle-owned providers, peers, and typed capability composition", async () => {
     const observedSignals: AbortSignal[] = [];
+    const observedLifetimes: AbortSignal[] = [];
     const provider: WorkspaceProvider = {
       fallback: false,
       probe(_project, signal) {
@@ -82,28 +112,39 @@ describe("public server plugin API", () => {
       },
     };
     const plugin: PiWebServerPlugin = {
-      apiVersion: 2,
+      apiVersion: 3,
       name: "Neutral contract fixture",
-      activate: () => ({
-        workspaceProvider: provider,
-        peer: {
-          request: (context) => {
-            observedSignals.push(context.signal);
-            return { operation: context.operation, workspaceId: context.workspace.id };
+      requires: [dependencyCapability],
+      activate: ({ lifetimeSignal }) => {
+        observedLifetimes.push(lifetimeSignal);
+        return {
+          workspaceProvider: provider,
+          peer: {
+            request: (context) => {
+              observedSignals.push(context.signal);
+              return { operation: context.operation, workspaceId: context.workspace.id };
+            },
           },
-        },
-        start: (signal) => { observedSignals.push(signal); },
-        stop: (signal) => { observedSignals.push(signal); },
-        health: (signal) => {
-          observedSignals.push(signal);
-          return { status: "healthy", details: { executable: true } };
-        },
-      }),
+          provides: [{ capability: providedCapability, value: { label: "snapshot" } }],
+          start: ({ capabilities, signal }) => {
+            observedSignals.push(signal);
+            if (capabilities.resolve(dependencyCapability).label !== "dependency") {
+              throw new Error("Expected resolved fixture dependency");
+            }
+          },
+          dispose: (signal) => { observedSignals.push(signal); },
+          health: (signal) => {
+            observedSignals.push(signal);
+            return { status: "healthy", details: { executable: true } };
+          },
+        };
+      },
     };
     const signal = AbortSignal.timeout(1_000);
     const settings: JsonObject = { mode: "test", nested: [1, true, null] };
+    const lifetimeController = new AbortController();
     const activation = await plugin.activate({
-      apiVersion: 2,
+      apiVersion: 3,
       pluginId: "neutral-fixture",
       packageRoot: "/plugins/neutral-fixture",
       settings,
@@ -116,21 +157,28 @@ describe("public server plugin API", () => {
         error() { /* no-op */ },
       },
       execFile: () => Promise.resolve(commandResult),
+      lifetimeSignal: lifetimeController.signal,
     });
 
     await exerciseActivation(activation, project, signal);
 
     expect(observedSignals).toHaveLength(8);
     expect(observedSignals.every((observed) => observed === signal)).toBe(true);
+    expect(observedLifetimes).toEqual([lifetimeController.signal]);
   });
 
   it("keeps host inputs readonly and concrete services out of the declaration surface", async () => {
     expectTypeOf<keyof ServerPluginActivationContext>().toEqualTypeOf<
-      "apiVersion" | "pluginId" | "packageRoot" | "logger" | "settings" | "notices" | "execFile" | "signal"
+      "apiVersion" | "pluginId" | "packageRoot" | "logger" | "settings" | "notices" | "execFile" | "signal" | "lifetimeSignal"
     >();
     expectTypeOf<keyof ServerPluginNoticeReporterV1>().toEqualTypeOf<"version" | "record">();
     expectTypeOf<keyof ServerPluginNoticeInput>().toEqualTypeOf<"severity" | "message" | "scope" | "context">();
-    expectTypeOf<keyof ServerPluginActivation>().toEqualTypeOf<"workspaceProvider" | "peer" | "start" | "stop" | "health">();
+    expectTypeOf<keyof PiWebServerPlugin>().toEqualTypeOf<"apiVersion" | "name" | "requires" | "activate">();
+    expectTypeOf<keyof PluginCapability>().toEqualTypeOf<"pluginId" | "id" | "version" | "parse">();
+    expectTypeOf<keyof PluginCapabilityProvision>().toEqualTypeOf<"capability" | "value">();
+    expectTypeOf<keyof ServerPluginCapabilityResolver>().toEqualTypeOf<"resolve">();
+    expectTypeOf<keyof ServerPluginStartContext>().toEqualTypeOf<"capabilities" | "signal">();
+    expectTypeOf<keyof ServerPluginActivation>().toEqualTypeOf<"workspaceProvider" | "peer" | "provides" | "start" | "dispose" | "health">();
     expectTypeOf<keyof ServerPluginNoticeScope>().toEqualTypeOf<"projectId" | "workspaceId" | "sessionId">();
     expectTypeOf<keyof WorkspaceProvider>().toEqualTypeOf<
       "fallback" | "probe" | "list" | "request" | "prepareRemove"
@@ -164,6 +212,10 @@ describe("public server plugin API", () => {
       "file" | "args" | "cwd" | "env" | "unsetEnv" | "timeoutMs" | "signal"
     >();
     expectTypeOf<ReadonlyKeys<ServerPluginActivationContext>>().toEqualTypeOf<keyof ServerPluginActivationContext>();
+    expectTypeOf<ReadonlyKeys<PluginCapability>>().toEqualTypeOf<keyof PluginCapability>();
+    expectTypeOf<ReadonlyKeys<PluginCapabilityProvision>>().toEqualTypeOf<keyof PluginCapabilityProvision>();
+    expectTypeOf<ReadonlyKeys<ServerPluginCapabilityResolver>>().toEqualTypeOf<keyof ServerPluginCapabilityResolver>();
+    expectTypeOf<ReadonlyKeys<ServerPluginStartContext>>().toEqualTypeOf<keyof ServerPluginStartContext>();
     expectTypeOf<ReadonlyKeys<ServerPluginLogger>>().toEqualTypeOf<keyof ServerPluginLogger>();
     expectTypeOf<ReadonlyKeys<ServerPluginNoticeReporterV1>>().toEqualTypeOf<keyof ServerPluginNoticeReporterV1>();
     expectTypeOf<ReadonlyKeys<ServerPluginNoticeInput>>().toEqualTypeOf<keyof ServerPluginNoticeInput>();
@@ -191,7 +243,10 @@ describe("public server plugin API", () => {
 });
 
 async function exerciseActivation(activation: ServerPluginActivation, input: ProjectInput, signal: AbortSignal): Promise<void> {
-  await activation.start?.(signal);
+  await activation.start?.({
+    capabilities: { resolve: <Value>(capability: PluginCapability<Value>) => capability.parse({ label: "dependency" }) },
+    signal,
+  });
   const provider = activation.workspaceProvider;
   if (provider === undefined) throw new Error("Expected fixture workspace provider");
   await provider.probe(input, signal);
@@ -218,5 +273,5 @@ async function exerciseActivation(activation: ServerPluginActivation, input: Pro
     signal,
   });
   await activation.health?.(signal);
-  await activation.stop?.(signal);
+  await activation.dispose?.(signal);
 }
