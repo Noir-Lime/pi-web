@@ -31,7 +31,7 @@ import {
 import { sessiondSocketPath } from "../sessiond/config.js";
 import { getPiWebRuntimeComponent } from "./piWebStatus.js";
 import { SESSIOND_RUNTIME_CAPABILITIES } from "../shared/capabilities.js";
-import { agentSessionDirEnvOverride, effectivePiWebConfig, maxUploadBytes, offlineModeEnabled, PI_CODING_AGENT_DIR_ENV, PI_CODING_AGENT_SESSION_DIR_ENV } from "../config.js";
+import { agentSessionDirEnvOverride, effectivePiWebConfig, maxUploadBytes, offlineModeEnabled, piWebDataDir, PI_CODING_AGENT_DIR_ENV, PI_CODING_AGENT_SESSION_DIR_ENV } from "../config.js";
 import { createFilePiWebConfigService } from "./configRoutes.js";
 import { createActiveAgentProfileDescriptor } from "../sessiond/activeAgentProfile.js";
 import { loadServerPluginRecoveryConfig } from "../serverPluginRecovery.js";
@@ -46,6 +46,7 @@ import { dockerEnvironmentPromptSections } from "./sessions/dockerEnvironmentFac
 import { PI_WEB_SESSION_ENV, sessionEnvironmentPromptSections } from "./sessions/sessionEnvironmentFacts.js";
 import { createServerPluginExecFile } from "./plugins/serverPluginExec.js";
 import { createServerPluginRuntime } from "./plugins/serverPluginRuntime.js";
+import { createServerPluginStateCapabilityFactory } from "./plugins/serverPluginStateCapability.js";
 import {
   REQUIRED_TERMINAL_SERVICE_CAPABILITY,
   unavailableRequiredTerminalService,
@@ -198,6 +199,9 @@ async function createSessionDaemonRuntime() {
     logger: app.log,
     execFile: createServerPluginExecFile({ env: daemonEnvironment }),
     noticeSink: (source, input) => { serverNotices.record({ ...input, source }); },
+    hostCapabilityFactories: [createServerPluginStateCapabilityFactory({
+      dataDir: piWebDataDir(daemonEnvironment),
+    })],
   });
   try {
     const notificationStore = new SessionNotificationStore();

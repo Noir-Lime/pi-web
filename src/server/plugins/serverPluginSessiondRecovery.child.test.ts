@@ -1,8 +1,9 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { Readable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildTerminalPackage } from "../../../scripts/build-plugins.mjs";
@@ -78,7 +79,86 @@ describe("sessiond persisted server plugin recovery", () => {
       process.platform === "win32" ? { code: null, signal: "SIGTERM" } : { code: 0, signal: null },
     );
     expect(existsSync(markerPath)).toBe(false);
+    expect(existsSync(join(dataDir, "plugin-state"))).toBe(false);
   }, 30_000);
+
+  it.skipIf(process.platform === "win32")("starts a state-only plugin in the early sessiond plugin phase and revokes state before disposal", async () => {
+    const terminalPackageRoot = resolve("dist/pi-web-plugins/terminal");
+    tempRoots.push(terminalPackageRoot);
+    await buildTerminalPackage(resolve("pi-web-plugins/terminal"), terminalPackageRoot);
+
+    const root = await mkdtemp(join(tmpdir(), "pi-web-sessiond-plugin-state-"));
+    tempRoots.push(root);
+    const configPath = join(root, "config.json");
+    const dataDir = join(root, "data");
+    const pluginRoot = join(dataDir, "plugins", "state-only");
+    const startedMarker = join(root, "state-plugin-started.json");
+    const disposedMarker = join(root, "state-plugin-disposed.txt");
+    const serverApiUrl = pathToFileURL(resolve("src/server-plugin-api.ts")).href;
+    await mkdir(pluginRoot, { recursive: true });
+    await writeFile(configPath, "{}\n", "utf8");
+    await writeFile(join(pluginRoot, "package.json"), `${JSON.stringify({
+      piWeb: { plugins: [{ id: "state-only", serverModule: "server.mjs" }] },
+    })}\n`, "utf8");
+    await writeFile(join(pluginRoot, "server.mjs"), `
+      import { writeFile } from "node:fs/promises";
+      import { PI_WEB_HOST_STATE_CAPABILITY } from ${JSON.stringify(serverApiUrl)};
+      let state;
+      export default {
+        apiVersion: 3,
+        name: "State-only fixture",
+        requires: [PI_WEB_HOST_STATE_CAPABILITY],
+        activate(context) {
+          return {
+            async start({ capabilities }) {
+              state = capabilities.resolve(PI_WEB_HOST_STATE_CAPABILITY);
+              const previous = await state.read();
+              await state.write({ starts: (previous?.starts ?? 0) + 1 });
+              await writeFile(${JSON.stringify(startedMarker)}, JSON.stringify({ packageRoot: context.packageRoot }));
+              console.error("STATE_PLUGIN_STARTED");
+            },
+            async dispose() {
+              try {
+                await state.read();
+                await writeFile(${JSON.stringify(disposedMarker)}, "state remained active");
+              } catch (error) {
+                await writeFile(${JSON.stringify(disposedMarker)}, error instanceof Error ? error.message : String(error));
+              }
+            }
+          };
+        }
+      };
+    `, "utf8");
+
+    const child = spawn(process.execPath, ["--import", "tsx", "src/server/sessiond.ts"], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        HOME: join(root, "home"),
+        PI_WEB_CONFIG: configPath,
+        PI_WEB_DATA_DIR: dataDir,
+        PI_WEB_AGENT_DIR: join(root, "agent"),
+        PI_WEB_OFFLINE: "1",
+        PI_WEB_SESSIOND_PORT: "0",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    children.add(child);
+
+    const startupOutput = await waitForOutput(child, "Server listening at", 15_000);
+    expect(startupOutput).toContain("STATE_PLUGIN_STARTED");
+    expect(JSON.parse(await readFile(startedMarker, "utf8"))).toEqual({ packageRoot: pluginRoot });
+    expect(JSON.parse(await readFile(join(dataDir, "plugin-state", "state-only", "state.json"), "utf8")))
+      .toEqual({ starts: 1 });
+    expect((await readdir(pluginRoot)).sort()).toEqual(["package.json", "server.mjs"]);
+
+    child.kill("SIGTERM");
+    const exit = await waitForExit(child, 10_000);
+    children.delete(child);
+
+    expect(exit).toEqual({ code: 0, signal: null });
+    expect(await readFile(disposedMarker, "utf8")).toContain("state for state-only is no longer active");
+  }, 35_000);
 
   // Plugin stop on SIGTERM requires POSIX signal delivery; Windows
   // force-terminates the child without running shutdown handlers.

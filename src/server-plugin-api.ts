@@ -115,6 +115,29 @@ export interface ServerPluginExecFileResult {
   stderrTruncated: boolean;
 }
 
+/**
+ * Package-scoped durable state owned and located by the host. Values are
+ * detached JSON with at most 64 nested levels, and each compact UTF-8 payload
+ * is limited to 256 KiB. Calls reject after the declaring plugin's lifetime is revoked.
+ */
+export interface PiWebHostStateV1 {
+  readonly version: 1;
+  /** Read the current value, or `undefined` before the first write or after clear. */
+  readonly read: () => Promise<JsonValue | undefined>;
+  /** Atomically replace the complete value after validating the JSON boundary and quota. */
+  readonly write: (value: JsonValue) => Promise<void>;
+  /** Remove the complete value; clearing an absent value succeeds. */
+  readonly clear: () => Promise<void>;
+}
+
+/** Exact state v1 capability supplied separately for each declaring server plugin. */
+export const PI_WEB_HOST_STATE_CAPABILITY: PluginCapability<PiWebHostStateV1, 1> = Object.freeze({
+  pluginId: "pi-web.host",
+  id: "state",
+  version: 1,
+  parse: snapshotPiWebHostStateV1,
+});
+
 /** Resolver containing only the exact capability requirements declared by a plugin. */
 export interface ServerPluginCapabilityResolver {
   readonly resolve: <Value>(capability: PluginCapability<Value>) => Value;
@@ -288,4 +311,61 @@ export interface WorkspaceRemovePlan {
    * meaning the removal succeeded.
    */
   command: string;
+}
+
+function snapshotPiWebHostStateV1(value: unknown): PiWebHostStateV1 {
+  if (typeof value !== "object" || value === null) throw invalidPiWebHostState();
+  const version: unknown = Reflect.get(value, "version");
+  const read: unknown = Reflect.get(value, "read");
+  const write: unknown = Reflect.get(value, "write");
+  const clear: unknown = Reflect.get(value, "clear");
+  if (version !== 1 || typeof read !== "function" || typeof write !== "function" || typeof clear !== "function") {
+    throw invalidPiWebHostState();
+  }
+  return Object.freeze({
+    version: 1,
+    read: async () => {
+      const state: unknown = await Reflect.apply(read, value, []);
+      if (state !== undefined && !isPublicJsonValue(state, new Set<object>())) {
+        throw new Error("PI WEB host state capability v1 read returned a non-JSON value");
+      }
+      return state;
+    },
+    write: async (state: JsonValue) => { await Reflect.apply(write, value, [state]); },
+    clear: async () => { await Reflect.apply(clear, value, []); },
+  });
+}
+
+function isPublicJsonValue(value: unknown, ancestors: Set<object>): value is JsonValue {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) {
+    if (ancestors.has(value)) return false;
+    ancestors.add(value);
+    try {
+      for (let index = 0; index < value.length; index += 1) {
+        if (!Object.hasOwn(value, index) || !isPublicJsonValue(value[index], ancestors)) return false;
+      }
+      return true;
+    } finally {
+      ancestors.delete(value);
+    }
+  }
+  if (!isPublicJsonObject(value) || ancestors.has(value)) return false;
+  ancestors.add(value);
+  try {
+    return Object.keys(value).every((key) => isPublicJsonValue(value[key], ancestors));
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
+function isPublicJsonObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function invalidPiWebHostState(): Error {
+  return new Error("PI WEB host state capability v1 must expose read, write, and clear");
 }

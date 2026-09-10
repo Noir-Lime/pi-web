@@ -103,6 +103,23 @@ export interface ServerPluginRuntimeLogger {
 export type ServerPluginModuleImporter = (moduleUrl: string, signal: AbortSignal) => Promise<unknown>;
 export type ServerPluginExecFile = (request: ServerPluginExecFileRequest) => Promise<ServerPluginExecFileResult>;
 
+export interface ServerPluginHostCapabilityContext {
+  readonly pluginId: string;
+  readonly packageRoot: string;
+  readonly lifetimeSignal: AbortSignal;
+}
+
+export interface ServerPluginHostCapabilityInstance<Value = unknown> {
+  readonly value: Value;
+  readonly dispose?: (signal: AbortSignal) => void | Promise<void>;
+}
+
+/** Host-owned factory materialized once for each plugin declaring the exact capability. */
+export interface ServerPluginHostCapabilityFactory<Value = unknown> {
+  readonly capability: PluginCapability<Value>;
+  readonly create: (context: ServerPluginHostCapabilityContext) => ServerPluginHostCapabilityInstance<Value>;
+}
+
 export interface CreateServerPluginRuntimeOptions {
   catalog: Pick<PiWebPluginCatalog, "snapshot">;
   safeStart?: ServerPluginSafeStart;
@@ -112,8 +129,10 @@ export interface CreateServerPluginRuntimeOptions {
   lifecycleTimeoutMs?: number;
   /** Core-owned sink; source is host-derived as `plugin:<catalog id>`. */
   noticeSink?: (source: string, input: ServerPluginNoticeInput) => void;
-  /** Core-owned capabilities available before plugin dependency resolution. */
+  /** Core-owned global capabilities available before plugin dependency resolution. */
   hostCapabilities?: readonly PluginCapabilityProvision[];
+  /** Core-owned capabilities materialized separately for each exact declaring plugin. */
+  hostCapabilityFactories?: readonly ServerPluginHostCapabilityFactory[];
   /** Isolated unit/package tests may opt out; production always enforces Terminal. */
   enforceRequiredTerminal?: boolean;
 }
@@ -131,6 +150,7 @@ interface StagedServerPlugin {
   lifetimeController: AbortController;
   noticeReporter?: ScopedNoticeReporter;
   provisions: readonly InternalCapabilityProvision[];
+  hostCapabilityInstances: InternalHostCapabilityInstance[];
 }
 
 interface ActiveServerPlugin extends StagedServerPlugin {
@@ -144,6 +164,17 @@ interface InternalCapabilityProvision {
   value: unknown;
   source: "host" | "plugin";
 }
+
+interface InternalHostCapabilityFactory {
+  capability: PluginCapability;
+  key: string;
+  source: "host-factory";
+  create: (context: ServerPluginHostCapabilityContext) => ServerPluginHostCapabilityInstance;
+}
+
+type InternalCapabilityDeclaration = InternalCapabilityProvision | InternalHostCapabilityFactory;
+
+type InternalHostCapabilityInstance = ServerPluginHostCapabilityInstance;
 
 interface ResolvedCapabilityRequirement {
   provisionValue: unknown;
@@ -174,7 +205,7 @@ export async function createServerPluginRuntime(
 
 export class ServerPluginRuntime {
   private readonly recordsById = new Map<string, ServerPluginRuntimeRecord>();
-  private readonly declaredCapabilitiesByKey = new Map<string, InternalCapabilityProvision>();
+  private readonly declaredCapabilitiesByKey = new Map<string, InternalCapabilityDeclaration>();
   private readonly activeCapabilitiesByKey = new Map<string, InternalCapabilityProvision>();
   private activePlugins: ActiveServerPlugin[] = [];
   private stagedPlugins: StagedServerPlugin[] = [];
@@ -190,12 +221,14 @@ export class ServerPluginRuntime {
     private readonly lifecycleTimeoutMs: number,
     private readonly noticeSink: ((source: string, input: ServerPluginNoticeInput) => void) | undefined,
     hostCapabilities: readonly InternalCapabilityProvision[],
+    hostCapabilityFactories: readonly InternalHostCapabilityFactory[],
     private readonly enforceRequiredTerminal: boolean,
   ) {
     for (const provision of hostCapabilities) {
-      this.declaredCapabilitiesByKey.set(provision.key, provision);
+      this.registerHostCapability(provision);
       this.activeCapabilitiesByKey.set(provision.key, provision);
     }
+    for (const factory of hostCapabilityFactories) this.registerHostCapability(factory);
   }
 
   static async activate(
@@ -211,6 +244,7 @@ export class ServerPluginRuntime {
       positiveInteger(options.lifecycleTimeoutMs, DEFAULT_LIFECYCLE_TIMEOUT_MS, "lifecycleTimeoutMs"),
       options.noticeSink,
       snapshotHostCapabilities(options.hostCapabilities),
+      snapshotHostCapabilityFactories(options.hostCapabilityFactories),
       options.enforceRequiredTerminal !== false && options.safeStart !== "none",
     );
     try {
@@ -220,6 +254,13 @@ export class ServerPluginRuntime {
       await runtime.stop();
       throw error;
     }
+  }
+
+  private registerHostCapability(declaration: InternalCapabilityDeclaration): void {
+    if (this.declaredCapabilitiesByKey.has(declaration.key)) {
+      throw new Error(`Host capability ${formatCapability(declaration.capability)} is configured more than once`);
+    }
+    this.declaredCapabilitiesByKey.set(declaration.key, declaration);
   }
 
   safeStartLevel(): ServerPluginSafeStart | undefined {
@@ -386,6 +427,7 @@ export class ServerPluginRuntime {
         lifetimeController,
         ...(noticeReporter === undefined ? {} : { noticeReporter }),
         provisions,
+        hostCapabilityInstances: [],
       });
       this.stagedPlugins.push(staged);
       for (const provision of provisions) this.declaredCapabilitiesByKey.set(provision.key, provision);
@@ -468,7 +510,7 @@ export class ServerPluginRuntime {
       if (provision === undefined) {
         return new Error(`Server plugin ${staged.entry.id} requires unavailable capability ${formatCapability(requirement)}`);
       }
-      if (this.activeCapabilitiesByKey.has(key) || provision.source === "host") continue;
+      if (this.activeCapabilitiesByKey.has(key) || provision.source === "host" || provision.source === "host-factory") continue;
       if (!pending.has(requirement.pluginId)) {
         return new Error(`Server plugin ${staged.entry.id} requires ${formatCapability(requirement)}, but provider plugin ${requirement.pluginId} did not start`);
       }
@@ -477,7 +519,11 @@ export class ServerPluginRuntime {
   }
 
   private waitingForDependencies(staged: StagedServerPlugin): boolean {
-    return (staged.plugin.requires ?? []).some((requirement) => !this.activeCapabilitiesByKey.has(capabilityKey(requirement)));
+    return (staged.plugin.requires ?? []).some((requirement) => {
+      const key = capabilityKey(requirement);
+      return this.declaredCapabilitiesByKey.get(key)?.source !== "host-factory"
+        && !this.activeCapabilitiesByKey.has(key);
+    });
   }
 
   private async startStagedPlugin(staged: StagedServerPlugin): Promise<unknown> {
@@ -505,18 +551,42 @@ export class ServerPluginRuntime {
     const resolved = new Map<string, ResolvedCapabilityRequirement>();
     for (const requirement of staged.plugin.requires ?? []) {
       const key = capabilityKey(requirement);
-      const provision = this.activeCapabilitiesByKey.get(key);
-      if (provision === undefined) {
+      const activeProvision = this.activeCapabilitiesByKey.get(key);
+      const declaration = this.declaredCapabilitiesByKey.get(key);
+      let provisionValue: unknown;
+      if (activeProvision !== undefined) {
+        provisionValue = activeProvision.value;
+      } else if (declaration?.source === "host-factory") {
+        provisionValue = this.createHostCapabilityValue(staged, declaration);
+      } else {
         throw new Error(`Server plugin ${staged.entry.id} requires inactive capability ${formatCapability(requirement)}`);
       }
       parseCapabilityValue(
         requirement,
-        provision.value,
+        provisionValue,
         `Required capability ${formatCapability(requirement)} for server plugin ${staged.entry.id}`,
       );
-      resolved.set(key, { provisionValue: provision.value });
+      resolved.set(key, { provisionValue });
     }
     return createCapabilityResolver(staged.entry.id, resolved);
+  }
+
+  private createHostCapabilityValue(
+    staged: StagedServerPlugin,
+    factory: InternalHostCapabilityFactory,
+  ): unknown {
+    const context: ServerPluginHostCapabilityContext = Object.freeze({
+      pluginId: staged.entry.id,
+      packageRoot: staged.entry.packageRoot,
+      lifetimeSignal: staged.lifetimeController.signal,
+    });
+    const instance = factory.create(context);
+    staged.hostCapabilityInstances.push(instance);
+    return parseCapabilityValue(
+      factory.capability,
+      instance.value,
+      `Host capability ${formatCapability(factory.capability)} for server plugin ${staged.entry.id}`,
+    );
   }
 
   private async requireHealthyTerminal(staged: StagedServerPlugin): Promise<void> {
@@ -575,7 +645,8 @@ export class ServerPluginRuntime {
     this.removeStaged(staged.entry.id);
     const dispose = staged.activation.dispose?.bind(staged.activation);
     const rollbackError = dispose === undefined ? undefined : await this.runDispose(staged.entry.id, dispose);
-    const message = withRollbackError(errorMessage(error), rollbackError);
+    const hostCleanupError = await this.disposeHostCapabilityInstances(staged);
+    const message = withHostCleanupError(withRollbackError(errorMessage(error), rollbackError), hostCleanupError);
     this.recordsById.set(staged.entry.id, recordFor(staged.entry, {
       state: "failed",
       name: staged.plugin.name,
@@ -583,7 +654,13 @@ export class ServerPluginRuntime {
       message,
     }));
     this.logger.error(
-      { err: error, pluginId: staged.entry.id, phase: "start", ...(rollbackError === undefined ? {} : { rollbackError }) },
+      {
+        err: error,
+        pluginId: staged.entry.id,
+        phase: "start",
+        ...(rollbackError === undefined ? {} : { rollbackError }),
+        ...(hostCleanupError === undefined ? {} : { hostCleanupError }),
+      },
       "server plugin start failed",
     );
     return message;
@@ -596,8 +673,9 @@ export class ServerPluginRuntime {
   private async disposeForShutdown(plugin: StagedServerPlugin): Promise<void> {
     plugin.noticeReporter?.revoke();
     const dispose = plugin.activation.dispose?.bind(plugin.activation);
-    if (dispose === undefined) return;
-    const error = await this.runDispose(plugin.entry.id, dispose);
+    const pluginDisposeError = dispose === undefined ? undefined : await this.runDispose(plugin.entry.id, dispose);
+    const hostCleanupError = await this.disposeHostCapabilityInstances(plugin);
+    const error = combinedDisposalError(pluginDisposeError, hostCleanupError);
     if (error === undefined) return;
     this.recordsById.set(plugin.entry.id, recordFor(plugin.entry, {
       state: "failed",
@@ -607,7 +685,28 @@ export class ServerPluginRuntime {
       ...(plugin.activation.peer?.request === undefined ? {} : { pairedRequestVersion: 1 }),
       ...(plugin.activation.peer?.openChannel === undefined ? {} : { pairedChannelVersion: 1 }),
     }));
-    this.logger.error({ err: error, pluginId: plugin.entry.id, phase: "dispose" }, "server plugin disposal failed");
+    this.logger.error(
+      {
+        err: error,
+        pluginId: plugin.entry.id,
+        phase: "dispose",
+        ...(hostCleanupError === undefined ? {} : { hostCleanupError }),
+      },
+      "server plugin disposal failed",
+    );
+  }
+
+  private async disposeHostCapabilityInstances(plugin: StagedServerPlugin): Promise<unknown> {
+    const instances = plugin.hostCapabilityInstances.splice(0).reverse();
+    const errors: unknown[] = [];
+    for (const instance of instances) {
+      if (instance.dispose === undefined) continue;
+      const error = await this.runDispose(plugin.entry.id, instance.dispose);
+      if (error !== undefined) errors.push(error);
+    }
+    if (errors.length === 0) return undefined;
+    if (errors.length === 1) return errors[0];
+    return new AggregateError(errors, "Multiple host capability cleanup operations failed");
   }
 
   private async runDispose(pluginId: string, dispose: (signal: AbortSignal) => Promise<void> | void): Promise<unknown> {
@@ -849,6 +948,55 @@ function snapshotHostCapabilities(value: readonly PluginCapabilityProvision[] | 
   return internalProvisions({ provides: provisions }, "host");
 }
 
+function snapshotHostCapabilityFactories(
+  value: readonly ServerPluginHostCapabilityFactory[] | undefined,
+): readonly InternalHostCapabilityFactory[] {
+  if (value === undefined) return Object.freeze([]);
+  if (!Array.isArray(value)) throw new Error("Host capability factories must be an array");
+  const seen = new Set<string>();
+  const factories: InternalHostCapabilityFactory[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.hasOwn(value, index)) throw new Error("Host capability factories must not be sparse");
+    const candidate: unknown = value[index];
+    if (!isRecord(candidate)) throw new Error(`Host capability factories[${String(index)}] must be an object`);
+    const capability = snapshotUnknownCapability(
+      candidate["capability"],
+      `Host capability factories[${String(index)}].capability`,
+    );
+    const key = capabilityKey(capability);
+    if (seen.has(key)) throw new Error(`Host capability factory for ${formatCapability(capability)} is configured more than once`);
+    const create = candidate["create"];
+    if (typeof create !== "function") throw new Error(`Host capability factory for ${formatCapability(capability)} must expose create`);
+    seen.add(key);
+    factories.push(Object.freeze({
+      capability,
+      key,
+      source: "host-factory" as const,
+      create(context: ServerPluginHostCapabilityContext): ServerPluginHostCapabilityInstance {
+        const result: unknown = Reflect.apply(create, candidate, [context]);
+        return snapshotHostCapabilityInstance(result, `Host capability ${formatCapability(capability)}`);
+      },
+    }));
+  }
+  return Object.freeze(factories);
+}
+
+function snapshotHostCapabilityInstance(value: unknown, label: string): ServerPluginHostCapabilityInstance {
+  if (!isRecord(value) || !Object.hasOwn(value, "value")) {
+    throw new Error(`${label} factory must return an object containing value`);
+  }
+  const dispose = value["dispose"];
+  if (dispose !== undefined && typeof dispose !== "function") {
+    throw new Error(`${label} factory dispose must be a function`);
+  }
+  return Object.freeze({
+    value: value["value"],
+    ...(dispose === undefined
+      ? {}
+      : { dispose: async (signal: AbortSignal): Promise<void> => { await Reflect.apply(dispose, value, [signal]); } }),
+  });
+}
+
 function internalProvisions(
   activation: Pick<ServerPluginActivation, "provides">,
   source: InternalCapabilityProvision["source"],
@@ -880,12 +1028,13 @@ function snapshotUnknownCapability(value: unknown, label: string): PluginCapabil
 }
 
 function snapshotTypedCapability<Value>(value: PluginCapability<Value>, label: string): PluginCapability<Value> {
-  validateCapabilityFields(value.pluginId, value.id, value.version, value.parse, label);
+  const validated = validateCapabilityFields(value.pluginId, value.id, value.version, value.parse, label);
+  const parse = value.parse.bind(value);
   return Object.freeze({
-    pluginId: value.pluginId,
-    id: value.id,
-    version: value.version,
-    parse: (input: unknown): Value => value.parse(input),
+    pluginId: validated.pluginId,
+    id: validated.id,
+    version: validated.version,
+    parse: (input: unknown): Value => parse(input),
   });
 }
 
@@ -951,7 +1100,7 @@ function createCapabilityResolver(
 
 function findCapabilityCycle(
   pending: ReadonlyMap<string, StagedServerPlugin>,
-  declared: ReadonlyMap<string, InternalCapabilityProvision>,
+  declared: ReadonlyMap<string, InternalCapabilityDeclaration>,
 ): string[] {
   const state = new Map<string, "visiting" | "visited">();
   const stack: string[] = [];
@@ -995,6 +1144,21 @@ function withRollbackError(message: string, rollbackError: unknown): string {
   return rollbackError === undefined
     ? message
     : `${message}; startup rollback failed: ${errorMessage(rollbackError)}`;
+}
+
+function withHostCleanupError(message: string, cleanupError: unknown): string {
+  return cleanupError === undefined
+    ? message
+    : `${message}; host capability cleanup failed: ${errorMessage(cleanupError)}`;
+}
+
+function combinedDisposalError(pluginError: unknown, hostCleanupError: unknown): unknown {
+  if (pluginError === undefined) return hostCleanupError;
+  if (hostCleanupError === undefined) return pluginError;
+  return new AggregateError(
+    [pluginError, hostCleanupError],
+    `${errorMessage(pluginError)}; host capability cleanup failed: ${errorMessage(hostCleanupError)}`,
+  );
 }
 
 function snapshotPluginPeer(value: unknown): ServerPluginPeer {

@@ -1,5 +1,6 @@
 import { cp, mkdir, readFile, readdir, symlink, writeFile } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 import ts from "typescript";
 
 const publicApiDeclarationPaths = [
@@ -50,6 +51,7 @@ export async function smokeInstalledPluginApi({ packageRoot, fixtureRoot, repoRo
     symlink(packageRoot, join(consumerRoot, "node_modules", "@jmfederico", "pi-web"), "dir"),
     symlink(join(repoRoot, "node_modules", "@types", "node"), join(consumerRoot, "node_modules", "@types", "node"), "dir"),
   ]);
+  await assertServerRuntimeApi(consumerRoot);
 
   const browserPath = join(consumerRoot, "browser.ts");
   const serverPath = join(consumerRoot, "server.ts");
@@ -101,6 +103,23 @@ async function assertExampleCompatibilityFloor(packageRoot) {
   const actualRange = manifest?.devDependencies?.["@jmfederico/pi-web"];
   if (actualRange !== workspaceProviderExamplePiWebRange) {
     throw new Error(`Installed workspace-provider example must require @jmfederico/pi-web ${workspaceProviderExamplePiWebRange}; received ${JSON.stringify(actualRange)}`);
+  }
+}
+
+async function assertServerRuntimeApi(consumerRoot) {
+  const fixturePath = join(consumerRoot, "server-runtime.mjs");
+  await writeFile(fixturePath, `
+    import { PI_WEB_HOST_STATE_CAPABILITY } from "@jmfederico/pi-web/server-plugin-api";
+    export default PI_WEB_HOST_STATE_CAPABILITY;
+  `, "utf8");
+  const serverApi = await import(pathToFileURL(fixturePath).href);
+  const stateCapability = serverApi.default;
+  if (!Object.isFrozen(stateCapability)
+    || stateCapability?.pluginId !== "pi-web.host"
+    || stateCapability?.id !== "state"
+    || stateCapability?.version !== 1
+    || typeof stateCapability?.parse !== "function") {
+    throw new Error("Installed server plugin API does not expose the exact pi-web.host/state v1 token");
   }
 }
 

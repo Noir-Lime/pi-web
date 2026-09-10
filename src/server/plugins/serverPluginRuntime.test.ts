@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { PiWebServerPlugin, PluginCapability, ServerPluginActivation, ServerPluginActivationContext, ServerPluginNoticeInput, ServerPluginNoticeReporterV1, WorkspaceProvider } from "../../server-plugin-api.js";
+import { PI_WEB_HOST_STATE_CAPABILITY } from "../../server-plugin-api.js";
+import type { JsonValue, PiWebHostStateV1, PiWebServerPlugin, PluginCapability, ServerPluginActivation, ServerPluginActivationContext, ServerPluginNoticeInput, ServerPluginNoticeReporterV1, WorkspaceProvider } from "../../server-plugin-api.js";
 import type { PiWebPluginScope } from "../../shared/apiTypes.js";
 import {
   SERVER_NOTICE_SCOPE_ID_MAX_LENGTH,
@@ -14,6 +15,7 @@ import type { PiWebPluginCatalogEntry, PiWebPluginCatalogSnapshot } from "../piW
 import {
   createServerPluginRuntime as createServerPluginRuntimeWithRequiredTerminal,
   type CreateServerPluginRuntimeOptions,
+  type ServerPluginHostCapabilityFactory,
   type ServerPluginModuleImporter,
 } from "./serverPluginRuntime.js";
 
@@ -201,6 +203,111 @@ describe("server plugin runtime", () => {
     expect(runtime.healthRecords()).toEqual([expect.objectContaining({ pluginId: "consumer", state: "active" })]);
     await runtime.stop();
     expect(() => runtime.resolve(hostService)).toThrow("is not active");
+  });
+
+  it("materializes host capabilities per declaring plugin and revokes and cleans them with that lifecycle", async () => {
+    const contexts = new Map<string, ServerPluginActivationContext["lifetimeSignal"]>();
+    const stateValues = new Map<string, JsonValue>();
+    const resolvedStates = new Map<string, PiWebHostStateV1>();
+    const starts: string[] = [];
+    const cleanups: string[] = [];
+    const mutableCapability: PluginCapability<PiWebHostStateV1, 1> = {
+      ...PI_WEB_HOST_STATE_CAPABILITY,
+      parse: PI_WEB_HOST_STATE_CAPABILITY.parse,
+    };
+    const factory: ServerPluginHostCapabilityFactory<PiWebHostStateV1> = {
+      capability: mutableCapability,
+      create(context) {
+        expect(Object.isFrozen(context)).toBe(true);
+        expect(context.packageRoot).toBe(`/plugins/${context.pluginId}`);
+        contexts.set(context.pluginId, context.lifetimeSignal);
+        Reflect.set(mutableCapability, "parse", () => { throw new Error("mutated parser was used"); });
+        if (context.pluginId === "factory-failure") throw new Error("state factory failed");
+        const assertActive = (): void => {
+          if (context.lifetimeSignal.aborted) throw new Error(`state revoked for ${context.pluginId}`);
+        };
+        return {
+          value: {
+            version: 1,
+            read: () => {
+              assertActive();
+              return Promise.resolve(stateValues.get(context.pluginId));
+            },
+            write: (value: JsonValue) => {
+              assertActive();
+              stateValues.set(context.pluginId, value);
+              return Promise.resolve();
+            },
+            clear: () => {
+              assertActive();
+              stateValues.delete(context.pluginId);
+              return Promise.resolve();
+            },
+          },
+          dispose: () => { cleanups.push(context.pluginId); },
+        };
+      },
+    };
+    const stateV2: PluginCapability<PiWebHostStateV1, 2> = {
+      ...PI_WEB_HOST_STATE_CAPABILITY,
+      version: 2,
+    };
+    const runtime = await createServerPluginRuntime({
+      catalog: { snapshot: () => Promise.resolve(testSnapshot([
+        entry("state-beta"),
+        entry("wrong-version"),
+        entry("independent"),
+        entry("state-alpha"),
+        entry("start-failure"),
+        entry("factory-failure"),
+      ])) },
+      hostCapabilityFactories: [factory],
+      importer: (url) => {
+        const pluginId = pluginIdFromUrl(url);
+        if (pluginId === "independent") {
+          return Promise.resolve(pluginModule("Independent", { start: () => { starts.push(pluginId); } }));
+        }
+        const requirement = pluginId === "wrong-version" ? stateV2 : PI_WEB_HOST_STATE_CAPABILITY;
+        return Promise.resolve({
+          default: plugin(pluginId, () => ({
+            async start({ capabilities }) {
+              starts.push(pluginId);
+              const state = capabilities.resolve(requirement);
+              resolvedStates.set(pluginId, state);
+              await state.write({ pluginId });
+              if (pluginId === "start-failure") throw new Error("start failed after state resolution");
+            },
+          }), [requirement]),
+        });
+      },
+      logger: testLogger(),
+    });
+
+    expect(starts).toEqual(["independent", "start-failure", "state-alpha", "state-beta"]);
+    expect(stateValues.get("state-alpha")).toEqual({ pluginId: "state-alpha" });
+    expect(stateValues.get("state-beta")).toEqual({ pluginId: "state-beta" });
+    expect(stateValues.get("start-failure")).toEqual({ pluginId: "start-failure" });
+    expect(cleanups).toEqual(["start-failure"]);
+    expect(contexts.get("start-failure")?.aborted).toBe(true);
+    expect(runtime.healthRecords()).toEqual([
+      expect.objectContaining({ pluginId: "factory-failure", state: "failed", phase: "start", message: "state factory failed" }),
+      expect.objectContaining({ pluginId: "independent", state: "active" }),
+      expect.objectContaining({ pluginId: "start-failure", state: "failed", phase: "start", message: "start failed after state resolution" }),
+      expect.objectContaining({ pluginId: "state-alpha", state: "active" }),
+      expect.objectContaining({ pluginId: "state-beta", state: "active" }),
+      expect.objectContaining({ pluginId: "wrong-version", state: "failed", phase: "start" }),
+    ]);
+    expect(runtime.healthRecords().find(({ pluginId }) => pluginId === "wrong-version")?.message)
+      .toContain("requires unavailable capability pi-web.host/state v2");
+    expect(contexts.has("wrong-version")).toBe(false);
+
+    const alphaState = resolvedStates.get("state-alpha");
+    if (alphaState === undefined) throw new Error("Expected state-alpha capability");
+    runtime.beginShutdown();
+    expect([...contexts.values()].every((signal) => signal.aborted)).toBe(true);
+    await expect(alphaState.read()).rejects.toThrow("state revoked for state-alpha");
+    await runtime.stop();
+    expect(cleanups).toEqual(["start-failure", "state-beta", "state-alpha"]);
   });
 
   it("propagates failed and missing exact-version dependencies without blocking independent plugins", async () => {
@@ -828,15 +935,20 @@ describe("server plugin runtime", () => {
 
     imported.splice(0);
     const noneCatalog = { snapshot: vi.fn(() => Promise.resolve(snapshot)) };
+    const createHostCapability = vi.fn(() => ({
+      value: { version: 1 as const, read: () => Promise.resolve(undefined), write: () => Promise.resolve(), clear: () => Promise.resolve() },
+    }));
     const none = await createServerPluginRuntime({
       catalog: noneCatalog,
       safeStart: "none",
       importer,
       logger: testLogger(),
+      hostCapabilityFactories: [{ capability: PI_WEB_HOST_STATE_CAPABILITY, create: createHostCapability }],
     });
 
     expect(imported).toEqual([]);
     expect(noneCatalog.snapshot).not.toHaveBeenCalled();
+    expect(createHostCapability).not.toHaveBeenCalled();
     expect(none.healthRecords()).toEqual([]);
   });
 

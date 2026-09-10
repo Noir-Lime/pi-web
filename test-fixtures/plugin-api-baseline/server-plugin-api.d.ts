@@ -96,6 +96,22 @@ export interface ServerPluginExecFileResult {
     stdoutTruncated: boolean;
     stderrTruncated: boolean;
 }
+/**
+ * Package-scoped durable state owned and located by the host. Values are
+ * detached JSON with at most 64 nested levels, and each compact UTF-8 payload
+ * is limited to 256 KiB. Calls reject after the declaring plugin's lifetime is revoked.
+ */
+export interface PiWebHostStateV1 {
+    readonly version: 1;
+    /** Read the current value, or `undefined` before the first write or after clear. */
+    readonly read: () => Promise<JsonValue | undefined>;
+    /** Atomically replace the complete value after validating the JSON boundary and quota. */
+    readonly write: (value: JsonValue) => Promise<void>;
+    /** Remove the complete value; clearing an absent value succeeds. */
+    readonly clear: () => Promise<void>;
+}
+/** Exact state v1 capability supplied separately for each declaring server plugin. */
+export declare const PI_WEB_HOST_STATE_CAPABILITY: PluginCapability<PiWebHostStateV1, 1>;
 /** Resolver containing only the exact capability requirements declared by a plugin. */
 export interface ServerPluginCapabilityResolver {
     readonly resolve: <Value>(capability: PluginCapability<Value>) => Value;
