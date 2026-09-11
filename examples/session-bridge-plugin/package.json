@@ -1,5 +1,6 @@
 {
-  "name": "pi-web-example-session-bridge",
+  "name": "pi-web-example-workspace-reviews",
+  "description": "Opt-in PI WEB workspace reviews with a native Pi companion and saved findings",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -15,7 +16,7 @@
   "pi": { "extensions": ["./src/companion.ts"] },
   "piWeb": {
     "plugins": [{
-      "id": "session-bridge-example",
+      "id": "workspace-reviews-example",
       "browserRoot": "dist/browser",
       "module": "dist/browser/index.js",
       "serverModule": "dist/server.js",

@@ -147,24 +147,16 @@ async function assertServerRuntimeApi(consumerRoot) {
     import {
       PI_WEB_HOST_PI_SESSIONS_CAPABILITY,
       PI_WEB_HOST_PI_SESSION_EVENTS_CAPABILITY,
-      PI_WEB_HOST_STATE_CAPABILITY,
       PI_WEB_HOST_WORKSPACES_CAPABILITY,
     } from "@jmfederico/pi-web/server-plugin-api";
-    export default [PI_WEB_HOST_STATE_CAPABILITY, PI_WEB_HOST_WORKSPACES_CAPABILITY, PI_WEB_HOST_PI_SESSIONS_CAPABILITY, PI_WEB_HOST_PI_SESSION_EVENTS_CAPABILITY];
+    export default [PI_WEB_HOST_WORKSPACES_CAPABILITY, PI_WEB_HOST_PI_SESSIONS_CAPABILITY, PI_WEB_HOST_PI_SESSION_EVENTS_CAPABILITY];
   `, "utf8");
   const serverApi = await import(pathToFileURL(fixturePath).href);
-  const [stateCapability, workspacesCapability, piSessionsCapability, sessionEventsCapability] = serverApi.default;
+  const [workspacesCapability, piSessionsCapability, sessionEventsCapability] = serverApi.default;
   if (!Object.isFrozen(sessionEventsCapability) || sessionEventsCapability?.pluginId !== "pi-web.host"
     || sessionEventsCapability?.id !== "pi-session-events" || sessionEventsCapability?.version !== 1
     || typeof sessionEventsCapability?.parse !== "function") {
     throw new Error("Installed server plugin API does not expose the exact pi-web.host/pi-session-events v1 token");
-  }
-  if (!Object.isFrozen(stateCapability)
-    || stateCapability?.pluginId !== "pi-web.host"
-    || stateCapability?.id !== "state"
-    || stateCapability?.version !== 1
-    || typeof stateCapability?.parse !== "function") {
-    throw new Error("Installed server plugin API does not expose the exact pi-web.host/state v1 token");
   }
   if (!Object.isFrozen(workspacesCapability)
     || workspacesCapability?.pluginId !== "pi-web.host"

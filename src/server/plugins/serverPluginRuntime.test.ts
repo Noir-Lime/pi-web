@@ -1,13 +1,14 @@
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, relative, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   PI_WEB_HOST_PI_SESSIONS_CAPABILITY,
-  PI_WEB_HOST_STATE_CAPABILITY,
   PI_WEB_HOST_WORKSPACES_CAPABILITY,
 } from "../../server-plugin-api.js";
 import type {
   JsonValue,
   PiWebHostPiSessionsV1,
-  PiWebHostStateV1,
   PiWebHostWorkspacesV1,
   PiWebServerPlugin,
   PluginCapability,
@@ -29,21 +30,109 @@ import { ServerNoticeStore } from "../notices/serverNoticeStore.js";
 import { REQUIRED_TERMINAL_SERVICE_CAPABILITY } from "../terminals/requiredTerminalService.js";
 import type { PiWebPluginCatalogEntry, PiWebPluginCatalogSnapshot } from "../piWebPluginCatalog.js";
 import {
-  createServerPluginRuntime as createServerPluginRuntimeWithRequiredTerminal,
+  createServerPluginRuntime as createRuntime,
   type CreateServerPluginRuntimeOptions,
   type ServerPluginHostCapabilityFactory,
   type ServerPluginModuleImporter,
 } from "./serverPluginRuntime.js";
 
-afterEach(() => {
+// A test-owned service exercises generic host factory lifetimes, not host storage.
+interface TestScopedService {
+  readonly version: 1;
+  readonly read: () => Promise<JsonValue | undefined>;
+  readonly write: (value: JsonValue) => Promise<void>;
+  readonly clear: () => Promise<void>;
+}
+
+const testScopedService: PluginCapability<TestScopedService, 1> = {
+  pluginId: "fixture.host",
+  id: "scoped-service",
+  version: 1,
+  parse(value) {
+    if (!isTestScopedService(value)) throw new Error("Invalid test service");
+    return {
+      version: 1,
+      read: async () => await value.read(),
+      write: async (input) => { await value.write(input); },
+      clear: async () => { await value.clear(); },
+    };
+  },
+};
+
+function isTestScopedService(value: unknown): value is TestScopedService {
+  return typeof value === "object" && value !== null
+    && Reflect.get(value, "version") === 1
+    && ["read", "write", "clear"].every((key) => typeof Reflect.get(value, key) === "function");
+}
+
+const tempRoots: string[] = [];
+
+afterEach(async () => {
   vi.useRealTimers();
+  await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-function createServerPluginRuntime(options: CreateServerPluginRuntimeOptions) {
-  return createServerPluginRuntimeWithRequiredTerminal({ ...options, enforceRequiredTerminal: false });
+async function createServerPluginRuntime(options: Omit<CreateServerPluginRuntimeOptions, "dataDir"> & { dataDir?: string }) {
+  const dataDir = options.dataDir ?? await mkdtemp(join(tmpdir(), "pi-web-plugin-runtime-"));
+  if (options.dataDir === undefined) tempRoots.push(dataDir);
+  return createRuntime({ ...options, dataDir, enforceRequiredTerminal: options.enforceRequiredTerminal ?? false });
+}
+
+function createServerPluginRuntimeWithRequiredTerminal(options: Omit<CreateServerPluginRuntimeOptions, "dataDir">) {
+  return createServerPluginRuntime({ ...options, enforceRequiredTerminal: true });
 }
 
 describe("server plugin runtime", () => {
+  it("creates isolated persistent directories before activation and retains plugin-owned files across runtimes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-web-plugin-data-"));
+    tempRoots.push(root);
+    const dataDir = join(root, "data");
+    const directories = new Map<string, string>();
+    const start = (revision: number) => createServerPluginRuntime({
+      dataDir: relative(process.cwd(), dataDir),
+      catalog: { snapshot: () => Promise.resolve(testSnapshot([
+        { ...entry("alpha"), packageRoot: `/packages/revision-${String(revision)}/alpha` },
+        entry("beta"),
+        { ...entry("disabled"), enabled: false },
+      ])) },
+      importer: () => Promise.resolve({ default: plugin("Directory fixture", async (context) => {
+        expect(Object.isFrozen(context)).toBe(true);
+        expect(context.dataDirectory).toBe(resolve(dataDir, "plugin-data", context.pluginId));
+        directories.set(context.pluginId, context.dataDirectory);
+        const filePath = join(context.dataDirectory, "owned.txt");
+        if (revision === 1) await writeFile(filePath, context.pluginId);
+        else expect(await readFile(filePath, "utf8")).toBe(context.pluginId);
+        return {};
+      }) }),
+      logger: testLogger(),
+    });
+    const first = await start(1);
+    expect(first.healthRecords().filter(({ state }) => state === "active")).toHaveLength(2);
+    expect(directories.get("alpha")).not.toBe(directories.get("beta"));
+    await expect(stat(join(dataDir, "plugin-data", "disabled"))).rejects.toMatchObject({ code: "ENOENT" });
+    await first.stop();
+    const second = await start(2);
+    expect(second.healthRecords().filter(({ state }) => state === "active")).toHaveLength(2);
+    await second.stop();
+  });
+
+  it("quarantines directory creation failures without activating the affected plugin", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-web-plugin-data-error-"));
+    tempRoots.push(root);
+    const dataDir = join(root, "not-a-directory");
+    await writeFile(dataDir, "occupied");
+    const activate = vi.fn(() => ({}));
+    const runtime = await createServerPluginRuntime({
+      dataDir,
+      catalog: { snapshot: () => Promise.resolve(testSnapshot([entry("alpha")])) },
+      importer: () => Promise.resolve({ default: plugin("Directory failure", activate) }),
+      logger: testLogger(),
+    });
+    expect(activate).not.toHaveBeenCalled();
+    expect(runtime.healthRecords()).toEqual([expect.objectContaining({ pluginId: "alpha", state: "failed", phase: "activate" })]);
+    await runtime.stop();
+  });
+
   it("activates deterministically, quarantines ordinary failures, publishes transactionally, and disposes in reverse", async () => {
     const events: string[] = [];
     const provider = testProvider();
@@ -224,14 +313,14 @@ describe("server plugin runtime", () => {
   it("materializes host capabilities per declaring plugin and revokes and cleans them with that lifecycle", async () => {
     const contexts = new Map<string, ServerPluginActivationContext["lifetimeSignal"]>();
     const stateValues = new Map<string, JsonValue>();
-    const resolvedStates = new Map<string, PiWebHostStateV1>();
+    const resolvedStates = new Map<string, TestScopedService>();
     const starts: string[] = [];
     const cleanups: string[] = [];
-    const mutableCapability: PluginCapability<PiWebHostStateV1, 1> = {
-      ...PI_WEB_HOST_STATE_CAPABILITY,
-      parse: PI_WEB_HOST_STATE_CAPABILITY.parse,
+    const mutableCapability: PluginCapability<TestScopedService, 1> = {
+      ...testScopedService,
+      parse: testScopedService.parse,
     };
-    const factory: ServerPluginHostCapabilityFactory<PiWebHostStateV1> = {
+    const factory: ServerPluginHostCapabilityFactory<TestScopedService> = {
       capability: mutableCapability,
       create(context) {
         expect(Object.isFrozen(context)).toBe(true);
@@ -264,8 +353,8 @@ describe("server plugin runtime", () => {
         };
       },
     };
-    const stateV2: PluginCapability<PiWebHostStateV1, 2> = {
-      ...PI_WEB_HOST_STATE_CAPABILITY,
+    const stateV2: PluginCapability<TestScopedService, 2> = {
+      ...testScopedService,
       version: 2,
     };
     const runtime = await createServerPluginRuntime({
@@ -283,7 +372,7 @@ describe("server plugin runtime", () => {
         if (pluginId === "independent") {
           return Promise.resolve(pluginModule("Independent", { start: () => { starts.push(pluginId); } }));
         }
-        const requirement = pluginId === "wrong-version" ? stateV2 : PI_WEB_HOST_STATE_CAPABILITY;
+        const requirement = pluginId === "wrong-version" ? stateV2 : testScopedService;
         return Promise.resolve({
           default: plugin(pluginId, () => ({
             async start({ capabilities }) {
@@ -314,7 +403,7 @@ describe("server plugin runtime", () => {
       expect.objectContaining({ pluginId: "wrong-version", state: "failed", phase: "start" }),
     ]);
     expect(runtime.healthRecords().find(({ pluginId }) => pluginId === "wrong-version")?.message)
-      .toContain("requires unavailable capability pi-web.host/state v2");
+      .toContain("requires unavailable capability fixture.host/scoped-service v2");
     expect(contexts.has("wrong-version")).toBe(false);
 
     const alphaState = resolvedStates.get("state-alpha");
@@ -336,8 +425,8 @@ describe("server plugin runtime", () => {
     const lateContexts = new Map<string, ServerPluginActivationContext["lifetimeSignal"]>();
     const lateCleanups: string[] = [];
     const resolvedWorkspaces = new Map<string, PiWebHostWorkspacesV1>();
-    const stateFactory: ServerPluginHostCapabilityFactory<PiWebHostStateV1> = {
-      capability: PI_WEB_HOST_STATE_CAPABILITY,
+    const stateFactory: ServerPluginHostCapabilityFactory<TestScopedService> = {
+      capability: testScopedService,
       create: () => ({
         value: {
           version: 1,
@@ -372,11 +461,11 @@ describe("server plugin runtime", () => {
         if (pluginId === "early-state") {
           return Promise.resolve({ default: plugin("Early state", () => ({
             start: ({ capabilities }) => {
-              capabilities.resolve(PI_WEB_HOST_STATE_CAPABILITY);
+              capabilities.resolve(testScopedService);
               events.push("start:early-state");
             },
             dispose: () => { events.push("dispose:early-state"); },
-          }), [PI_WEB_HOST_STATE_CAPABILITY]) });
+          }), [testScopedService]) });
         }
         const requirement = pluginId === "wrong-version"
           ? workspacesV2
@@ -1220,7 +1309,7 @@ describe("server plugin runtime", () => {
       safeStart: "none",
       importer,
       logger: testLogger(),
-      hostCapabilityFactories: [{ capability: PI_WEB_HOST_STATE_CAPABILITY, create: createHostCapability }],
+      hostCapabilityFactories: [{ capability: testScopedService, create: createHostCapability }],
       lateHostCapabilities: [PI_WEB_HOST_WORKSPACES_CAPABILITY, PI_WEB_HOST_PI_SESSIONS_CAPABILITY],
     });
     await none.resumeWithHostCapabilityFactories([{
@@ -1242,12 +1331,15 @@ describe("server plugin runtime", () => {
   it("aborts an uncooperative lifecycle phase at its deadline and continues activation", async () => {
     vi.useFakeTimers();
     const observedSignals: AbortSignal[] = [];
+    let markStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
     const importer: ServerPluginModuleImporter = (url) => {
       const pluginId = pluginIdFromUrl(url);
       if (pluginId === "hang") {
         return Promise.resolve(pluginModule("Hang", {
           start: ({ signal }) => new Promise((_resolve, reject) => {
             observedSignals.push(signal);
+            markStarted?.();
             signal.addEventListener("abort", () => {
               const reason: unknown = signal.reason;
               reject(reason instanceof Error ? reason : new Error("fixture aborted", { cause: reason }));
@@ -1264,6 +1356,7 @@ describe("server plugin runtime", () => {
       logger: testLogger(),
       lifecycleTimeoutMs: 50,
     });
+    await started;
     await vi.advanceTimersByTimeAsync(50);
     const runtime = await creating;
 
@@ -1275,6 +1368,7 @@ describe("server plugin runtime", () => {
       ["later", "active", undefined],
     ]);
     expect(records[0]?.message).toContain("timed out");
+    await runtime.stop();
   });
 
   it("contains health and disposal callback failures without hiding other plugins", async () => {

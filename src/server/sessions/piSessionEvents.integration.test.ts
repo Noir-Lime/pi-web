@@ -5,6 +5,8 @@ import { createAssistantMessageEventStream, type AssistantMessage } from "@earen
 import { createAgentSession, createEventBus, DefaultResourceLoader, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import companion from "../../../examples/session-bridge-plugin/src/companion.js";
+import { collectReview } from "../../../examples/session-bridge-plugin/src/reviewRun.js";
+import { reviewPrompt } from "../../../examples/session-bridge-plugin/src/browser/protocol.js";
 import { PI_WEB_HOST_PI_SESSIONS_CAPABILITY } from "../../server-plugin-api.js";
 import { createServerPluginPiSessionsCapabilityFactory } from "../plugins/serverPluginPiSessionsCapability.js";
 import { PiSessionService, type PiSessionRuntime } from "./piSessionService.js";
@@ -147,18 +149,12 @@ describe("hosted package messaging with native Pi", () => {
         .toContainEqual(expect.objectContaining({ role: "user" }));
       expect(session.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "stop" });
       // Exercise the shipped companion after /reload, through a hosted connection.
-      // Its author-defined receipt is distinct from the native agent settlement.
-      const receipt = vi.fn();
-      connection.on("session-bridge-example:reply", receipt);
-      const greetingSettled = new Promise<void>((resolve) => {
-        const off = bus.on("settled", () => { off(); resolve(); });
-      });
-      connection.emit("session-bridge-example:greet", { requestId: "example" });
-      expect(receipt).toHaveBeenCalledExactlyOnceWith({ requestId: "example", received: true });
+      // Completion is captured through native hooks, not inferred from a receipt.
+      const requestId = "11111111-1111-4111-8111-111111111111";
+      await expect(collectReview(connection, requestId, lifetime.signal)).resolves.toBe("Companion work observed");
       connection.close();
-      await greetingSettled;
       expect(session.messages).toContainEqual(expect.objectContaining({ role: "user", content: [
-        { type: "text", text: "Say a brief hello from the session bridge example. Do not use tools." },
+        { type: "text", text: reviewPrompt(requestId) },
       ] }));
       expect(service.activeCount()).toBe(1);
       await service.prompt(ref, "ordinary user work");

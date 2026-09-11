@@ -1,3 +1,6 @@
+import { mkdir } from "node:fs/promises";
+import { resolve } from "node:path";
+import { isPiWebPluginId } from "../../shared/pluginIds.js";
 import { pathToFileURL } from "node:url";
 import type {
   JsonObject,
@@ -122,6 +125,7 @@ export interface ServerPluginHostCapabilityFactory<Value = unknown> {
 
 export interface CreateServerPluginRuntimeOptions {
   catalog: Pick<PiWebPluginCatalog, "snapshot">;
+  dataDir: string;
   safeStart?: ServerPluginSafeStart;
   logger: ServerPluginRuntimeLogger;
   importer?: ServerPluginModuleImporter;
@@ -225,6 +229,7 @@ export class ServerPluginRuntime {
   private stopped = false;
 
   private constructor(
+    private readonly dataDir: string,
     private readonly safeStart: ServerPluginSafeStart | undefined,
     private readonly diagnostics: readonly PiWebPluginCatalogDiagnostic[],
     private readonly logger: ServerPluginRuntimeLogger,
@@ -250,6 +255,7 @@ export class ServerPluginRuntime {
     options: Omit<CreateServerPluginRuntimeOptions, "catalog">,
   ): Promise<ServerPluginRuntime> {
     const runtime = new ServerPluginRuntime(
+      resolve(options.dataDir),
       options.safeStart,
       Object.freeze(snapshot.diagnostics.map((diagnostic) => Object.freeze({ ...diagnostic }))),
       options.logger,
@@ -446,12 +452,16 @@ export class ServerPluginRuntime {
       const loadedPlugin = parsePluginExport(imported);
       plugin = loadedPlugin;
       phase = "activate";
+      if (!isPiWebPluginId(entry.id)) throw new Error(`Invalid PI WEB plugin id: ${entry.id}`);
+      const dataDirectory = resolve(this.dataDir, "plugin-data", entry.id);
+      await mkdir(dataDirectory, { recursive: true });
       const scopedLogger = createScopedLogger(entry.id, this.logger);
       noticeReporter = createScopedNoticeReporter(entry.id, this.noticeSink);
       const activationValue = await runBounded(entry.id, phase, this.lifecycleTimeoutMs, (signal) => loadedPlugin.activate(Object.freeze({
         apiVersion: 3,
         pluginId: entry.id,
         packageRoot: entry.packageRoot,
+        dataDirectory,
         logger: scopedLogger,
         settings,
         ...(noticeReporter === undefined ? {} : { notices: noticeReporter.reporter }),

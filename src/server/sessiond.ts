@@ -53,7 +53,6 @@ import { createServerPluginExecFile } from "./plugins/serverPluginExec.js";
 import { createServerPluginRuntime } from "./plugins/serverPluginRuntime.js";
 import { createServerPluginPiSessionsCapabilityFactory } from "./plugins/serverPluginPiSessionsCapability.js";
 import { createServerPluginPiSessionEventsCapabilityFactory } from "./plugins/serverPluginPiSessionEventsCapability.js";
-import { createServerPluginStateCapabilityFactory } from "./plugins/serverPluginStateCapability.js";
 import { createServerPluginWorkspacesCapabilityFactory } from "./plugins/serverPluginWorkspacesCapability.js";
 import {
   REQUIRED_TERMINAL_SERVICE_CAPABILITY,
@@ -207,9 +206,7 @@ async function createSessionDaemonRuntime() {
     logger: app.log,
     execFile: createServerPluginExecFile({ env: daemonEnvironment }),
     noticeSink: (source, input) => { serverNotices.record({ ...input, source }); },
-    hostCapabilityFactories: [createServerPluginStateCapabilityFactory({
-      dataDir: piWebDataDir(daemonEnvironment),
-    })],
+    dataDir: piWebDataDir(daemonEnvironment),
     lateHostCapabilities: [PI_WEB_HOST_WORKSPACES_CAPABILITY, PI_WEB_HOST_PI_SESSIONS_CAPABILITY, PI_WEB_HOST_PI_SESSION_EVENTS_CAPABILITY],
   });
   let sessionsForFailedConstruction: PiSessionService | undefined;

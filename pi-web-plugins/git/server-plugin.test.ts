@@ -369,6 +369,7 @@ async function activationFor(execFile: ServerPluginActivationContext["execFile"]
     apiVersion: 3,
     pluginId: "git",
     packageRoot: resolve("pi-web-plugins/git"),
+    dataDirectory: "/data/plugin-data/git",
     logger: {
       debug() { /* no-op */ },
       info() { /* no-op */ },

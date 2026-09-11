@@ -250,6 +250,7 @@ function activationContext(
     apiVersion: 3,
     pluginId,
     packageRoot: process.cwd(),
+    dataDirectory: "/data/plugin-data/pi-web.terminal",
     logger: Object.freeze({
       debug: () => undefined,
       info: () => undefined,

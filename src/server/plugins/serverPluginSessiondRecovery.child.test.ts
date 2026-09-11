@@ -86,10 +86,10 @@ describe("sessiond persisted server plugin recovery", () => {
       process.platform === "win32" ? { code: null, signal: "SIGTERM" } : { code: 0, signal: null },
     );
     expect(existsSync(markerPath)).toBe(false);
-    expect(existsSync(join(dataDir, "plugin-state"))).toBe(false);
+    expect(existsSync(join(dataDir, "plugin-data"))).toBe(false);
   }, 30_000);
 
-  it.skipIf(process.platform === "win32")("starts a state-only plugin in the early sessiond plugin phase and revokes state before disposal", async () => {
+  it.skipIf(process.platform === "win32")("starts a plugin with its persistent directory in the early sessiond phase and permits I/O during disposal", async () => {
     const root = await createDaemonFixture();
     await buildTerminalPackage(resolve("pi-web-plugins/terminal"), join(root, "dist/pi-web-plugins/terminal"));
 
@@ -98,36 +98,27 @@ describe("sessiond persisted server plugin recovery", () => {
     const pluginRoot = join(dataDir, "plugins", "state-only");
     const startedMarker = join(root, "state-plugin-started.json");
     const disposedMarker = join(root, "state-plugin-disposed.txt");
-    const serverApiUrl = pathToFileURL(join(root, "src/server-plugin-api.ts")).href;
     await mkdir(pluginRoot, { recursive: true });
     await writeFile(configPath, "{}\n", "utf8");
     await writeFile(join(pluginRoot, "package.json"), `${JSON.stringify({
       piWeb: { plugins: [{ id: "state-only", serverModule: "server.mjs" }] },
     })}\n`, "utf8");
     await writeFile(join(pluginRoot, "server.mjs"), `
-      import { writeFile } from "node:fs/promises";
-      import { PI_WEB_HOST_STATE_CAPABILITY } from ${JSON.stringify(serverApiUrl)};
-      let state;
+      import { readFile, writeFile } from "node:fs/promises";
+      import { join } from "node:path";
       export default {
         apiVersion: 3,
         name: "State-only fixture",
-        requires: [PI_WEB_HOST_STATE_CAPABILITY],
         activate(context) {
+          const filePath = join(context.dataDirectory, "state.json");
           return {
-            async start({ capabilities }) {
-              state = capabilities.resolve(PI_WEB_HOST_STATE_CAPABILITY);
-              const previous = await state.read();
-              await state.write({ starts: (previous?.starts ?? 0) + 1 });
+            async start() {
+              await writeFile(filePath, JSON.stringify({ starts: 1 }));
               await writeFile(${JSON.stringify(startedMarker)}, JSON.stringify({ packageRoot: context.packageRoot }));
               console.error("STATE_PLUGIN_STARTED");
             },
             async dispose() {
-              try {
-                await state.read();
-                await writeFile(${JSON.stringify(disposedMarker)}, "state remained active");
-              } catch (error) {
-                await writeFile(${JSON.stringify(disposedMarker)}, error instanceof Error ? error.message : String(error));
-              }
+              await writeFile(${JSON.stringify(disposedMarker)}, await readFile(filePath, "utf8"));
             }
           };
         }
@@ -139,7 +130,7 @@ describe("sessiond persisted server plugin recovery", () => {
     const startupOutput = await waitForOutput(child, "Server listening at", 15_000);
     expect(startupOutput).toContain("STATE_PLUGIN_STARTED");
     expect(JSON.parse(await readFile(startedMarker, "utf8"))).toEqual({ packageRoot: pluginRoot });
-    expect(JSON.parse(await readFile(join(dataDir, "plugin-state", "state-only", "state.json"), "utf8")))
+    expect(JSON.parse(await readFile(join(dataDir, "plugin-data", "state-only", "state.json"), "utf8")))
       .toEqual({ starts: 1 });
     expect((await readdir(pluginRoot)).sort()).toEqual(["package.json", "server.mjs"]);
 
@@ -148,7 +139,7 @@ describe("sessiond persisted server plugin recovery", () => {
     children.delete(child);
 
     expect(exit).toEqual({ code: 0, signal: null });
-    expect(await readFile(disposedMarker, "utf8")).toContain("state for state-only is no longer active");
+    expect(JSON.parse(await readFile(disposedMarker, "utf8"))).toEqual({ starts: 1 });
   }, 35_000);
 
   it.skipIf(process.platform === "win32")("assembles early workspace providers and sessions before one late consumer resume", async () => {
@@ -217,17 +208,15 @@ describe("sessiond persisted server plugin recovery", () => {
       piWeb: { plugins: [{ id: "b-state-early", serverModule: "server.mjs" }] },
     })}\n`, "utf8");
     await writeFile(join(stateRoot, "server.mjs"), `
-      import { appendFile } from "node:fs/promises";
-      import { PI_WEB_HOST_STATE_CAPABILITY } from ${JSON.stringify(serverApiUrl)};
+      import { appendFile, writeFile } from "node:fs/promises";
+      import { join } from "node:path";
       export default {
         apiVersion: 3,
         name: "Early state fixture",
-        requires: [PI_WEB_HOST_STATE_CAPABILITY],
-        activate() {
+        activate(context) {
           return {
-            async start({ capabilities }) {
-              const state = capabilities.resolve(PI_WEB_HOST_STATE_CAPABILITY);
-              await state.write({ phase: "early" });
+            async start() {
+              await writeFile(join(context.dataDirectory, "state.json"), JSON.stringify({ phase: "early" }));
               await appendFile(${JSON.stringify(eventsPath)}, "state:start\\n");
             }
           };
@@ -332,7 +321,7 @@ describe("sessiond persisted server plugin recovery", () => {
     expect(typeof admittedRun["createdId"]).toBe("string");
     expect(admittedRun["createdId"]).not.toBe(admittedRun["sessionId"]);
     expect(admittedRun["createdEcho"]).toBe("created and connected");
-    expect(JSON.parse(await readFile(join(dataDir, "plugin-state", "b-state-early", "state.json"), "utf8")))
+    expect(JSON.parse(await readFile(join(dataDir, "plugin-data", "b-state-early", "state.json"), "utf8")))
       .toEqual({ phase: "early" });
 
     child.kill("SIGTERM");

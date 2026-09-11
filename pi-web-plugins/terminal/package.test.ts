@@ -100,6 +100,7 @@ describe("bundled Terminal package", () => {
     });
     const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const runtime = await createServerPluginRuntime({
+      dataDir: join(root, "data"),
       catalog,
       logger,
       importer: async (moduleUrl) => {

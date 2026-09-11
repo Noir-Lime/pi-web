@@ -2,7 +2,6 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   PI_WEB_HOST_PI_SESSIONS_CAPABILITY,
-  PI_WEB_HOST_STATE_CAPABILITY,
   PI_WEB_HOST_WORKSPACES_CAPABILITY,
 } from "./server-plugin-api.js";
 import type {
@@ -11,7 +10,6 @@ import type {
   PiWebHostPiSessionRunCompletion,
   PiWebHostPiSessionRunInput,
   PiWebHostPiSessionsV1,
-  PiWebHostStateV1,
   PiWebHostWorkspaceAuthority,
   PiWebHostWorkspaceSelection,
   PiWebHostWorkspacesV1,
@@ -155,6 +153,7 @@ describe("public server plugin API", () => {
       apiVersion: 3,
       pluginId: "neutral-fixture",
       packageRoot: "/plugins/neutral-fixture",
+      dataDirectory: "/data/plugin-data/neutral-fixture",
       settings,
       signal,
       notices: { version: 1, record() { /* no-op */ } },
@@ -173,31 +172,6 @@ describe("public server plugin API", () => {
     expect(observedSignals).toHaveLength(7);
     expect(observedSignals.every((observed) => observed === signal)).toBe(true);
     expect(observedLifetimes).toEqual([lifetimeController.signal]);
-  });
-
-  it("exports the exact frozen package-scoped state v1 token and snapshots its methods", async () => {
-    const read = vi.fn(() => Promise.resolve({ revision: 1 }));
-    const write = vi.fn(() => Promise.resolve());
-    const clear = vi.fn(() => Promise.resolve());
-    const source = { version: 1 as const, read, write, clear };
-
-    const state = PI_WEB_HOST_STATE_CAPABILITY.parse(source);
-    Reflect.set(source, "read", () => Promise.resolve({ revision: 999 }));
-    await expect(state.read()).resolves.toEqual({ revision: 1 });
-    await state.write({ revision: 2 });
-    await state.clear();
-
-    expect(PI_WEB_HOST_STATE_CAPABILITY).toMatchObject({
-      pluginId: "pi-web.host",
-      id: "state",
-      version: 1,
-    });
-    expect(Object.isFrozen(PI_WEB_HOST_STATE_CAPABILITY)).toBe(true);
-    expect(Object.isFrozen(state)).toBe(true);
-    expect(write).toHaveBeenCalledWith({ revision: 2 });
-    expect(clear).toHaveBeenCalledOnce();
-    expect(() => PI_WEB_HOST_STATE_CAPABILITY.parse({ version: 1, read, write }))
-      .toThrow("must expose read, write, and clear");
   });
 
   it("exports the exact frozen workspaces v1 token and snapshots resolved authority", async () => {
@@ -356,7 +330,7 @@ describe("public server plugin API", () => {
 
   it("keeps host inputs readonly and concrete services out of the declaration surface", async () => {
     expectTypeOf<keyof ServerPluginActivationContext>().toEqualTypeOf<
-      "apiVersion" | "pluginId" | "packageRoot" | "logger" | "settings" | "notices" | "execFile" | "signal" | "lifetimeSignal"
+      "apiVersion" | "pluginId" | "packageRoot" | "dataDirectory" | "logger" | "settings" | "notices" | "execFile" | "signal" | "lifetimeSignal"
     >();
     expectTypeOf<keyof ServerPluginNoticeReporterV1>().toEqualTypeOf<"version" | "record">();
     expectTypeOf<keyof ServerPluginNoticeInput>().toEqualTypeOf<"severity" | "message" | "scope" | "context">();
@@ -364,7 +338,6 @@ describe("public server plugin API", () => {
     expectTypeOf<keyof PluginCapability>().toEqualTypeOf<"pluginId" | "id" | "version" | "parse">();
     expectTypeOf<keyof PluginCapabilityProvision>().toEqualTypeOf<"capability" | "value">();
     expectTypeOf<keyof ServerPluginCapabilityResolver>().toEqualTypeOf<"resolve">();
-    expectTypeOf<keyof PiWebHostStateV1>().toEqualTypeOf<"version" | "read" | "write" | "clear">();
     expectTypeOf<keyof PiWebHostWorkspaceSelection>().toEqualTypeOf<"projectId" | "workspaceId">();
     expectTypeOf<keyof PiWebHostWorkspaceAuthority>().toEqualTypeOf<"project" | "workspace">();
     expectTypeOf<keyof PiWebHostWorkspacesV1>().toEqualTypeOf<"version" | "resolve">();
@@ -414,7 +387,6 @@ describe("public server plugin API", () => {
     expectTypeOf<ReadonlyKeys<PluginCapability>>().toEqualTypeOf<keyof PluginCapability>();
     expectTypeOf<ReadonlyKeys<PluginCapabilityProvision>>().toEqualTypeOf<keyof PluginCapabilityProvision>();
     expectTypeOf<ReadonlyKeys<ServerPluginCapabilityResolver>>().toEqualTypeOf<keyof ServerPluginCapabilityResolver>();
-    expectTypeOf<ReadonlyKeys<PiWebHostStateV1>>().toEqualTypeOf<keyof PiWebHostStateV1>();
     expectTypeOf<ReadonlyKeys<PiWebHostWorkspaceSelection>>().toEqualTypeOf<keyof PiWebHostWorkspaceSelection>();
     expectTypeOf<ReadonlyKeys<PiWebHostWorkspaceAuthority>>().toEqualTypeOf<keyof PiWebHostWorkspaceAuthority>();
     expectTypeOf<ReadonlyKeys<PiWebHostWorkspacesV1>>().toEqualTypeOf<keyof PiWebHostWorkspacesV1>();

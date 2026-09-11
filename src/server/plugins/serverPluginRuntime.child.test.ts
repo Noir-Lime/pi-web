@@ -58,6 +58,7 @@ describe("server plugin runtime child-process fixtures", () => {
       const snapshot = { plugins: ${JSON.stringify(entries)}, diagnostics: [] };
       const logger = { debug() {}, info() {}, warn() {}, error() {} };
       const runtime = await createServerPluginRuntime({
+        dataDir: ${JSON.stringify(join(root, "data"))},
         catalog: { snapshot: async () => snapshot },
         safeStart: "bundled-only",
         logger,
@@ -168,6 +169,7 @@ describe("server plugin runtime child-process fixtures", () => {
         const notices = [];
         const activity = [];
         const runtime = await createServerPluginRuntime({
+        dataDir: ${JSON.stringify(join(root, "data"))},
           catalog: { snapshot: async () => ({ plugins: ${JSON.stringify(entries)}, diagnostics: [] }) },
           importer: async (url) => url.startsWith(${JSON.stringify(terminalPluginUrl)})
             ? { default: terminalPlugin }
@@ -248,6 +250,7 @@ describe("server plugin runtime child-process fixtures", () => {
       import { createServerPluginRuntime } from ${JSON.stringify(runtimeUrl)};
       const logger = { debug() {}, info() {}, warn() {}, error() {} };
       const runtime = await createServerPluginRuntime({
+        dataDir: ${JSON.stringify(join(root, "data"))},
         catalog: { snapshot: async () => { throw new Error("safe start must bypass catalog discovery"); } },
         safeStart: "none",
         logger,

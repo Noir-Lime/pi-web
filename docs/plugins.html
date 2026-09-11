@@ -316,7 +316,6 @@ After editing, check the manifest endpoint and browser-console failure cases.</c
                   <button class="copy-button" data-copy="#plugin-public-imports">Copy</button>
                 </div>
                 <pre id="plugin-public-imports"><code>import type { PiWebPlugin } from "@jmfederico/pi-web/plugin-api";
-import { PI_WEB_HOST_STATE_CAPABILITY } from "@jmfederico/pi-web/server-plugin-api";
 import type { PiWebServerPlugin, ServerPluginPeer, WorkspaceProvider } from "@jmfederico/pi-web/server-plugin-api";</code></pre>
               </div>
             </section>
@@ -405,14 +404,26 @@ import type { PiWebServerPlugin, ServerPluginPeer, WorkspaceProvider } from "@jm
             <section id="provider-contract">
               <h2>Host capabilities, package peer, and workspace providers</h2>
 
+              <h3 id="plugin-data-directory">Plugin data directory</h3>
+              <p>
+                Server activation receives an absolute <code>dataDirectory</code> path, created before activation at
+                <code>$PI_WEB_DATA_DIR/plugin-data/&lt;plugin-id&gt;</code> (default
+                <code>~/.pi-web/plugin-data/&lt;plugin-id&gt;</code>), for persistent plugin-owned files, subfolders,
+                or databases on the machine running the plugin. It is separate from installed code
+                and stable across package updates and session-daemon restarts. The directory is scoped by plugin id,
+                not by project or workspace. Plugins own their storage format, safe writes, concurrency, migrations,
+                and cleanup; PI WEB supplies no read/write/clear API or JSON size limit. This is a location convention,
+                not a sandbox. The activation <code>settings</code> value contains only that plugin's settings, not
+                the full PI WEB configuration. See the <a href="plugins.md#plugin-data-directory">directory example</a>.
+              </p>
+
               <h3 id="host-capabilities">Host-governed server capabilities</h3>
               <p>
                 Server plugins import exact frozen tokens from
                 <code>@jmfederico/pi-web/server-plugin-api</code>, list them in <code>requires</code>, and resolve them in
-                <code>start()</code>. <code>PI_WEB_HOST_STATE_CAPABILITY</code> provides one host-located durable JSON value
-                isolated by plugin id: <code>read()</code>, atomic whole-value <code>write()</code>, and idempotent
-                <code>clear()</code>. Compact UTF-8 state is limited to 256 KiB and 64 nested levels. Invalid writes reject;
-                malformed persisted state remains visible as an error until cleared or replaced.
+                <code>start()</code>. These capabilities provide current workspace resolution, hosted conversation
+                creation, and messaging with Pi companions. File storage uses the activation context's
+                <code>dataDirectory</code> path instead of a storage capability; plugins manage their own files.
               </p>
               <p>
                 <code>PI_WEB_HOST_WORKSPACES_CAPABILITY</code> resolves only opaque
@@ -494,11 +505,12 @@ import type { PiWebServerPlugin, ServerPluginPeer, WorkspaceProvider } from "@jm
 
               <h3>Try the companion/backend example</h3>
               <p>
-                The <a href="https://github.com/jmfederico/pi-web/tree/main/examples/session-bridge-plugin">session bridge example</a>
-                is a complete copyable package with <strong>Create session and greet</strong> and
-                <strong>Greet selected session</strong> buttons. Its README includes build and installation steps.
-                The panel uses selected-machine <code>context.peer</code>; the backend derives project/workspace ids
-                from the host-resolved request context and accepts the explicitly selected full session id.
+                The <a href="https://github.com/jmfederico/pi-web/tree/main/examples/session-bridge-plugin">Workspace Reviews example</a>
+                replaces the greeting demo with an opt-in Pi package; it is not installed by default.
+                <strong>Start review</strong> reviews uncommitted changes in a dedicated conversation;
+                <strong>Refresh reviews</strong>, a selector, and previous/next buttons browse saved plain-text findings.
+                The panel uses selected-machine <code>context.peer</code>; the backend derives workspace authority
+                from the host-resolved request, not browser-supplied paths or session ids.
               </p>
               <p>
                 Enable both halves on the target machine. PI WEB loads the <code>piWeb</code> browser/backend entries;
@@ -510,20 +522,21 @@ import type { PiWebServerPlugin, ServerPluginPeer, WorkspaceProvider } from "@jm
                 the browser. Use <code>/reload</code> in an existing hosted session after enabling the companion.
               </p>
               <p>
-                The backend declares/resolves both capabilities, creates only for the new-session button, connects
-                separately for either path, and subscribes before emitting a correlated request. The companion uses native
-                <code>pi.sendUserMessage(..., { deliverAs: "followUp" })</code>, queuing behind work in a busy session.
-                Its reply is a receipt, not agent completion or provider success; see normal session output for those
-                outcomes. Model credentials must be configured on the selected machine.
+                The backend declares both session capabilities, creates a conversation, connects separately, and
+                subscribes before emitting a correlated request. The companion uses native <code>pi.sendUserMessage</code>,
+                message/tool hooks, and <code>agent_settled</code> to capture final text. Receipt is not completion.
+                Provider errors, aborts, failed tools, interfering prompts, and empty/truncated responses fail conservatively.
+                Model credentials are required. Review instructions request no modifications but are not a tool sandbox.
               </p>
               <p>
-                The example waits at most five seconds, observes request cancellation and <code>connection.signal</code>,
-                then removes listeners/timers and closes its request-scoped connection without stopping work.
-                Longer-lived backends can retain connections independently of browsers and must observe their lifetime
-                signals. Missing receipts can mean disabled/untrusted/unreloaded or incompatible companions; check before
-                retrying because work may have started. Later receipt failure or browser cancellation does not roll back
-                a created conversation: find it in Sessions and continue normally. This adds no durable queue, replay,
-                or new agent API. See the <a href="plugins.md#try-the-companionbackend-example">full author guidance</a>.
+                Admitted reviews belong to the backend lifetime, independently of browser requests. Receipt waits
+                are bounded to five seconds and completion to ten minutes. Cleanup closes capture, not agent work;
+                inspect Sessions before retrying a timeout. Workspace-scoped plugin-owned JSON files in
+                <code>dataDirectory</code> store status and findings through atomic replacement. Refresh loads metadata
+                and one selected text record; stale running records after restart display as interrupted, never successful.
+                There is no automatic retry, event replay, durable job recovery, retention policy, or pagination.
+                See the <a href="plugins.md#try-the-companionbackend-example">full author guidance</a> and
+                <a href="https://github.com/jmfederico/pi-web/blob/main/examples/session-bridge-plugin/docs/usage.md">example usage guide</a>.
               </p>
 
               <h3>Exact-package peer</h3>

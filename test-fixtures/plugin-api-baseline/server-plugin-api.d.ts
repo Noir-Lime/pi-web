@@ -14,6 +14,8 @@ export interface ServerPluginActivationContext {
     readonly apiVersion: 3;
     readonly pluginId: string;
     readonly packageRoot: string;
+    /** Absolute plugin-specific persistent directory, created by the host before activation. Plugins own all file I/O and data formats. */
+    readonly dataDirectory: string;
     readonly logger: ServerPluginLogger;
     readonly settings: JsonObject;
     /** Record a host-attributed application notice when this capability is available. */
@@ -96,22 +98,6 @@ export interface ServerPluginExecFileResult {
     stdoutTruncated: boolean;
     stderrTruncated: boolean;
 }
-/**
- * Package-scoped durable state owned and located by the host. Values are
- * detached JSON with at most 64 nested levels, and each compact UTF-8 payload
- * is limited to 256 KiB. Calls reject after the declaring plugin's lifetime is revoked.
- */
-export interface PiWebHostStateV1 {
-    readonly version: 1;
-    /** Read the current value, or `undefined` before the first write or after clear. */
-    readonly read: () => Promise<JsonValue | undefined>;
-    /** Atomically replace the complete value after validating the JSON boundary and quota. */
-    readonly write: (value: JsonValue) => Promise<void>;
-    /** Remove the complete value; clearing an absent value succeeds. */
-    readonly clear: () => Promise<void>;
-}
-/** Exact state v1 capability supplied separately for each declaring server plugin. */
-export declare const PI_WEB_HOST_STATE_CAPABILITY: PluginCapability<PiWebHostStateV1, 1>;
 /** Current host authority selected only by opaque project and workspace ids. */
 export interface PiWebHostWorkspaceSelection {
     readonly projectId: string;

@@ -1,11 +1,9 @@
 import {
   PI_WEB_HOST_PI_SESSIONS_CAPABILITY,
-  PI_WEB_HOST_STATE_CAPABILITY,
   PI_WEB_HOST_WORKSPACES_CAPABILITY,
 } from "@jmfederico/pi-web/server-plugin-api";
 import type {
   PiWebHostPiSessionsV1,
-  PiWebHostStateV1,
   PiWebHostWorkspacesV1,
   PluginCapability,
   ServerPluginPeer,
@@ -39,7 +37,6 @@ const plugin: PiWebServerPlugin = {
   name: "Server declaration fixture",
   requires: [
     fixtureDependency,
-    PI_WEB_HOST_STATE_CAPABILITY,
     PI_WEB_HOST_WORKSPACES_CAPABILITY,
     PI_WEB_HOST_PI_SESSIONS_CAPABILITY,
   ],
@@ -54,10 +51,7 @@ const plugin: PiWebServerPlugin = {
       start: async ({ capabilities, signal }) => {
         signal.throwIfAborted();
         context.logger.info(capabilities.resolve(fixtureDependency).status());
-        const state: PiWebHostStateV1 = capabilities.resolve(PI_WEB_HOST_STATE_CAPABILITY);
-        const current = await state.read();
-        await state.write({ starts: current === undefined ? 1 : 2 });
-        await state.clear();
+        context.logger.info(context.dataDirectory);
         const workspaces: PiWebHostWorkspacesV1 = capabilities.resolve(PI_WEB_HOST_WORKSPACES_CAPABILITY);
         const authority = await workspaces.resolve({
           projectId: "fixture-project",
