@@ -6,7 +6,6 @@ import {
   type PiWebHostPiSessionsV1,
 } from "../../server-plugin-api.js";
 import type { ProjectService } from "../projects/projectService.js";
-import type { PiSessionRef } from "../sessions/piSessionService.js";
 import type { WorkspaceProviderRegistry } from "../workspaces/workspaceProviderRegistry.js";
 import type { ServerPluginHostCapabilityContext, ServerPluginHostCapabilityFactory } from "./serverPluginRuntime.js";
 import { createServerPluginWorkspacesCapabilityFactory } from "./serverPluginWorkspacesCapability.js";
@@ -20,8 +19,6 @@ interface HostPiSessionService {
     prompt: string,
     signal: AbortSignal,
   ): Promise<{ readonly id: string; readonly completion: Promise<void> }>;
-  abort(ref: PiSessionRef): Promise<void>;
-  stop(ref: PiSessionRef): Promise<void>;
 }
 
 export interface CreateServerPluginPiSessionsCapabilityOptions {
@@ -33,10 +30,6 @@ export interface CreateServerPluginPiSessionsCapabilityOptions {
 }
 
 interface RunAdmission {
-  cancelled: boolean;
-  cleaningUp: boolean;
-  ref?: PiSessionRef;
-  abort?: Promise<void>;
   readonly settled: Promise<void>;
   settle(): void;
 }
@@ -57,24 +50,15 @@ export function createServerPluginPiSessionsCapabilityFactory(
     create(context: ServerPluginHostCapabilityContext) {
       const workspaceAuthority = workspaceFactory.create(context).value;
       const admissions = new Set<RunAdmission>();
-      const cleanupFailures: unknown[] = [];
+      const startupLifetime = new AbortController();
       let revoked = false;
-
-      const abortAdmission = (admission: RunAdmission): Promise<void> | undefined => {
-        const ref = admission.ref;
-        if (ref === undefined || admission.cleaningUp) return admission.abort;
-        admission.abort ??= options.sessions.abort(ref);
-        void admission.abort.catch(() => undefined);
-        return admission.abort;
-      };
 
       const revoke = (): void => {
         if (revoked) return;
         revoked = true;
-        for (const admission of admissions) {
-          admission.cancelled = true;
-          void abortAdmission(admission);
-        }
+        // Only unpublished startup belongs to the plugin. The service stops
+        // observing this signal when it publishes the hosted conversation.
+        startupLifetime.abort(context.lifetimeSignal.reason);
       };
 
       const lifetimeAbort = (): void => { revoke(); };
@@ -100,47 +84,31 @@ export function createServerPluginPiSessionsCapabilityFactory(
               projectId: input.projectId,
               workspaceId: input.workspaceId,
             });
-            assertActive(context, revoked || admission.cancelled);
+            assertActive(context, revoked);
 
             let started: { readonly id: string; readonly completion: Promise<void> };
             try {
               started = await options.sessions.startOneShotRun(
                 authority.workspace.path,
                 input.prompt,
-                context.lifetimeSignal,
+                startupLifetime.signal,
               );
             } catch (error) {
-              if (revoked || admission.cancelled || context.lifetimeSignal.aborted) {
+              if (revoked || context.lifetimeSignal.aborted) {
                 throw revokedError(context, error);
               }
               throw capabilityError(context.pluginId, "could not start a PI session", error);
             }
-            admission.ref = Object.freeze({ id: started.id, cwd: authority.workspace.path });
-
-            if (revoked || admission.cancelled) {
-              admission.cancelled = true;
-              void abortAdmission(admission);
-              await cleanupBeforeHandle(options.sessions, admission, cleanupFailures, context.pluginId);
-              throw revokedError(context);
-            }
-
-            const completion = completeRun(
-              options.sessions,
-              admission,
-              started.completion,
-              cleanupFailures,
-            )
-              .finally(() => {
-                admissions.delete(admission);
-                admission.settle();
-              });
+            // Always consume the outcome, even if revocation wins this await.
+            // A returned session is already published and must not be reclaimed.
+            const completion = completeRun(started.completion)
+              .finally(() => { admissions.delete(admission); });
             handedOffCompletion = true;
+            assertActive(context, revoked);
             return Object.freeze({ sessionId: started.id, completion });
           } finally {
-            if (!handedOffCompletion) {
-              admissions.delete(admission);
-              admission.settle();
-            }
+            if (!handedOffCompletion) admissions.delete(admission);
+            admission.settle();
           }
         },
       });
@@ -151,87 +119,27 @@ export function createServerPluginPiSessionsCapabilityFactory(
           revoke();
           context.lifetimeSignal.removeEventListener("abort", lifetimeAbort);
           await waitForSettled([...admissions].map(({ settled }) => settled), signal);
-          if (cleanupFailures.length === 1) throw cleanupFailures[0];
-          if (cleanupFailures.length > 1) {
-            throw new AggregateError(cleanupFailures, `PI WEB host PI session cleanup failed for server plugin ${context.pluginId}`);
-          }
         },
       });
     },
   });
 }
 
-async function completeRun(
-  sessions: HostPiSessionService,
-  admission: RunAdmission,
-  runCompletion: Promise<void>,
-  cleanupFailures: unknown[],
-): Promise<PiWebHostPiSessionRunCompletion> {
-  const ref = admission.ref;
-  if (ref === undefined) throw new Error("PI WEB host PI session admission has no session identity");
-
-  let completion: PiWebHostPiSessionRunCompletion;
+async function completeRun(runCompletion: Promise<void>): Promise<PiWebHostPiSessionRunCompletion> {
   try {
-    if (admission.cancelled) completion = Object.freeze({ status: "cancelled" });
-    else {
-      await runCompletion;
-      completion = Object.freeze({ status: admissionWasCancelled(admission) ? "cancelled" : "completed" });
-    }
+    await runCompletion;
+    return Object.freeze({ status: "completed" });
   } catch (error) {
-    completion = admission.cancelled
+    return error instanceof Error && error.name === "AbortError"
       ? Object.freeze({ status: "cancelled" })
       : failedCompletion(error);
-  }
-
-  if (admission.cancelled) {
-    try {
-      await admission.abort;
-    } catch (error) {
-      cleanupFailures.push(error);
-      completion = failedCompletion(error);
-    }
-  }
-
-  admission.cleaningUp = true;
-  try {
-    await sessions.stop(ref);
-  } catch (error) {
-    cleanupFailures.push(error);
-    completion = failedCompletion(error);
-  }
-  return completion;
-}
-
-async function cleanupBeforeHandle(
-  sessions: HostPiSessionService,
-  admission: RunAdmission,
-  cleanupFailures: unknown[],
-  pluginId: string,
-): Promise<void> {
-  const ref = admission.ref;
-  if (ref === undefined) return;
-  try {
-    await admission.abort;
-  } catch (error) {
-    cleanupFailures.push(error);
-  }
-  admission.cleaningUp = true;
-  try {
-    await sessions.stop(ref);
-  } catch (error) {
-    cleanupFailures.push(error);
-    throw capabilityError(pluginId, "could not clean up a cancelled PI session", error);
   }
 }
 
 function createAdmission(): RunAdmission {
   let settle!: () => void;
   const settled = new Promise<void>((resolve) => { settle = resolve; });
-  return { cancelled: false, cleaningUp: false, settled, settle };
-}
-
-function admissionWasCancelled(admission: RunAdmission): boolean {
-  return admission.cancelled;
+  return { settled, settle };
 }
 
 function failedCompletion(error: unknown): PiWebHostPiSessionRunCompletion {

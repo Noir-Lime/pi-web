@@ -27,7 +27,7 @@ describe("PiSessionService host-owned one-shot runs", () => {
     const prompt = deferred();
     const hub = new CapturingSessionEventHub();
     const promptCall = vi.fn(() => {
-      expect(hub.globalEvents.some((event) => event.type === "session.created")).toBe(false);
+      expect(hub.globalEvents.some((event) => event.type === "session.created")).toBe(true);
       return prompt.promise;
     });
     const fake = fakeRuntime("session-1", { prompt: promptCall });
@@ -66,6 +66,9 @@ describe("PiSessionService host-owned one-shot runs", () => {
 
     prompt.resolve();
     await run.completion;
+    expect(service.activeCount()).toBe(1);
+    expect(fake.calls.abort).toBe(0);
+    expect(fake.calls.dispose).toBe(0);
     await service.stop(sessionRef(run.id));
     expect(fake.calls.abort).toBe(1);
     expect(fake.calls.dispose).toBe(1);
@@ -97,6 +100,59 @@ describe("PiSessionService host-owned one-shot runs", () => {
     });
     await service.stop(sessionRef(run.id));
     await service.dispose();
+  });
+
+  it.each([
+    ["stop", "settled"], ["error", "settled"], ["aborted", "settled"],
+    ["stop", "queued"], ["error", "queued"],
+  ])("freezes initial %s outcome before later %s user activity", async (reason, boundary) => {
+    const prompt = deferred();
+    const fake = fakeRuntime("session-1", { prompt: () => prompt.promise });
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: TEST_AGENT_DIR,
+      modelRuntime: testModelRuntime,
+      createAgentRuntime: runtimeCreator(fake.runtime),
+      sessionManager: sessionGateway([]),
+      heartbeatIntervalMs: 60_000,
+    });
+    try {
+      const run = await service.startOneShotRun("/workspace", "Initial work", new AbortController().signal);
+      fake.emit({ type: "message_start", message: { role: "user", content: "Initial work" } });
+      fake.emit({ type: "message_end", message: { role: "assistant", stopReason: reason, errorMessage: "initial failure" } });
+      if (boundary === "settled") fake.emit({ type: "agent_settled" });
+      else fake.emit({ type: "message_start", message: { role: "user", content: "Later queued work" } });
+      // A later turn finishes before the initial prompt promise's continuation.
+      fake.emit({ type: "message_end", message: { role: "assistant", stopReason: reason === "stop" ? "error" : "stop", errorMessage: "later failure" } });
+      prompt.resolve();
+      if (reason === "stop") await expect(run.completion).resolves.toBeUndefined();
+      else await expect(run.completion).rejects.toThrow(reason === "error" ? "initial failure" : "was aborted");
+      expect(fake.calls.abort).toBe(0);
+    } finally {
+      await service.dispose();
+    }
+  });
+
+  it("reports a successful retry rather than its transient provider error", async () => {
+    const prompt = deferred();
+    const fake = fakeRuntime("session-1", { prompt: () => prompt.promise });
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: TEST_AGENT_DIR,
+      modelRuntime: testModelRuntime,
+      createAgentRuntime: runtimeCreator(fake.runtime),
+      sessionManager: sessionGateway([]),
+      heartbeatIntervalMs: 60_000,
+    });
+    try {
+      const run = await service.startOneShotRun("/workspace", "Initial work", new AbortController().signal);
+      fake.emit({ type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "transient" } });
+      fake.emit({ type: "agent_end", messages: [], willRetry: true });
+      fake.emit({ type: "message_end", message: { role: "assistant", stopReason: "stop" } });
+      fake.emit({ type: "agent_settled" });
+      prompt.resolve();
+      await expect(run.completion).resolves.toBeUndefined();
+    } finally {
+      await service.dispose();
+    }
   });
 
   it("rejects a pre-cancelled lifetime before constructing a session", async () => {

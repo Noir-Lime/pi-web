@@ -1469,10 +1469,10 @@ export class PiSessionService implements SessionRouteService {
     try {
       signal.throwIfAborted();
       this.maybeGenerateSessionName(session, promptText);
-      const completion = this.beginPromptSubmission(session, promptText, undefined);
-      signal.throwIfAborted();
       const created = this.announceCreatedSession(active, cwd);
-      signal.throwIfAborted();
+      // Publication transfers lifetime ownership to normal hosting. Plugin
+      // cancellation after this point must not abort this or later user work.
+      const completion = this.submitInitialRunPrompt(session, promptText);
       return Object.freeze({ id: created.id, completion });
     } catch (error) {
       try {
@@ -2594,6 +2594,44 @@ export class PiSessionService implements SessionRouteService {
     return promptPromise;
   }
 
+  private async submitInitialRunPrompt(session: PiAgentSession, text: string): Promise<void> {
+    let failure: Error | undefined;
+    let settled = false;
+    let sawInitialUserMessage = false;
+    const unsubscribe = session.subscribe((event) => {
+      if (settled || !isRecord(event)) return;
+      if (event["type"] === "agent_settled") {
+        // Freeze the initial outcome before a later user submission can change it.
+        settled = true;
+        return;
+      }
+      const message = event["message"];
+      if (!isRecord(message)) return;
+      if (event["type"] === "message_start" && message["role"] === "user") {
+        // Pi can drain a queued user follow-up inside the same prompt promise.
+        // Its outcome belongs to that later submission, not this launcher.
+        if (sawInitialUserMessage) settled = true;
+        sawInitialUserMessage = true;
+        return;
+      }
+      if (event["type"] !== "message_end" || message["role"] !== "assistant") return;
+      // A successful retry supersedes a transient provider failure. Pi's
+      // prompt promise can fulfill even when the final assistant is an error.
+      const reason = message["stopReason"];
+      failure = reason === "aborted"
+        ? new DOMException("Initial PI session run was aborted", "AbortError")
+        : reason === "error"
+          ? new Error(typeof message["errorMessage"] === "string" ? message["errorMessage"] : "Initial PI session run failed")
+          : undefined;
+    });
+    try {
+      await this.beginPromptSubmission(session, text, undefined);
+      if (failure !== undefined) throw failure;
+    } finally {
+      unsubscribe();
+    }
+  }
+
   private enqueuePromptDuringCompaction(session: PiAgentSession, text: string, kind: QueuedPromptKind, images: ImageContent[] = [], echoUserMessage = true): void {
     const queue = this.compactionPromptQueues.get(session.sessionId) ?? [];
     queue.push({ kind, text, ...(images.length > 0 ? { images } : {}), ...(echoUserMessage ? {} : { echoUserMessage: false }) });
@@ -3614,9 +3652,11 @@ export class PiSessionService implements SessionRouteService {
       }
       startupSignal?.throwIfAborted();
       startup.report(STARTUP_PHASE_EXTENSIONS);
+      // session_start hooks use the same native agent as ordinary prompts.
+      // Observe them before binding extensions, including startup messages.
+      this.bindRuntime(active);
       await this.bindSessionExtensions(runtime.session, notificationGeneration, startupSignal);
       startupSignal?.throwIfAborted();
-      this.bindRuntime(active);
       runtime.setRebindSession(async (session) => {
         const priorGeneration = notificationGeneration;
         let candidateGeneration: SessionNotificationGeneration | undefined;
@@ -3696,11 +3736,11 @@ export class PiSessionService implements SessionRouteService {
     generation: SessionNotificationGeneration | undefined,
     startupSignal?: AbortSignal,
   ): Promise<void> {
-    const uiContext = this.sessionUiContext(session, generation, startupSignal);
-    // A `session_start` hook can park this bind on a dialog the browser has
-    // not answered yet. On the initial create/open path the session becomes
-    // active only after this returns, so register it for the duration: the
-    // answer that unblocks startup has to be reachable while it waits.
+    const startupDialogs = { signal: startupSignal };
+    const uiContext = this.sessionUiContext(session, generation, startupDialogs);
+    // A session_start hook can park this bind on a browser dialog. Keep
+    // startup lookup and cancellation available for the duration of the bind,
+    // including paths which resolve a dialog before session creation returns.
     this.startupSessions.set(session.sessionId, session);
     try {
       await session.bindExtensions({
@@ -3713,6 +3753,9 @@ export class PiSessionService implements SessionRouteService {
         },
       });
     } finally {
+      // Even a captured startup UI context must not carry plugin cancellation
+      // into later user turns after startup has finished.
+      startupDialogs.signal = undefined;
       this.startupSessions.delete(session.sessionId);
     }
   }
@@ -3724,7 +3767,7 @@ export class PiSessionService implements SessionRouteService {
   private sessionUiContext(
     session: PiAgentSession,
     generation: SessionNotificationGeneration | undefined,
-    startupSignal?: AbortSignal,
+    startupDialogs?: { signal: AbortSignal | undefined },
   ): ExtensionUIContext {
     const baseUiContext = session.extensionRunner.getUIContext();
     const notify: ExtensionUIContext["notify"] = (message, type) => {
@@ -3750,15 +3793,15 @@ export class PiSessionService implements SessionRouteService {
         if (property === "theme") return plainTextTheme;
         if (property === "confirm") {
           return (title: string, message: string, opts?: ExtensionUIDialogOptions) =>
-            this.openExtensionDialog(session, { kind: "confirm", title, message }, opts, startupSignal);
+            this.openExtensionDialog(session, { kind: "confirm", title, message }, opts, startupDialogs?.signal);
         }
         if (property === "select") {
           return (title: string, options: string[], opts?: ExtensionUIDialogOptions) =>
-            this.openExtensionDialog(session, { kind: "select", title, options }, opts, startupSignal);
+            this.openExtensionDialog(session, { kind: "select", title, options }, opts, startupDialogs?.signal);
         }
         if (property === "input") {
           return (title: string, placeholder: string | undefined, opts?: ExtensionUIDialogOptions) =>
-            this.openExtensionDialog(session, { kind: "input", title, placeholder }, opts, startupSignal);
+            this.openExtensionDialog(session, { kind: "input", title, placeholder }, opts, startupDialogs?.signal);
         }
         const value: unknown = Reflect.get(target, property, receiver);
         return value;

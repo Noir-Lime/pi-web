@@ -132,16 +132,16 @@ describe("server plugin PI sessions capability", () => {
       1,
       resolve("/repo/worktree"),
       fixture.input.prompt,
-      fixture.lifetime.signal,
+      expect.any(AbortSignal),
     );
     expect(fixture.sessions.startOneShotRun).toHaveBeenNthCalledWith(
       2,
       resolve("/repo/moved-worktree"),
       fixture.input.prompt,
-      fixture.lifetime.signal,
+      expect.any(AbortSignal),
     );
     expect(fixture.runCompletion).toHaveBeenCalledTimes(2);
-    expect(fixture.sessions.stop).toHaveBeenCalledTimes(2);
+    expect(fixture.sessions.stop).not.toHaveBeenCalled();
     expect(fixture.sessions.abort).not.toHaveBeenCalled();
     expect(Object.isFrozen(first)).toBe(true);
     expect(Object.isFrozen(await first.completion)).toBe(true);
@@ -174,7 +174,7 @@ describe("server plugin PI sessions capability", () => {
     const afterFailure = await fixture.capability.run(fixture.input);
     await expect(afterFailure.completion).resolves.toEqual({ status: "completed" });
 
-    expect(fixture.sessions.stop).toHaveBeenCalledTimes(3);
+    expect(fixture.sessions.stop).not.toHaveBeenCalled();
     await fixture.instance.dispose?.(AbortSignal.timeout(1_000));
   });
 
@@ -263,7 +263,7 @@ describe("server plugin PI sessions capability", () => {
     expect(fake.calls.dispose).toBe(1);
   });
 
-  it("reclaims a session when lifetime cancellation wins the final startup await", async () => {
+  it("does not reclaim a published session when cancellation wins the final startup await", async () => {
     const started = deferred<{ id: string; completion: Promise<void> }>();
     const fixture = harness({ startOneShotRun: () => started.promise });
 
@@ -273,66 +273,83 @@ describe("server plugin PI sessions capability", () => {
     started.resolve({ id: "session-late", completion: Promise.resolve() });
 
     await expect(running).rejects.toThrow("is no longer active");
-    expect(fixture.sessions.abort).toHaveBeenCalledOnce();
-    expect(fixture.sessions.abort).toHaveBeenCalledWith({
-      id: "session-late",
-      cwd: resolve("/repo/worktree"),
-    });
-    expect(fixture.sessions.stop).toHaveBeenCalledOnce();
-    expect(fixture.sessions.stop).toHaveBeenCalledWith({
-      id: "session-late",
-      cwd: resolve("/repo/worktree"),
-    });
-    await fixture.instance.dispose?.(AbortSignal.timeout(1_000));
-  });
-
-  it("lets in-progress stop own cancellation instead of racing it with a late abort", async () => {
-    const stopping = deferred();
-    const fixture = harness();
-    fixture.sessions.stop.mockImplementation(() => stopping.promise);
-
-    const run = await fixture.capability.run(fixture.input);
-    await vi.waitFor(() => { expect(fixture.sessions.stop).toHaveBeenCalledOnce(); });
-    fixture.lifetime.abort(new DOMException("Plugin stopped", "AbortError"));
-    stopping.resolve();
-
-    await expect(run.completion).resolves.toEqual({ status: "completed" });
     expect(fixture.sessions.abort).not.toHaveBeenCalled();
+    expect(fixture.sessions.stop).not.toHaveBeenCalled();
     await fixture.instance.dispose?.(AbortSignal.timeout(1_000));
   });
 
-  it("revokes admission, aborts active work, and waits for transcript-preserving shutdown cleanup", async () => {
-    const prompt = deferred();
-    const events: string[] = [];
-    const fixture = harness({
-      runCompletion: () => prompt.promise,
-    });
-    fixture.sessions.abort.mockImplementation(() => {
-      events.push("abort");
-      prompt.reject(new DOMException("Plugin stopped", "AbortError"));
-      return Promise.resolve();
-    });
-    fixture.sessions.stop.mockImplementation(() => {
-      events.push("stop");
-      return Promise.resolve();
-    });
+  it("reports a user-aborted initial submission as cancelled without stopping its conversation", async () => {
+    const fixture = harness({ runCompletion: () => Promise.reject(new DOMException("User stopped", "AbortError")) });
+    const run = await fixture.capability.run(fixture.input);
+    await expect(run.completion).resolves.toEqual({ status: "cancelled" });
+    expect(fixture.sessions.abort).not.toHaveBeenCalled();
+    expect(fixture.sessions.stop).not.toHaveBeenCalled();
+    await fixture.instance.dispose?.(AbortSignal.timeout(1_000));
+  });
 
+  it("leaves later user work running when initial completion settles and the plugin is disposed", async () => {
+    const initial = deferred();
+    const later = deferred();
+    const laterStarted = deferred();
+    const dialogs = new PendingExtensionDialogStore({ createDialogId: () => "later-dialog" });
+    const fake = fakeRuntime("session-1", {
+      prompt: (text) => {
+        if (text === "initial") return initial.promise;
+        laterStarted.resolve();
+        return later.promise;
+      },
+    });
+    const sessions = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: "/tmp/pi-web-test-agent", modelRuntime: testModelRuntime,
+      sessionManager: sessionGateway([]), archiveStore: emptyArchiveStore(),
+      createAgentRuntime: runtimeCreator(fake.runtime), heartbeatIntervalMs: 60_000,
+      pendingExtensionDialogStore: dialogs, extensionDialogsTimeoutMs: 0,
+    });
+    const lifetime = new AbortController();
+    const instance = createServerPluginPiSessionsCapabilityFactory({
+      projects: { requireProject: () => Promise.resolve(project) },
+      workspaces: { resolve: () => Promise.resolve({ status: "folder", projectId: project.id, workspaces: [workspace("/workspace")], diagnostics: [] }) },
+      sessions,
+    }).create({ pluginId: "run-consumer", packageRoot: "/plugins/run-consumer", lifetimeSignal: lifetime.signal });
+    try {
+      const run = await instance.value.run({ projectId: project.id, workspaceId: "workspace-1", prompt: "initial" });
+      fake.emit({ type: "agent_settled" });
+      await sessions.prompt({ id: run.sessionId, cwd: "/workspace" }, "later user work");
+      await laterStarted.promise;
+      initial.resolve();
+      await expect(run.completion).resolves.toEqual({ status: "completed" });
+      lifetime.abort();
+      await instance.dispose?.(AbortSignal.timeout(1_000));
+      expect(sessions.activeCount()).toBe(1);
+      expect(fake.calls.abort).toBe(0);
+      expect(fake.calls.dispose).toBe(0);
+      expect(fake.calls.clearQueue).toBe(0);
+      const ui = fake.calls.bindExtensions[0]?.uiContext;
+      if (ui === undefined) throw new Error("Expected bound extension UI");
+      // Startup's UI context must not retain the revoked plugin signal.
+      const answer = ui.confirm("Later user work", "Continue?");
+      expect(dialogs.pendingDialogs(run.sessionId)).toHaveLength(1);
+      await sessions.dispose();
+      await expect(answer).resolves.toBe(false);
+    } finally {
+      initial.resolve();
+      later.resolve();
+      await sessions.dispose();
+    }
+  });
+
+  it("revokes new admissions without aborting or waiting for published work", async () => {
+    const prompt = deferred();
+    const fixture = harness({ runCompletion: () => prompt.promise });
     const run = await fixture.capability.run(fixture.input);
     fixture.lifetime.abort(new DOMException("Plugin lifetime ended", "AbortError"));
 
-    await expect(run.completion).resolves.toEqual({ status: "cancelled" });
     await fixture.instance.dispose?.(AbortSignal.timeout(1_000));
     await expect(fixture.capability.run(fixture.input))
       .rejects.toThrow("run-consumer is no longer active");
-
-    expect(events).toEqual(["abort", "stop"]);
-    expect(fixture.sessions.abort).toHaveBeenCalledWith({
-      id: run.sessionId,
-      cwd: resolve("/repo/worktree"),
-    });
-    expect(fixture.sessions.stop).toHaveBeenCalledWith({
-      id: run.sessionId,
-      cwd: resolve("/repo/worktree"),
-    });
+    expect(fixture.sessions.abort).not.toHaveBeenCalled();
+    expect(fixture.sessions.stop).not.toHaveBeenCalled();
+    prompt.resolve();
+    await expect(run.completion).resolves.toEqual({ status: "completed" });
   });
 });

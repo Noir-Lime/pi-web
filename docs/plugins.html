@@ -426,14 +426,16 @@ import type { PiWebServerPlugin, ServerPluginPeer, WorkspaceProvider } from "@jm
                 characters each) and one non-empty initial prompt (at most 64 KiB UTF-8). It re-resolves workspace
                 authority, admits at most four concurrent runs per plugin, and returns only a frozen session id plus a
                 completion promise for <code>completed</code>, <code>cancelled</code>, or <code>failed</code> (failure text
-                is bounded to 4 KiB). PI WEB owns the visible transcript-preserving session, disables delegation tools,
-                starts exactly that initial prompt, and exposes no model/path controls, runtime object, arbitrary session
-                API, or per-run cancellation handle.
+                is bounded to 4 KiB). Completion describes the initial submission, including final provider errors;
+                handled input can complete without an assistant response. PI WEB observes extension startup activity,
+                announces the visible session before its initial prompt, and disables delegation tools. It exposes no
+                model/path controls, runtime object, arbitrary session API, or per-run cancellation handle. The hosted
+                conversation remains available for user work after initial completion or plugin disposal.
               </p>
               <p>
                 These values are created separately for each declaring plugin and revoked with its lifetime. Revocation
-                rejects new work, cancels that plugin's admitted sessions, reclaims startup races, and boundedly drains
-                cleanup. State is available in the early phase; workspace and Pi-session authority become active together
+                rejects new work and cancels unpublished startup, including pending startup dialogs. Cleanup waits for
+                startup to settle, not for published conversations, and does not abort later user work. State is available in the early phase; workspace and Pi-session authority become active together
                 only after provider topology and host session ownership exist. A plugin contributing a workspace provider
                 cannot require either late capability because that is a topology cycle. In <code>bundled-only</code> safe
                 start, external plugins never receive capabilities; <code>none</code> imports no server plugins while the

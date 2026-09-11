@@ -149,12 +149,13 @@ export type PiWebHostPiSessionRunCompletion = {
 } | {
     readonly status: "cancelled";
 };
-/** Detached identity and completion for one visible, transcript-preserving Pi session. */
+/** Host-owned conversation identity; initial completion never closes the session. */
 export interface PiWebHostPiSessionRun {
     readonly sessionId: string;
+    /** Initial submission outcome, including final provider errors; not later user turns. */
     readonly completion: Promise<PiWebHostPiSessionRunCompletion>;
 }
-/** Package-attributed admission to bounded, one-shot, host-governed Pi sessions. */
+/** Bounded initial-run admission. Plugin revocation cancels only unpublished startup. */
 export interface PiWebHostPiSessionsV1 {
     readonly version: 1;
     /** Re-resolve current authority, start one session, and admit its initial prompt. */
