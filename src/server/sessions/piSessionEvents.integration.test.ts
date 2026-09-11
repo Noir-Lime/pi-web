@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
 import { createAgentSession, createEventBus, DefaultResourceLoader, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
+import companion from "../../../examples/session-bridge-plugin/src/companion.js";
 import { PI_WEB_HOST_PI_SESSIONS_CAPABILITY } from "../../server-plugin-api.js";
 import { createServerPluginPiSessionsCapabilityFactory } from "../plugins/serverPluginPiSessionsCapability.js";
 import { PiSessionService, type PiSessionRuntime } from "./piSessionService.js";
@@ -62,7 +63,7 @@ describe("hosted package messaging with native Pi", () => {
       cwd: directory, agentDir: directory, settingsManager, eventBus: bus,
       noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true,
       agentsFilesOverride: () => ({ agentsFiles: [] }),
-      extensionFactories: [(pi) => {
+      extensionFactories: [companion, (pi) => {
         const current = ++generation;
         pi.on("session_start", () => { pi.events.emit("startup", current); });
         pi.events.on("request", (data) => { pi.events.emit("reply", { data, generation: current }); });
@@ -145,7 +146,20 @@ describe("hosted package messaging with native Pi", () => {
       expect(hub.sessionEvents.flatMap(({ event }) => event.type === "message.end" ? [event.message] : []))
         .toContainEqual(expect.objectContaining({ role: "user" }));
       expect(session.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "stop" });
+      // Exercise the shipped companion after /reload, through a hosted connection.
+      // Its author-defined receipt is distinct from the native agent settlement.
+      const receipt = vi.fn();
+      connection.on("session-bridge-example:reply", receipt);
+      const greetingSettled = new Promise<void>((resolve) => {
+        const off = bus.on("settled", () => { off(); resolve(); });
+      });
+      connection.emit("session-bridge-example:greet", { requestId: "example" });
+      expect(receipt).toHaveBeenCalledExactlyOnceWith({ requestId: "example", received: true });
       connection.close();
+      await greetingSettled;
+      expect(session.messages).toContainEqual(expect.objectContaining({ role: "user", content: [
+        { type: "text", text: "Say a brief hello from the session bridge example. Do not use tools." },
+      ] }));
       expect(service.activeCount()).toBe(1);
       await service.prompt(ref, "ordinary user work");
       const next = service.connectSessionEvents(ref, lifetime.signal);

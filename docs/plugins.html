@@ -492,6 +492,40 @@ import type { PiWebServerPlugin, ServerPluginPeer, WorkspaceProvider } from "@jm
                 kernel folder workspace and recovery/diagnostic surfaces remain available.
               </p>
 
+              <h3>Try the companion/backend example</h3>
+              <p>
+                The <a href="https://github.com/jmfederico/pi-web/tree/main/examples/session-bridge-plugin">session bridge example</a>
+                is a complete copyable package with <strong>Create session and greet</strong> and
+                <strong>Greet selected session</strong> buttons. Its README includes build and installation steps.
+                The panel uses selected-machine <code>context.peer</code>; the backend derives project/workspace ids
+                from the host-resolved request context and accepts the explicitly selected full session id.
+              </p>
+              <p>
+                Enable both halves on the target machine. PI WEB loads the <code>piWeb</code> browser/backend entries;
+                Pi loads the companion through the package's <code>pi.extensions</code> manifest field. Add the absolute
+                package directory to <code>packages</code> in the Pi profile's <code>settings.json</code>, preserving
+                other entries and resource filters. Use sessiond's Pi profile, not an unrelated terminal profile.
+                A PI WEB plugin link alone does not enable the companion. Project-local configuration needs normal trust.
+                Manually restart sessiond when safe to activate the backend (this can interrupt sessions), then reload
+                the browser. Use <code>/reload</code> in an existing hosted session after enabling the companion.
+              </p>
+              <p>
+                The backend declares/resolves both capabilities, creates only for the new-session button, connects
+                separately for either path, and subscribes before emitting a correlated request. The companion uses native
+                <code>pi.sendUserMessage(..., { deliverAs: "followUp" })</code>, queuing behind work in a busy session.
+                Its reply is a receipt, not agent completion or provider success; see normal session output for those
+                outcomes. Model credentials must be configured on the selected machine.
+              </p>
+              <p>
+                The example waits at most five seconds, observes request cancellation and <code>connection.signal</code>,
+                then removes listeners/timers and closes its request-scoped connection without stopping work.
+                Longer-lived backends can retain connections independently of browsers and must observe their lifetime
+                signals. Missing receipts can mean disabled/untrusted/unreloaded or incompatible companions; check before
+                retrying because work may have started. Later receipt failure or browser cancellation does not roll back
+                a created conversation: find it in Sessions and continue normally. This adds no durable queue, replay,
+                or new agent API. See the <a href="plugins.md#try-the-companionbackend-example">full author guidance</a>.
+              </p>
+
               <h3>Exact-package peer</h3>
               <p>
                 <code>ServerPluginActivation.peer</code> implements requests, channels, or both; browser panels and

@@ -37,6 +37,7 @@
     "LICENSE",
     "extensions",
     "examples/workspace-provider-plugin",
+    "examples/session-bridge-plugin",
     "docs/plugins.md",
     "docs/config.md",
     "docs/assets",

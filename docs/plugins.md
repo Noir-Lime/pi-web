@@ -789,7 +789,7 @@ Package authors should export reusable tokens from their own supported modules s
 
 ### Host capabilities for server plugins
 
-PI WEB exports three exact server capability tokens as runtime values. Import the tokens normally and import their TypeScript contracts with `import type`:
+PI WEB exports four exact server capability tokens as runtime values. Import the tokens normally and import their TypeScript contracts with `import type`:
 
 ```ts
 import {
@@ -901,6 +901,16 @@ The companion uses ordinary `pi.events.on("my-package:request", handler)` and `p
 `connection.signal` aborts when the connection closes, the plugin lifetime ends, or the hosted session closes or is replaced. After that, `on()` and `emit()` throw; `close()` and unsubscribe are idempotent. Closing a connection only detaches its listeners: it never stops agent work or discards the conversation. Browser disconnection alone does not close a backend-owned connection; authors may tie a connection to their peer channel if desired. Same-session `/reload` preserves the host connection while Pi replaces companion handlers; restarting/reopening the runtime requires an explicit new connection, even for the same session id.
 
 Pi remains the agent API: use `pi.sendMessage`, `pi.sendUserMessage`, tools, and native events in the companion. Supported hosted agent activity appears through PI WEB's normal conversation and running-status observation; authors do not send running-status reports. This is trusted-author tooling, not a sandbox or a plugin permission framework. Authors own message meanings and deliberately incompatible behavior that bypasses the supported hosting lifecycle.
+
+#### Try the companion/backend example
+
+[`examples/session-bridge-plugin/`](../examples/session-bridge-plugin/) is a small complete package with two buttons: **Create session and greet** and **Greet selected session**. Its README has copyable build/installation steps. The browser uses the panel's selected-machine `context.peer`; the backend derives project/workspace ids from the host-resolved peer context and uses the explicitly selected full session id for existing conversations.
+
+Enable both halves on the target machine: PI WEB discovers the `piWeb` browser/backend entries, while the session's Pi profile loads `pi.extensions` from the package's `pi` manifest. Add the absolute package directory to that profile's `settings.json` `packages` array, preserving other entries and resource filters. The native manifest field is `pi.extensions`; a PI WEB plugin link alone does not enable its companion. Project-local package configuration still needs normal project trust. Use the Pi profile configured for sessiond, which may differ from a terminal's profile. Manually restart sessiond when safe to activate a new backend, then reload the browser; this can interrupt hosted sessions. For an already hosted conversation, enable the companion and use `/reload` before requesting work.
+
+The example declares and resolves both capabilities, calls `create(selection)` only for a new conversation, then calls the separate `connect(selection)` for either path. It subscribes before emitting a correlated greeting request. The companion uses `pi.sendUserMessage(..., { deliverAs: "followUp" })`, so a busy existing session queues the greeting without interrupting user work. Its reply is only a receipt, not agent completion or provider success; the normal session UI shows those outcomes. Model credentials must be configured on the selected machine.
+
+The backend bounds its receipt wait to five seconds, reacts to request cancellation and `connection.signal`, and removes listeners/timers and closes in cleanup. This example's connection is request-scoped; longer-lived backends can retain one independently of the browser and must observe its lifetime signal. A missing receipt may mean the companion is disabled, untrusted, not yet reloaded, or incompatible; check those before retrying because work may already have started. Creation is not rolled back by a later receipt failure or browser cancellation: find the conversation in Sessions and continue it normally. No durable queue, replay, or new agent API is involved.
 
 #### Availability, safe start, and shutdown
 
