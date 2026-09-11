@@ -29,14 +29,14 @@ export async function runSessionDaemonShutdown(options: SessionDaemonShutdownOpt
   const { dependencies } = options;
   const operations: readonly (readonly [string, () => void | Promise<void>])[] = [
     ["quiesce server", () => dependencies.quiesceServer()],
+    // Revoke plugin-owned admission as soon as host ingress is closed.
+    // beginShutdown retains publications while admitted contribution callbacks
+    // and host-owned resources observe cancellation and drain below.
+    ["cancel server plugin lifetimes", () => dependencies.serverPlugins.beginShutdown()],
     ["dispose catalog refresher", () => dependencies.catalogRefresher.dispose()],
-    // Keep plugin lifetimes and required capabilities available until every
-    // admitted contribution callback and Terminal consumer has observed
-    // cancellation and drained.
     ["close workspace removal work", () => dependencies.workspaceRemovals.closeAll()],
     ["close plugin backend work", () => dependencies.pluginBackends.closeAll()],
     ["close workspace provider work", () => dependencies.workspaceProviders.closeAll()],
-    ["cancel server plugin lifetimes", () => dependencies.serverPlugins.beginShutdown()],
     // Plugin capability cleanup must finish while its host-owned sessions remain available.
     ["stop server plugins", () => dependencies.serverPlugins.stop()],
     ["dispose sessions", () => dependencies.sessions.dispose()],

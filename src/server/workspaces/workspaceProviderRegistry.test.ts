@@ -441,33 +441,47 @@ describe("WorkspaceProviderRegistry", () => {
     expect(resolution.diagnostics[0]?.message).toContain(`not an accessible directory: ${hostPath("/gone")}`);
   });
 
-  it("aborts admitted provider work and rejects new provider work during shutdown", async () => {
+  it("waits for admitted provider work to settle cooperatively after shutdown abort", async () => {
+    const callbackStarted = deferred<undefined>();
+    const callbackAborted = deferred<undefined>();
+    const releaseCallback = deferred<undefined>();
+    let callbackFinished = false;
     let listedSignal: AbortSignal | undefined;
-    let resolveStarted: (() => void) | undefined;
-    const started = new Promise<void>((resolvePromise) => { resolveStarted = resolvePromise; });
-    const callbackAborted = vi.fn();
     const { registry, logger } = registryFixture([contribution("owner", provider({
       probe: () => Promise.resolve("claim"),
-      list: (_project, signal) => new Promise((_resolve, rejectPromise) => {
+      list: async (_project, signal) => {
         listedSignal = signal;
-        resolveStarted?.();
-        signal.addEventListener("abort", () => {
-          callbackAborted();
-          const reason: unknown = signal.reason;
-          rejectPromise(reason instanceof Error ? reason : new Error("shutdown", { cause: reason }));
-        }, { once: true });
-      }),
+        callbackStarted.resolve(undefined);
+        await new Promise<void>((resolveAbort) => {
+          signal.addEventListener("abort", () => { resolveAbort(); }, { once: true });
+        });
+        callbackAborted.resolve(undefined);
+        await releaseCallback.promise;
+        callbackFinished = true;
+        return [];
+      },
     }))]);
     const pending = registry.resolve(project);
-    await started;
+    await callbackStarted.promise;
 
+    let closeFinished = false;
     const closing = registry.closeAll("provider shutdown");
+    void closing.then(
+      () => { closeFinished = true; },
+      () => { closeFinished = true; },
+    );
 
     await expect(pending).rejects.toMatchObject({ name: "AbortError", message: "provider shutdown" });
-    await closing;
+    await callbackAborted.promise;
+    await Promise.resolve();
+    expect(closeFinished).toBe(false);
+    expect(callbackFinished).toBe(false);
     expect(listedSignal?.aborted).toBe(true);
-    expect(callbackAborted).toHaveBeenCalledOnce();
     expect(logger.warn).not.toHaveBeenCalled();
+
+    releaseCallback.resolve(undefined);
+    await closing;
+    expect(callbackFinished).toBe(true);
     await expect(registry.resolve(project)).rejects.toMatchObject({ name: "AbortError", message: "provider shutdown" });
   });
 

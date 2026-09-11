@@ -18,6 +18,7 @@ import type {
   WorkspaceProviderTier,
   WorkspaceRemovalHostState,
 } from "../../shared/apiTypes.js";
+import { PluginCallbackDrain } from "../pluginCallbackDrain.js";
 import type {
   ServerPluginHealthInspection,
   ServerPluginProviderContribution,
@@ -135,6 +136,7 @@ export class WorkspaceProviderRegistry {
   private readonly pendingResolutions = new Map<string, Promise<WorkspaceProviderAuthorityResolution>>();
   private readonly shutdown = new AbortController();
   private readonly providerOperations = new Set<Promise<unknown>>();
+  private readonly providerCallbacks = new PluginCallbackDrain();
   private closePromise: Promise<void> | undefined;
 
   constructor(private readonly options: WorkspaceProviderRegistryOptions) {
@@ -414,6 +416,10 @@ export class WorkspaceProviderRegistry {
   private async closeProviderOperations(reason: string): Promise<void> {
     if (!this.shutdown.signal.aborted) this.shutdown.abort(new DOMException(reason, "AbortError"));
     await Promise.allSettled([...this.providerOperations]);
+    await this.providerCallbacks.waitForSettled(
+      this.providerTimeoutMs,
+      "Workspace provider callbacks",
+    );
   }
 
   private async runProviderOperation<T>(
@@ -432,6 +438,7 @@ export class WorkspaceProviderRegistry {
       this.providerTimeoutMs,
       callback,
       signal,
+      (providerCallback) => { this.providerCallbacks.track(providerCallback); },
     );
     this.providerOperations.add(pending);
     try {
@@ -634,6 +641,7 @@ async function runBoundedProviderOperation<T>(
   timeoutMs: number,
   callback: (signal: AbortSignal) => T | Promise<T>,
   parentSignal?: AbortSignal,
+  onCallbackStarted?: (callback: Promise<T>) => void,
 ): Promise<T> {
   const controller = new AbortController();
   const abortFromParent = (): void => {
@@ -653,6 +661,7 @@ async function runBoundedProviderOperation<T>(
   const result = controller.signal.aborted
     ? new Promise<T>(() => { /* parent deadline already won */ })
     : Promise.resolve().then(() => callback(controller.signal));
+  if (!controller.signal.aborted) onCallbackStarted?.(result);
   try {
     return await Promise.race([result, deadline]);
   } finally {
