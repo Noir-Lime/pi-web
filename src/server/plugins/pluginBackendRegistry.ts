@@ -387,7 +387,13 @@ export class PluginBackendRegistry {
       if (reservedAdmission === undefined) releaseAdmission();
       if (openingChannel !== undefined) {
         const cleanup = openingChannel.then(async (channel) => {
-          await closeUnpublishedChannel(channel, pluginId, operation, this.channelCallbackTimeoutMs);
+          await closeUnpublishedChannel(
+            channel,
+            pluginId,
+            operation,
+            this.channelCallbackTimeoutMs,
+            (callback) => { this.openingChannelCleanup.track(callback); },
+          );
         }).catch((cleanupError: unknown) => {
           this.options.logger?.error({ err: cleanupError, pluginId, operation }, "unpublished plugin backend channel cleanup failed");
         });
@@ -434,9 +440,11 @@ export class PluginBackendRegistry {
         this.callbackTimeoutMs,
         "Plugin backend request callbacks",
       ),
+      // Allow a late open, its bounded close invocation, and one final
+      // cooperative settlement window after the close signal aborts.
       this.openingChannelCleanup.waitForSettled(
-        this.channelOpenTimeoutMs + this.channelCallbackTimeoutMs,
-        "Plugin backend channel opening callbacks",
+        this.channelOpenTimeoutMs + (2 * this.channelCallbackTimeoutMs),
+        "Plugin backend abandoned channel cleanup callbacks",
       ),
       ...channels.map(async (channel) => {
         await channel.fail("shutdown", reason, 1012);
@@ -824,6 +832,7 @@ async function closeUnpublishedChannel(
   pluginId: string,
   operation: string,
   callbackTimeoutMs: number,
+  onCallbackStarted: (callback: Promise<void>) => void,
 ): Promise<void> {
   const close = channel.close?.bind(channel);
   if (close === undefined) return;
@@ -836,6 +845,8 @@ async function closeUnpublishedChannel(
       reason: "Channel open did not complete",
       signal,
     })),
+    undefined,
+    onCallbackStarted,
   );
 }
 

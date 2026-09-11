@@ -620,6 +620,79 @@ describe("PluginBackendRegistry", () => {
     expect(lateClose).toHaveBeenCalledOnce();
   });
 
+  it("drains an abandoned channel close that settles cooperatively after its timeout abort", async () => {
+    vi.useFakeTimers();
+    const openStarted = deferred();
+    const openAborted = deferred();
+    const releaseOpen = deferred();
+    const closeStarted = deferred();
+    const closeAborted = deferred();
+    let closeFinished = false;
+    const logger = { error: vi.fn() };
+    const workspaces = providerRegistry([]);
+    const workspaceId = (await workspaces.resolve(project)).workspaces[0]?.id;
+    if (workspaceId === undefined) throw new Error("Expected folder workspace");
+    const registry = new PluginBackendRegistry({
+      contributions: [channelContribution("terminal", async ({ signal }) => {
+        openStarted.resolve();
+        await new Promise<void>((resolveAbort) => {
+          signal.addEventListener("abort", () => { resolveAbort(); }, { once: true });
+        });
+        openAborted.resolve();
+        await releaseOpen.promise;
+        return {
+          receive: () => undefined,
+          close: async ({ signal: closeSignal }) => {
+            closeStarted.resolve();
+            await new Promise<void>((resolveAbort) => {
+              closeSignal.addEventListener("abort", () => { resolveAbort(); }, { once: true });
+            });
+            closeAborted.resolve();
+            await new Promise<void>((resolveSettled) => { setTimeout(resolveSettled, 10); });
+            closeFinished = true;
+          },
+        };
+      })],
+      workspaces,
+      channelOpenTimeoutMs: 50,
+      channelCallbackTimeoutMs: 50,
+      logger,
+    });
+    const request = {
+      pluginId: "terminal",
+      moduleRevision: "terminal-r1",
+      project,
+      workspaceId,
+      operation: "terminal.attach",
+      input: null,
+    };
+    const opening = registry.openChannel(request, channelTransport().value);
+    await openStarted.promise;
+
+    let closeFinishedWhenShutdownReturned: boolean | undefined;
+    const shuttingDown = registry.closeAll().then(() => {
+      closeFinishedWhenShutdownReturned = closeFinished;
+    });
+    await expect(opening).rejects.toMatchObject({ code: "shutdown", closeCode: 1012 });
+    await openAborted.promise;
+    releaseOpen.resolve();
+    await closeStarted.promise;
+
+    await vi.advanceTimersByTimeAsync(50);
+    await closeAborted.promise;
+    expect(closeFinished).toBe(false);
+    expect(closeFinishedWhenShutdownReturned).toBeUndefined();
+
+    await vi.advanceTimersByTimeAsync(10);
+    await shuttingDown;
+    expect(closeFinished).toBe(true);
+    expect(closeFinishedWhenShutdownReturned).toBe(true);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginId: "terminal", operation: "terminal.attach" }),
+      "unpublished plugin backend channel cleanup failed",
+    );
+  });
+
   it("bounds shutdown waiting for an in-process open callback that ignores cancellation", async () => {
     vi.useFakeTimers();
     const openStarted = deferred();
@@ -652,7 +725,7 @@ describe("PluginBackendRegistry", () => {
     const shuttingDown = registry.closeAll();
     const shutdownFailure = expect(shuttingDown).rejects.toThrow("One or more plugin backend channels failed to close");
     await openingFailure;
-    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(150);
     await shutdownFailure;
 
     resolveOpen?.({ receive: () => undefined, close: lateClose });
