@@ -443,6 +443,7 @@ describe("server plugin runtime", () => {
       create: () => ({
         value: {
           version: 1,
+          create: () => Promise.resolve({ sessionId: "session-created" }),
           run: () => Promise.resolve({
             sessionId: "session-1",
             completion: Promise.resolve({ status: "completed" as const }),

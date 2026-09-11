@@ -23,6 +23,36 @@ function deferred<T = void>() {
 }
 
 describe("PiSessionService host-owned one-shot runs", () => {
+  it("observes prompt-free creation before extension startup and transfers published lifetime to hosting", async () => {
+    const hub = new CapturingSessionEventHub();
+    const fake = fakeRuntime("session-created");
+    fake.session.bindExtensions = () => {
+      fake.emit({ type: "agent_start" });
+      expect(hub.sessionEvents).toContainEqual({ sessionId: "session-created", event: { type: "agent.start" } });
+      fake.emit({ type: "agent_end", messages: [] });
+      return Promise.resolve();
+    };
+    const lifetime = new AbortController();
+    const service = new PiSessionService(hub, {
+      agentDir: TEST_AGENT_DIR, modelRuntime: testModelRuntime,
+      createAgentRuntime: runtimeCreator(fake.runtime), sessionManager: sessionGateway([]), heartbeatIntervalMs: 60_000,
+    });
+    try {
+      const created = await service.createHostedSession("/workspace", lifetime.signal);
+      expect(created).toEqual({ id: "session-created" });
+      expect(fake.calls.prompt).toEqual([]);
+      expect(hub.globalEvents.filter((event) => event.type === "session.created")).toHaveLength(1);
+      lifetime.abort();
+      expect(service.activeCount()).toBe(1);
+      expect(fake.calls.abort).toBe(0);
+      expect(fake.calls.dispose).toBe(0);
+      await service.prompt(sessionRef(created.id), "ordinary work");
+      expect(fake.calls.prompt).toHaveLength(1);
+    } finally {
+      await service.dispose();
+    }
+  });
+
   it("atomically starts a visible non-delegating session and returns its prompt completion", async () => {
     const prompt = deferred();
     const hub = new CapturingSessionEventHub();

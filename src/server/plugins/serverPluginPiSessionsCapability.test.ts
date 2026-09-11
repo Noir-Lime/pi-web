@@ -45,6 +45,7 @@ function workspace(path = resolve("/repo/worktree")): WorkspaceListing {
 
 function harness(options: {
   maxConcurrentRunsPerPlugin?: number;
+  createHostedSession?: (cwd: string, signal: AbortSignal) => Promise<{ id: string }>;
   runCompletion?: (cwd: string, prompt: string, signal: AbortSignal) => Promise<void>;
   startOneShotRun?: (
     cwd: string,
@@ -73,6 +74,7 @@ function harness(options: {
   };
   const runCompletion = vi.fn(options.runCompletion ?? (() => Promise.resolve()));
   const sessions = {
+    createHostedSession: vi.fn(options.createHostedSession ?? (() => Promise.resolve({ id: `created-${String(++sessionSequence)}` }))),
     startOneShotRun: vi.fn(options.startOneShotRun ?? ((cwd: string, prompt: string, signal: AbortSignal) => {
       sessionSequence += 1;
       return Promise.resolve({
@@ -114,6 +116,51 @@ function harness(options: {
 }
 
 describe("server plugin PI sessions capability", () => {
+  it("creates without prompting in current workspace authority and releases admission on publication", async () => {
+    const fixture = harness({ maxConcurrentRunsPerPlugin: 1 });
+    const selection = { projectId: fixture.input.projectId, workspaceId: fixture.input.workspaceId };
+    const first = await fixture.capability.create(selection);
+    fixture.setWorkspace(workspace(resolve("/repo/moved")));
+    const second = await fixture.capability.create(selection);
+    expect(first).toEqual({ sessionId: "created-1" });
+    expect(second).toEqual({ sessionId: "created-2" });
+    expect(Object.isFrozen(first)).toBe(true);
+    expect(fixture.sessions.createHostedSession).toHaveBeenNthCalledWith(1, resolve("/repo/worktree"), expect.any(AbortSignal));
+    expect(fixture.sessions.createHostedSession).toHaveBeenNthCalledWith(2, resolve("/repo/moved"), expect.any(AbortSignal));
+    expect(fixture.sessions.startOneShotRun).not.toHaveBeenCalled();
+    fixture.setWorkspace({ ...workspace(), id: "stale" });
+    await expect(fixture.capability.create(selection)).rejects.toThrow("stale or unavailable");
+    await fixture.instance.dispose?.(AbortSignal.timeout(1_000));
+    await expect(fixture.capability.create(selection)).rejects.toThrow("no longer active");
+    expect(fixture.sessions.abort).not.toHaveBeenCalled();
+    expect(fixture.sessions.stop).not.toHaveBeenCalled();
+  });
+
+  it("shares pending creation admission with run, releases failures, and does not reclaim late publication", async () => {
+    const pending = deferred<{ id: string }>();
+    const fixture = harness({ maxConcurrentRunsPerPlugin: 1, createHostedSession: () => pending.promise });
+    const selection = { projectId: fixture.input.projectId, workspaceId: fixture.input.workspaceId };
+    const creation = fixture.capability.create(selection);
+    const rejected = expect(creation).rejects.toThrow("could not create a PI session");
+    await vi.waitFor(() => { expect(fixture.sessions.createHostedSession).toHaveBeenCalledOnce(); });
+    await expect(fixture.capability.run(fixture.input)).rejects.toThrow("limit of 1");
+    await expect(fixture.capability.create(selection)).rejects.toThrow("limit of 1");
+    pending.reject(new Error("startup failed"));
+    await rejected;
+    await expect((await fixture.capability.run(fixture.input)).completion).resolves.toEqual({ status: "completed" });
+    const late = deferred<{ id: string }>();
+    fixture.sessions.createHostedSession.mockImplementation(() => late.promise);
+    const lateCreation = fixture.capability.create(selection);
+    const lateRejected = expect(lateCreation).rejects.toThrow("no longer active");
+    await vi.waitFor(() => { expect(fixture.sessions.createHostedSession).toHaveBeenCalledTimes(2); });
+    fixture.lifetime.abort();
+    late.resolve({ id: "published" });
+    await lateRejected;
+    await fixture.instance.dispose?.(AbortSignal.timeout(1_000));
+    expect(fixture.sessions.stop).not.toHaveBeenCalled();
+    expect(fixture.sessions.abort).not.toHaveBeenCalled();
+  });
+
   it("re-resolves live workspace authority for each run and preserves transcripts while releasing admission", async () => {
     const fixture = harness({ maxConcurrentRunsPerPlugin: 1 });
 
@@ -201,7 +248,7 @@ describe("server plugin PI sessions capability", () => {
     await fixture.instance.dispose?.(AbortSignal.timeout(1_000));
   });
 
-  it("settles capability cleanup when lifetime cancellation interrupts a real startup dialog", async () => {
+  it.each(["run", "create"] as const)("settles %s cleanup when lifetime cancellation interrupts a real startup dialog", async (method) => {
     const store = new PendingExtensionDialogStore({ createDialogId: () => "startup-dialog" });
     const fake = fakeRuntime("session-1");
     const confirmAnswers: (boolean | string | undefined)[] = [];
@@ -242,7 +289,8 @@ describe("server plugin PI sessions capability", () => {
       lifetimeSignal: lifetime.signal,
     });
     const capability = PI_WEB_HOST_PI_SESSIONS_CAPABILITY.parse(instance.value);
-    const running = capability.run({ projectId: project.id, workspaceId: "workspace-1", prompt: "Must not start" });
+    const selection = { projectId: project.id, workspaceId: "workspace-1" };
+    const running = method === "run" ? capability.run({ ...selection, prompt: "Must not start" }) : capability.create(selection);
     const rejected = expect(running).rejects.toThrow("is no longer active");
     await vi.waitFor(() => { expect(store.pendingDialogs("session-1")).toHaveLength(1); });
 

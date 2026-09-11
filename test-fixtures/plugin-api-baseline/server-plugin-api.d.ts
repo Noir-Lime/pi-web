@@ -149,15 +149,20 @@ export type PiWebHostPiSessionRunCompletion = {
 } | {
     readonly status: "cancelled";
 };
-/** Host-owned conversation identity; initial completion never closes the session. */
-export interface PiWebHostPiSessionRun {
+/** Published host-owned conversation; creation does not open a messaging connection. */
+export interface PiWebHostPiSessionCreated {
     readonly sessionId: string;
+}
+/** Host-owned conversation identity; initial completion never closes the session. */
+export interface PiWebHostPiSessionRun extends PiWebHostPiSessionCreated {
     /** Initial submission outcome, including final provider errors; not later user turns. */
     readonly completion: Promise<PiWebHostPiSessionRunCompletion>;
 }
 /** Bounded initial-run admission. Plugin revocation cancels only unpublished startup. */
 export interface PiWebHostPiSessionsV1 {
     readonly version: 1;
+    /** Publish an observed session without a prompt; connect separately before companion kickoff. */
+    readonly create: (input: PiWebHostWorkspaceSelection) => Promise<PiWebHostPiSessionCreated>;
     /** Re-resolve current authority, start one session, and admit its initial prompt. */
     readonly run: (input: PiWebHostPiSessionRunInput) => Promise<PiWebHostPiSessionRun>;
 }

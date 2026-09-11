@@ -1462,6 +1462,12 @@ export class PiSessionService implements SessionRouteService {
     return this.startSession(cwd, options);
   }
 
+  /** Publish a host-owned conversation without submitting an initial prompt. */
+  async createHostedSession(cwd: string, signal: AbortSignal): Promise<{ readonly id: string }> {
+    const created = await this.startManagedSession(cwd, signal);
+    return Object.freeze({ id: created.id });
+  }
+
   /** Atomically start and prompt one visible host-owned, non-delegating session. */
   async startOneShotRun(
     cwd: string,
@@ -1469,6 +1475,14 @@ export class PiSessionService implements SessionRouteService {
     signal: AbortSignal,
   ): Promise<{ readonly id: string; readonly completion: Promise<void> }> {
     const promptText = requirePromptText(text);
+    return this.startManagedSession(cwd, signal, promptText);
+  }
+
+  private async startManagedSession(
+    cwd: string,
+    signal: AbortSignal,
+    promptText?: string,
+  ): Promise<{ readonly id: string; readonly completion: Promise<void> }> {
     signal.throwIfAborted();
     const active = await this.create(
       this.sessionManager.create(cwd),
@@ -1478,11 +1492,11 @@ export class PiSessionService implements SessionRouteService {
     const { session } = active.runtime;
     try {
       signal.throwIfAborted();
-      this.maybeGenerateSessionName(session, promptText);
+      if (promptText !== undefined) this.maybeGenerateSessionName(session, promptText);
       const created = this.announceCreatedSession(active, cwd);
       // Publication transfers lifetime ownership to normal hosting. Plugin
       // cancellation after this point must not abort this or later user work.
-      const completion = this.submitInitialRunPrompt(session, promptText);
+      const completion = promptText === undefined ? Promise.resolve() : this.submitInitialRunPrompt(session, promptText);
       return Object.freeze({ id: created.id, completion });
     } catch (error) {
       try {
@@ -1490,7 +1504,7 @@ export class PiSessionService implements SessionRouteService {
       } catch (cleanupError) {
         throw new AggregateError(
           [error, cleanupError],
-          `Failed to clean up one-shot session ${session.sessionId} after startup failed`,
+          `Failed to clean up managed session ${session.sessionId} after startup failed`,
           { cause: cleanupError },
         );
       }

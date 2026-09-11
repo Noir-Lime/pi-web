@@ -1,5 +1,7 @@
 import {
   PI_WEB_HOST_PI_SESSIONS_CAPABILITY,
+  type PiWebHostPiSessionCreated,
+  type PiWebHostWorkspaceSelection,
   type PiWebHostPiSessionRun,
   type PiWebHostPiSessionRunCompletion,
   type PiWebHostPiSessionRunInput,
@@ -14,6 +16,7 @@ const DEFAULT_MAX_CONCURRENT_RUNS_PER_PLUGIN = 4;
 const COMPLETION_ERROR_MAX_BYTES = 4 * 1024;
 
 interface HostPiSessionService {
+  createHostedSession(cwd: string, signal: AbortSignal): Promise<{ readonly id: string }>;
   startOneShotRun(
     cwd: string,
     prompt: string,
@@ -34,7 +37,7 @@ interface RunAdmission {
   settle(): void;
 }
 
-/** Creates package-attributed one-shot PI session admission over host-owned services. */
+/** Creates package-attributed PI session admission over host-owned services. */
 export function createServerPluginPiSessionsCapabilityFactory(
   options: CreateServerPluginPiSessionsCapabilityOptions,
 ): ServerPluginHostCapabilityFactory<PiWebHostPiSessionsV1> {
@@ -67,6 +70,31 @@ export function createServerPluginPiSessionsCapabilityFactory(
 
       const value: PiWebHostPiSessionsV1 = Object.freeze({
         version: 1,
+        create: async (input: PiWebHostWorkspaceSelection): Promise<PiWebHostPiSessionCreated> => {
+          assertActive(context, revoked);
+          if (admissions.size >= maxConcurrentRuns) {
+            throw capabilityError(context.pluginId, `reached its limit of ${String(maxConcurrentRuns)} concurrent runs`);
+          }
+          const admission = createAdmission();
+          admissions.add(admission);
+          try {
+            const authority = await workspaceAuthority.resolve(input);
+            assertActive(context, revoked);
+            let created: { readonly id: string };
+            try {
+              created = await options.sessions.createHostedSession(authority.workspace.path, startupLifetime.signal);
+            } catch (error) {
+              if (revoked || context.lifetimeSignal.aborted) throw revokedError(context, error);
+              throw capabilityError(context.pluginId, "could not create a PI session", error);
+            }
+            // Publication already transferred ownership, even if disposal won this await.
+            assertActive(context, revoked);
+            return Object.freeze({ sessionId: created.id });
+          } finally {
+            admissions.delete(admission);
+            admission.settle();
+          }
+        },
         run: async (input: PiWebHostPiSessionRunInput): Promise<PiWebHostPiSessionRun> => {
           assertActive(context, revoked);
           if (admissions.size >= maxConcurrentRuns) {

@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
 import { createAgentSession, createEventBus, DefaultResourceLoader, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
+import { PI_WEB_HOST_PI_SESSIONS_CAPABILITY } from "../../server-plugin-api.js";
+import { createServerPluginPiSessionsCapabilityFactory } from "../plugins/serverPluginPiSessionsCapability.js";
 import { PiSessionService, type PiSessionRuntime } from "./piSessionService.js";
 import { PiSessionEventConnections } from "./piSessionEventConnections.js";
 import { CapturingSessionEventHub, createTestModelRuntime, emptyArchiveStore, runtimeCreator, sessionGateway, testModel } from "./piSessionService.testSupport.js";
@@ -49,7 +51,7 @@ describe("hosted package messaging with native Pi", () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
-  it.each(["existing", "launcher"])("connects a selected %s conversation and observes extension work normally", async (kind) => {
+  it.each(["existing", "launcher", "created"])("connects a selected %s conversation and observes extension work normally", async (kind) => {
     const directory = await mkdtemp(join(tmpdir(), "pi-web-events-"));
     const modelRuntime = await createTestModelRuntime();
     await modelRuntime.setRuntimeApiKey("anthropic", "isolated-test-key");
@@ -101,6 +103,22 @@ describe("hosted package messaging with native Pi", () => {
       if (kind === "launcher") {
         const run = await service.startOneShotRun(directory, "initial", new AbortController().signal);
         await run.completion;
+      } else if (kind === "created") {
+        const project = { id: "project", name: "Project", path: directory, createdAt: new Date().toISOString() };
+        const instance = createServerPluginPiSessionsCapabilityFactory({
+          projects: { requireProject: () => Promise.resolve(project) },
+          workspaces: { resolve: () => Promise.resolve({ status: "folder", projectId: project.id, workspaces: [
+            { id: "workspace", projectId: project.id, path: directory, label: "Workspace", isMain: true },
+          ], diagnostics: [] }) },
+          sessions: service,
+        }).create({ pluginId: "companion", packageRoot: directory, lifetimeSignal: new AbortController().signal });
+        const created = await PI_WEB_HOST_PI_SESSIONS_CAPABILITY.parse(instance.value).create({ projectId: project.id, workspaceId: "workspace" });
+        expect(created).toEqual({ sessionId: session.sessionId });
+        expect(session.messages).toEqual([]);
+        expect(hub.sessionEvents.some(({ event }) => event.type === "agent.start")).toBe(false);
+        expect(hub.globalEvents.filter((event) => event.type === "session.created")).toHaveLength(1);
+        await instance.dispose?.(AbortSignal.timeout(1_000));
+        expect(service.activeCount()).toBe(1);
       } else await service.start(directory);
       const ref = { id: session.sessionId, cwd: directory };
       const lifetime = new AbortController();

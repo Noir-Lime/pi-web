@@ -117,7 +117,7 @@
                 <li><strong>Browser-public assets</strong> served only from an explicit <code>browserRoot</code>.</li>
                 <li><strong>Browser helpers</strong> for files, terminals, prompts, rendering, and exact-package peers.</li>
                 <li><strong>Typed capabilities</strong> with exact-version dependency-aware startup and reverse disposal.</li>
-                <li><strong>Host capabilities</strong> for package-scoped state, live workspace authority, and bounded one-shot Pi sessions.</li>
+                <li><strong>Host capabilities</strong> for package-scoped state, live workspace authority, and managed Pi conversations and initial runs.</li>
                 <li><strong>One workspace provider</strong> from an optional sessiond server entry.</li>
                 <li><strong>One package peer</strong> with independently optional JSON requests and bounded duplex channels.</li>
               </ul>
@@ -422,15 +422,33 @@ import type { PiWebServerPlugin, ServerPluginPeer, WorkspaceProvider } from "@jm
                 authorization/topology metadata, not an implicit transport target.
               </p>
               <p>
-                <code>PI_WEB_HOST_PI_SESSIONS_CAPABILITY</code> accepts only current project/workspace ids (at most 512
+                <code>PI_WEB_HOST_PI_SESSIONS_CAPABILITY</code> offers <code>run()</code> with current project/workspace ids (at most 512
                 characters each) and one non-empty initial prompt (at most 64 KiB UTF-8). It re-resolves workspace
-                authority, admits at most four concurrent runs per plugin, and returns only a frozen session id plus a
+                authority and returns only a frozen session id plus a
                 completion promise for <code>completed</code>, <code>cancelled</code>, or <code>failed</code> (failure text
                 is bounded to 4 KiB). Completion describes the initial submission, including final provider errors;
                 handled input can complete without an assistant response. PI WEB observes extension startup activity,
                 announces the visible session before its initial prompt, and disables delegation tools. It exposes no
                 model/path controls, runtime object, arbitrary session API, or per-run cancellation handle. The hosted
                 conversation remains available for user work after initial completion or plugin disposal.
+              </p>
+              <p>
+                Use <code>piSessions.create({ projectId, workspaceId })</code> to create without an initial prompt.
+                It accepts only those two non-empty ids (at most 512 characters each) and returns frozen
+                <code>{ sessionId }</code> after native extension startup and normal UI publication, with no completion
+                promise or messaging connection. PI WEB observes before extension startup. Then connect separately,
+                subscribe to replies, and emit your companion's kickoff request. Have the companion wait for that request;
+                creation does not suppress work an extension starts itself. Use native Pi APIs for agent behavior.
+                Declare both capabilities in <code>requires</code> and resolve them in <code>start()</code>.
+              </p>
+              <p>
+                Both creation methods use the same workspace authority and non-delegating hosted startup. They share
+                four admission slots per plugin: <code>create()</code> releases its slot when startup/publication settles;
+                <code>run()</code> holds it until initial completion. Published conversations are not capped by this quota.
+                Startup failures reject. Plugin revocation cancels unpublished startup, including startup dialogs,
+                but never reclaims a published conversation or later user work; browser disconnection does not stop it.
+                Older v1 hosts without creation support reject <code>create()</code> with an update-host error;
+                <code>run()</code> remains usable.
               </p>
               <h3>Hosted Pi package messaging v1</h3>
               <p>

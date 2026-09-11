@@ -331,6 +331,29 @@ describe("public server plugin API", () => {
       .rejects.toThrow("completion status is invalid");
   });
 
+  it("snapshots prompt-free creation and preserves run on older v1 hosts", async () => {
+    const selection = { projectId: "project", workspaceId: "workspace" };
+    const create = vi.fn((input: PiWebHostWorkspaceSelection) => {
+      void input;
+      return Promise.resolve({ sessionId: "created", runtime: "private" });
+    });
+    const run = () => Promise.resolve({ sessionId: "run", completion: Promise.resolve({ status: "completed" }) });
+    const source = { version: 1, create, run };
+    const sessions = PI_WEB_HOST_PI_SESSIONS_CAPABILITY.parse(source);
+    Reflect.set(source, "create", () => { throw new Error("mutated"); });
+    const result = await sessions.create(selection);
+    expect(result).toEqual({ sessionId: "created" });
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(create).toHaveBeenCalledWith(selection);
+    expect(Object.isFrozen(create.mock.calls[0]?.[0])).toBe(true);
+    await expect(Reflect.apply(sessions.create, sessions, [{ ...selection, prompt: "unexpected" }])).rejects.toThrow("Unsupported");
+    await expect(sessions.create({ ...selection, workspaceId: "" })).rejects.toThrow();
+    await expect(PI_WEB_HOST_PI_SESSIONS_CAPABILITY.parse({ version: 1, run, create: () => ({ sessionId: "" }) }).create(selection)).rejects.toThrow("sessionId");
+    const older = PI_WEB_HOST_PI_SESSIONS_CAPABILITY.parse({ version: 1, run });
+    await expect(older.create(selection)).rejects.toThrow("creation is unavailable; update the host");
+    await expect((await older.run({ ...selection, prompt: "work" })).completion).resolves.toEqual({ status: "completed" });
+  });
+
   it("keeps host inputs readonly and concrete services out of the declaration surface", async () => {
     expectTypeOf<keyof ServerPluginActivationContext>().toEqualTypeOf<
       "apiVersion" | "pluginId" | "packageRoot" | "logger" | "settings" | "notices" | "execFile" | "signal" | "lifetimeSignal"
@@ -350,7 +373,7 @@ describe("public server plugin API", () => {
     expectTypeOf<keyof PiWebHostPiSessionRunCompletion>().toEqualTypeOf<"status">();
     expectTypeOf<keyof Extract<PiWebHostPiSessionRunCompletion, { status: "failed" }>>()
       .toEqualTypeOf<"status" | "error">();
-    expectTypeOf<keyof PiWebHostPiSessionsV1>().toEqualTypeOf<"version" | "run">();
+    expectTypeOf<keyof PiWebHostPiSessionsV1>().toEqualTypeOf<"version" | "create" | "run">();
     expectTypeOf<keyof ServerPluginStartContext>().toEqualTypeOf<"capabilities" | "signal">();
     expectTypeOf<keyof ServerPluginActivation>().toEqualTypeOf<"workspaceProvider" | "peer" | "provides" | "start" | "dispose" | "health">();
     expectTypeOf<keyof ServerPluginNoticeScope>().toEqualTypeOf<"projectId" | "workspaceId" | "sessionId">();

@@ -251,6 +251,7 @@ describe("sessiond persisted server plugin recovery", () => {
       let piSessions;
       let sessionEvents;
       let connection;
+      let createdConnection;
       let run;
       const selection = ${JSON.stringify({ projectId, workspaceId })};
       export default {
@@ -270,12 +271,17 @@ describe("sessiond persisted server plugin recovery", () => {
               let echoed;
               connection.on("fixture:echo", data => { echoed = data; });
               connection.emit("fixture:echo", "connected");
-              await writeFile(${JSON.stringify(runMarker)}, JSON.stringify({ sessionId: run.sessionId, echoed }));
+              const created = await piSessions.create(selection);
+              createdConnection = await sessionEvents.connect({ ...selection, sessionId: created.sessionId });
+              let createdEcho;
+              createdConnection.on("fixture:echo", data => { createdEcho = data; });
+              createdConnection.emit("fixture:echo", "created and connected");
+              await writeFile(${JSON.stringify(runMarker)}, JSON.stringify({ sessionId: run.sessionId, echoed, createdId: created.sessionId, createdEcho }));
               await appendFile(${JSON.stringify(eventsPath)}, "consumer:start\\n");
               console.error("WORKSPACE_CONSUMER_STARTED");
             },
             async dispose() {
-              const result = { completion: await run.completion, connectionClosed: connection.signal.aborted };
+              const result = { completion: await run.completion, connectionClosed: connection.signal.aborted, createdConnectionClosed: createdConnection.signal.aborted };
               try {
                 await workspaces.resolve(selection);
                 result.workspaceError = "workspace authority remained active";
@@ -323,6 +329,9 @@ describe("sessiond persisted server plugin recovery", () => {
     expect(typeof admittedRun["sessionId"]).toBe("string");
     expect(admittedRun["sessionId"]).not.toBe("");
     expect(admittedRun["echoed"]).toBe("connected");
+    expect(typeof admittedRun["createdId"]).toBe("string");
+    expect(admittedRun["createdId"]).not.toBe(admittedRun["sessionId"]);
+    expect(admittedRun["createdEcho"]).toBe("created and connected");
     expect(JSON.parse(await readFile(join(dataDir, "plugin-state", "b-state-early", "state.json"), "utf8")))
       .toEqual({ phase: "early" });
 
@@ -333,6 +342,7 @@ describe("sessiond persisted server plugin recovery", () => {
     expect(exit).toEqual({ code: 0, signal: null });
     const disposed = await readJsonObject(disposedMarker);
     expect(disposed["connectionClosed"]).toBe(true);
+    expect(disposed["createdConnectionClosed"]).toBe(true);
     const completion = disposed["completion"];
     expect(["completed", "failed", "cancelled"])
       .toContain(isRecord(completion) ? completion["status"] : undefined);

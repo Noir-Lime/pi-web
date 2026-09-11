@@ -185,9 +185,13 @@ export type PiWebHostPiSessionRunCompletion =
     }
   | { readonly status: "cancelled" };
 
-/** Host-owned conversation identity; initial completion never closes the session. */
-export interface PiWebHostPiSessionRun {
+/** Published host-owned conversation; creation does not open a messaging connection. */
+export interface PiWebHostPiSessionCreated {
   readonly sessionId: string;
+}
+
+/** Host-owned conversation identity; initial completion never closes the session. */
+export interface PiWebHostPiSessionRun extends PiWebHostPiSessionCreated {
   /** Initial submission outcome, including final provider errors; not later user turns. */
   readonly completion: Promise<PiWebHostPiSessionRunCompletion>;
 }
@@ -195,6 +199,8 @@ export interface PiWebHostPiSessionRun {
 /** Bounded initial-run admission. Plugin revocation cancels only unpublished startup. */
 export interface PiWebHostPiSessionsV1 {
   readonly version: 1;
+  /** Publish an observed session without a prompt; connect separately before companion kickoff. */
+  readonly create: (input: PiWebHostWorkspaceSelection) => Promise<PiWebHostPiSessionCreated>;
   /** Re-resolve current authority, start one session, and admit its initial prompt. */
   readonly run: (input: PiWebHostPiSessionRunInput) => Promise<PiWebHostPiSessionRun>;
 }
@@ -487,9 +493,19 @@ function snapshotPiWebHostPiSessionsV1(value: unknown): PiWebHostPiSessionsV1 {
   if (typeof value !== "object" || value === null) throw invalidPiWebHostPiSessions();
   const version: unknown = Reflect.get(value, "version");
   const run: unknown = Reflect.get(value, "run");
+  const create: unknown = Reflect.get(value, "create");
   if (version !== 1 || typeof run !== "function") throw invalidPiWebHostPiSessions();
   return Object.freeze({
     version: 1,
+    create: async (input: PiWebHostWorkspaceSelection) => {
+      // Older v1 providers remain usable for run(); creation requires an updated host.
+      if (typeof create !== "function") throw new Error("PI WEB host PI sessions capability v1 creation is unavailable; update the host");
+      const requested = snapshotPiWebHostWorkspaceSelection(input);
+      const result: unknown = await Reflect.apply(create, value, [requested]);
+      if (!isPublicJsonObject(result)) throw new Error("PI WEB host PI sessions capability v1 must return a created session object");
+      const sessionId = requiredBoundedPiSessionString(Reflect.get(result, "sessionId"), "returned sessionId", 512);
+      return Object.freeze({ sessionId });
+    },
     run: async (input: PiWebHostPiSessionRunInput) => {
       const requested = snapshotPiWebHostPiSessionRunInput(input);
       const result: unknown = await Reflect.apply(run, value, [requested]);

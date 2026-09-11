@@ -10,7 +10,7 @@ Plugins can currently:
 - communicate between an exact-revision package's browser and server entries through bounded JSON requests and duplex channels;
 - publish and consume typed, exact-version capabilities within the browser host or within sessiond;
 - own package-scoped durable JSON state and resolve current workspace authority from a server entry;
-- start bounded, host-governed one-shot Pi sessions from a server entry; and
+- create host-governed Pi conversations, with an optional initial run, from a server entry; and
 - contribute one server-side workspace provider with optional workspace-removal planning.
 
 Browser entries run in the PI WEB page through browser plugin API v4. Declared server entries run in the session daemon through server plugin API v3. Plugins do not get raw Fastify access, arbitrary routes, concrete core services, a generic service locator or event bus, Pi model-provider registration, or a general server-hook API. Neither entry is sandboxed.
@@ -849,9 +849,22 @@ The host owns the storage location and isolates it by plugin id. `read()` return
 
 The result is a detached frozen `{ project, workspace }` projection with normalized host-derived paths and browser-visible provider metadata. It never includes provider-private `data`, a provider callback, a transport destination, or authority selected by path. Workspace ownership remains typed authorization/topology metadata; it does not route a request to that provider.
 
-#### Host-governed one-shot Pi sessions v1
+#### Host-governed Pi sessions v1
 
-`PI_WEB_HOST_PI_SESSIONS_CAPABILITY` identifies exact `pi-web.host/pi-sessions` v1:
+`PI_WEB_HOST_PI_SESSIONS_CAPABILITY` identifies exact `pi-web.host/pi-sessions` v1. Declare it in `requires` and resolve it in `start()`.
+
+Use `create()` when your companion will begin the work. It accepts only `{ projectId, workspaceId }` (non-empty ids, at most 512 characters each) and returns a frozen `{ sessionId }` after native extension startup and normal UI publication, without submitting a prompt or opening a connection:
+
+```ts
+const { sessionId } = await piSessions.create({ projectId, workspaceId });
+const connection = await sessionEvents.connect({ projectId, workspaceId, sessionId });
+connection.on("my-package:reply", (data) => { /* author-defined reply */ });
+connection.emit("my-package:request", { action: "inspect" });
+```
+
+Declare the separate messaging capability too (below). Have the companion wait for the request before starting agent work; `create()` does not suppress work an extension starts itself during startup. PI WEB installs its observer before native extension startup, and publishes the conversation before `create()` resolves. Use Pi's APIs inside the companion to run the agent. Creation failures reject; there is no initial-run completion promise for `create()`. On an older v1 host without creation support, `create()` rejects with an update-host error while `run()` remains usable.
+
+Use the unchanged `run()` path when you already have the initial prompt:
 
 ```ts
 const run = await piSessions.run({
@@ -864,9 +877,9 @@ const completion = await run.completion;
 // { status: "completed" | "cancelled" } or { status: "failed", error }
 ```
 
-The only accepted input fields are `projectId`, `workspaceId`, and a non-empty initial `prompt`. Each id is limited to 512 characters; the prompt is limited to 64 KiB of UTF-8. Every admission re-resolves current workspace authority, then PI WEB creates one visible, transcript-preserving session with delegation tools disabled and admits exactly that initial prompt before returning the frozen handle. The plugin receives only `sessionId` and a detached completion promise—no runtime/SDK object, path override, model controls, arbitrary session operations, generic session service, or per-run cancellation handle.
+For `run()`, the only accepted input fields are `projectId`, `workspaceId`, and a non-empty initial `prompt`. Each id is limited to 512 characters; the prompt is limited to 64 KiB of UTF-8. Every admission re-resolves current workspace authority, then PI WEB creates one visible, transcript-preserving session with delegation tools disabled and admits exactly that initial prompt before returning the frozen handle. The plugin receives only `sessionId` and a detached completion promise—no runtime/SDK object, path override, model controls, arbitrary session operations, generic session service, or per-run cancellation handle.
 
-PI WEB observes native extension startup activity and announces the created session before submitting the initial prompt. It admits at most four concurrent initial runs per plugin. Admission/start failures reject `run()`; completion describes only the initial submission: `completed`, `cancelled` when aborted, or `failed`, with failure text bounded to 4 KiB of UTF-8. A final provider error counts as failure even when Pi's prompt promise fulfills; a command or handled input can complete without an assistant response.
+PI WEB observes native extension startup activity and announces the created session before submitting the initial prompt. Both methods re-resolve current workspace authority and use the same non-delegating hosted startup. At most four admissions per plugin may be pending: `create()` holds a slot only until startup/publication settles; `run()` holds it through initial completion. Published conversations are not limited by this admission quota. Admission/start failures reject `run()`; completion describes only the initial submission: `completed`, `cancelled` when aborted, or `failed`, with failure text bounded to 4 KiB of UTF-8. A final provider error counts as failure even when Pi's prompt promise fulfills; a command or handled input can complete without an assistant response.
 
 Once published, the conversation belongs to normal PI WEB hosting. Initial completion or plugin disposal does not close it or abort later user work. Plugin lifetime revocation rejects new admissions and cancels unpublished startup (including pending startup dialogs); cleanup waits for startup to settle, not for published conversations to finish. Users can continue these sessions normally, including after browser disconnection.
 
@@ -881,7 +894,7 @@ connection.emit("my-package:request", { action: "inspect" });
 // Later: unsubscribe() removes this listener; connection.close() closes the connection.
 ```
 
-Select a full session id on the selected machine, whether it came from the normal session UI or `piSessions.run()`. `connect()` re-resolves project/workspace authority and requires that exact session to be already hosted in that workspace on this daemon. Sessions still initializing their extensions reject. It does not open saved sessions, create sessions, or adopt independent runtimes. Browser plugins reach their backend on the selected machine through `context.peer`; pass the selected ids rather than retaining a machine-global default. Creation and connection are separate; `run()` already submits its initial prompt before it returns.
+Select a full session id on the selected machine, whether it came from the normal session UI, `piSessions.create()`, or `piSessions.run()`. `connect()` re-resolves project/workspace authority and requires that exact session to be already hosted in that workspace on this daemon. Sessions still initializing their extensions reject. It does not open saved sessions, create sessions, or adopt independent runtimes. Browser plugins reach their backend on the selected machine through `context.peer`; pass the selected ids rather than retaining a machine-global default. Creation and connection are separate; `run()` already submits its initial prompt before it returns.
 
 The companion uses ordinary `pi.events.on("my-package:request", handler)` and `pi.events.emit("my-package:reply", data)`. Install and enable the companion through normal Pi package configuration and project trust. Register its handlers during extension loading and initialize session state in `session_start`. Subscribe in the backend before emitting: replies may be synchronous. The bus carries native in-process values, without cloning or a JSON envelope. Use package-specific channels and define your own payloads, acknowledgements, correlation, and error replies. Native emit returns immediately, does not await async handlers, and does not confirm that a companion is installed or that agent work succeeded. Pi logs listener errors. There is no buffering or replay of startup emissions.
 

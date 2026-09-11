@@ -57,6 +57,7 @@ describe("session daemon shutdown", () => {
       isMain: false,
     };
     const sessions = {
+      createHostedSession: vi.fn(() => Promise.resolve({ id: "unexpected" })),
       startOneShotRun: vi.fn(() => Promise.resolve({ id: "unexpected", completion: Promise.resolve() })),
       abort: vi.fn(() => Promise.resolve()),
       stop: vi.fn(() => Promise.resolve()),
