@@ -432,12 +432,44 @@ import type { PiWebServerPlugin, ServerPluginPeer, WorkspaceProvider } from "@jm
                 model/path controls, runtime object, arbitrary session API, or per-run cancellation handle. The hosted
                 conversation remains available for user work after initial completion or plugin disposal.
               </p>
+              <h3>Hosted Pi package messaging v1</h3>
+              <p>
+                Declare <code>PI_WEB_HOST_PI_SESSION_EVENTS_CAPABILITY</code> in the backend's <code>requires</code>
+                and resolve it in <code>start()</code>. This separate <code>pi-web.host/pi-session-events</code> v1
+                capability offers <code>connect({ projectId, workspaceId, sessionId })</code>. It re-resolves workspace
+                authority and selects one exact, full session id already hosted in that workspace on this daemon,
+                including existing UI sessions and launcher-created sessions. Sessions still initializing extensions reject.
+                It does not create or open sessions or
+                adopt independent runtimes. Use <code>context.peer</code> to reach the backend on the browser's selected
+                machine. Creation is separate; <code>run()</code> has already submitted its initial prompt when it returns.
+              </p>
+              <p>
+                The connection offers <code>on(channel, handler)</code> (returns unsubscribe),
+                <code>emit(channel, data)</code>, <code>close()</code>, and a lifetime <code>signal</code>.
+                The companion uses native <code>pi.events.on</code> and <code>pi.events.emit</code>, loaded through normal
+                Pi package enablement and project trust. Register companion handlers during loading and initialize session
+                state in <code>session_start</code>. Subscribe before emitting: replies can be synchronous. Values are
+                native in-process data, not cloned JSON. Authors choose package-specific channels, payloads, correlation,
+                acknowledgements, and error replies. Emit neither awaits async handlers nor confirms companion presence
+                or agent completion; Pi logs listener errors. Startup emissions are not buffered or replayed.
+              </p>
+              <p>
+                Explicit close, plugin disposal, and hosted session close/replacement detach listeners and abort the
+                connection signal. Later <code>on()</code> and <code>emit()</code> throw; close and unsubscribe are
+                idempotent. Closing a connection never stops the conversation or its agent work. Browser disconnection
+                alone does not close a backend-owned connection; authors can tie it to a peer channel when desired.
+                Same-session <code>/reload</code> preserves the host connection while replacing companion handlers;
+                runtime restart/reopen requires an explicit new connection even with the same session id.
+                Use Pi's own agent APIs in the companion: supported native activity appears in the normal PI WEB
+                conversation and running status without author reports. This is trusted-author tooling, not sandboxing:
+                authors own message meanings and deliberately incompatible behavior outside the supported hosting lifecycle.
+              </p>
               <p>
                 These values are created separately for each declaring plugin and revoked with its lifetime. Revocation
                 rejects new work and cancels unpublished startup, including pending startup dialogs. Cleanup waits for
-                startup to settle, not for published conversations, and does not abort later user work. State is available in the early phase; workspace and Pi-session authority become active together
+                startup to settle, not for published conversations, and does not abort later user work. State is available in the early phase; workspace, Pi-session, and session-messaging authority become active together
                 only after provider topology and host session ownership exist. A plugin contributing a workspace provider
-                cannot require either late capability because that is a topology cycle. In <code>bundled-only</code> safe
+                cannot require any of these late capabilities because that is a topology cycle. In <code>bundled-only</code> safe
                 start, external plugins never receive capabilities; <code>none</code> imports no server plugins while the
                 kernel folder workspace and recovery/diagnostic surfaces remain available.
               </p>

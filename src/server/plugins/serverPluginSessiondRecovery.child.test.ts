@@ -244,30 +244,38 @@ describe("sessiond persisted server plugin recovery", () => {
       import { appendFile, writeFile } from "node:fs/promises";
       import {
         PI_WEB_HOST_PI_SESSIONS_CAPABILITY,
+        PI_WEB_HOST_PI_SESSION_EVENTS_CAPABILITY,
         PI_WEB_HOST_WORKSPACES_CAPABILITY
       } from ${JSON.stringify(serverApiUrl)};
       let workspaces;
       let piSessions;
+      let sessionEvents;
+      let connection;
       let run;
       const selection = ${JSON.stringify({ projectId, workspaceId })};
       export default {
         apiVersion: 3,
         name: "Workspace consumer fixture",
-        requires: [PI_WEB_HOST_WORKSPACES_CAPABILITY, PI_WEB_HOST_PI_SESSIONS_CAPABILITY],
+        requires: [PI_WEB_HOST_WORKSPACES_CAPABILITY, PI_WEB_HOST_PI_SESSIONS_CAPABILITY, PI_WEB_HOST_PI_SESSION_EVENTS_CAPABILITY],
         activate() {
           return {
             async start({ capabilities }) {
               workspaces = capabilities.resolve(PI_WEB_HOST_WORKSPACES_CAPABILITY);
               piSessions = capabilities.resolve(PI_WEB_HOST_PI_SESSIONS_CAPABILITY);
+              sessionEvents = capabilities.resolve(PI_WEB_HOST_PI_SESSION_EVENTS_CAPABILITY);
               const authority = await workspaces.resolve(selection);
               run = await piSessions.run({ ...selection, prompt: "Report the current workspace name." });
               await writeFile(${JSON.stringify(authorityMarker)}, JSON.stringify(authority));
-              await writeFile(${JSON.stringify(runMarker)}, JSON.stringify({ sessionId: run.sessionId }));
+              connection = await sessionEvents.connect({ ...selection, sessionId: run.sessionId });
+              let echoed;
+              connection.on("fixture:echo", data => { echoed = data; });
+              connection.emit("fixture:echo", "connected");
+              await writeFile(${JSON.stringify(runMarker)}, JSON.stringify({ sessionId: run.sessionId, echoed }));
               await appendFile(${JSON.stringify(eventsPath)}, "consumer:start\\n");
               console.error("WORKSPACE_CONSUMER_STARTED");
             },
             async dispose() {
-              const result = { completion: await run.completion };
+              const result = { completion: await run.completion, connectionClosed: connection.signal.aborted };
               try {
                 await workspaces.resolve(selection);
                 result.workspaceError = "workspace authority remained active";
@@ -314,6 +322,7 @@ describe("sessiond persisted server plugin recovery", () => {
     const admittedRun = await readJsonObject(runMarker);
     expect(typeof admittedRun["sessionId"]).toBe("string");
     expect(admittedRun["sessionId"]).not.toBe("");
+    expect(admittedRun["echoed"]).toBe("connected");
     expect(JSON.parse(await readFile(join(dataDir, "plugin-state", "b-state-early", "state.json"), "utf8")))
       .toEqual({ phase: "early" });
 
@@ -323,6 +332,7 @@ describe("sessiond persisted server plugin recovery", () => {
 
     expect(exit).toEqual({ code: 0, signal: null });
     const disposed = await readJsonObject(disposedMarker);
+    expect(disposed["connectionClosed"]).toBe(true);
     const completion = disposed["completion"];
     expect(["completed", "failed", "cancelled"])
       .toContain(isRecord(completion) ? completion["status"] : undefined);

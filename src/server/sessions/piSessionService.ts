@@ -7,6 +7,7 @@ import {
   createAgentSessionFromServices,
   createAgentSessionRuntime,
   createAgentSessionServices,
+  createEventBus,
   createEditToolDefinition,
   defineTool,
   hasTrustRequiringProjectResources,
@@ -37,6 +38,8 @@ import { projectSessionTree, type ProjectableSessionTreeNode } from "./sessionTr
 import { SessionArchiveStore, type ArchivedSessionRecord, type ArchiveSessionInput } from "./sessionArchiveStore.js";
 import { findArchiveCandidateByIdOrPrefix, planSessionArchiveTree, type SessionArchiveTreeCandidate } from "./sessionArchiveTree.js";
 import type { ActiveSession } from "./sessionRuntimeStore.js";
+import type { PiWebHostPiSessionConnection } from "../../server-plugin-api.js";
+import { PiSessionEventConnections } from "./piSessionEventConnections.js";
 import { deterministicSessionName, fallbackSessionName, generateShortSessionName } from "./sessionNameGenerator.js";
 import { computeEditPreview, type EditPreviewResult } from "./editPreview.js";
 import { attachmentsToInlineImages, saveAttachmentsToWorkspace } from "./attachmentService.js";
@@ -961,6 +964,7 @@ export function piWebResourceLoaderOptions(
 }
 
 function createDefaultRuntimeFactory(
+  sessionEvents: PiSessionEventConnections,
   modelRuntime: ModelRuntime,
   sessionManagers: Pick<PiSessionManagerGateway, "open">,
   spawn?: SpawnSessionFn,
@@ -980,6 +984,7 @@ function createDefaultRuntimeFactory(
     // browser trust prompt, an untrusted project's resources are skipped
     // (matching `pi` run without a UI). Projects without trust-requiring
     // resources skip resolution entirely and are trusted, as before.
+    const eventBus = createEventBus();
     const projectTrustRequiring = hasTrustRequiringProjectResources(cwd);
     const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: !projectTrustRequiring });
     // Pre-session-creation trust failures (`project_trust` handler errors)
@@ -991,7 +996,7 @@ function createDefaultRuntimeFactory(
       agentDir,
       modelRuntime,
       settingsManager,
-      ...(resourceLoaderOptions === undefined ? {} : { resourceLoaderOptions }),
+      resourceLoaderOptions: { ...resourceLoaderOptions, eventBus },
       ...(projectTrustRequiring
         ? {
             resourceLoaderReloadOptions: {
@@ -1026,6 +1031,7 @@ function createDefaultRuntimeFactory(
       ...(modelOptions.thinkingLevel === undefined ? {} : { thinkingLevel: modelOptions.thinkingLevel }),
       ...(modelOptions.scopedModels.length === 0 ? {} : { scopedModels: modelOptions.scopedModels }),
     });
+    sessionEvents.register(result.session, eventBus);
     return { ...result, services, diagnostics: [...projectTrustDiagnostics, ...services.diagnostics] };
   };
 }
@@ -1055,6 +1061,7 @@ function createPiWebEditToolDefinition(cwd: string) {
 }
 
 export interface PiSessionServiceDependencies {
+  sessionEvents?: PiSessionEventConnections;
   agentDir: string;
   sessionManager: PiSessionManagerGateway;
   archiveStore?: SessionArchiveRepository;
@@ -1128,6 +1135,7 @@ export interface PiSessionServiceDependencies {
 
 export class PiSessionService implements SessionRouteService {
   private readonly active = new Map<string, ActiveSession<PiSessionRuntime>>();
+  private readonly sessionEvents: PiSessionEventConnections;
   private readonly pendingSessionOpens = new Map<string, PendingSessionOpen>();
   /**
    * Sessions whose extension binding is still in flight. A `session_start`
@@ -1238,7 +1246,9 @@ export class PiSessionService implements SessionRouteService {
     // Subsessions are gated behind their own flag, and they
     // also require the spawn capability (they share its project-scope resolver).
     const subsessionsActive = this.spawnTargets !== undefined && deps.subsessionsEnabled === true;
+    this.sessionEvents = deps.sessionEvents ?? new PiSessionEventConnections();
     this.createRuntime = deps.createRuntime ?? createDefaultRuntimeFactory(
+      this.sessionEvents,
       this.modelRuntime,
       this.sessionManager,
       this.spawnTargets === undefined ? undefined : (input) => this.spawnSession(input),
@@ -3947,6 +3957,16 @@ export class PiSessionService implements SessionRouteService {
     this.unreadPublicationRetryDelayMs = this.unreadPublicationRetryInitialMs;
   }
 
+  connectSessionEvents(ref: PiSessionRef, lifetime: AbortSignal): PiWebHostPiSessionConnection {
+    const active = this.active.get(ref.id);
+    if (active?.runtime.session.sessionId !== ref.id
+      || !cwdPathsEqual(active.runtime.session.sessionManager.getCwd(), ref.cwd)) {
+      throw new Error("Selected session is not hosted in this workspace on this machine");
+    }
+    if (this.startupSessions.has(ref.id)) throw new Error("Selected session is still initializing its extensions");
+    return this.sessionEvents.connect(active.runtime.session, lifetime);
+  }
+
   private bindRuntime(active: ActiveSession<PiSessionRuntime>, session: PiAgentSession = active.runtime.session): void {
     active.unsubscribe();
     for (const [sessionId, candidate] of this.active.entries()) {
@@ -3955,7 +3975,7 @@ export class PiSessionService implements SessionRouteService {
         if (sessionId !== session.sessionId) this.clearCompactionPromptQueue(sessionId);
       }
     }
-    active.unsubscribe = session.subscribe((event) => {
+    const unsubscribe = session.subscribe((event) => {
       this.events.publish(session.sessionId, toClientEvent(event, session.thinkingLevel));
       this.publishActivityForEvent(session, event);
       const eventType = getString(event, "type");
@@ -3965,6 +3985,10 @@ export class PiSessionService implements SessionRouteService {
       this.publishStatus(session);
       this.updateSubsessionTracking(session);
     });
+    active.unsubscribe = () => {
+      this.sessionEvents.close(session);
+      unsubscribe();
+    };
     this.active.set(session.sessionId, active);
   }
 

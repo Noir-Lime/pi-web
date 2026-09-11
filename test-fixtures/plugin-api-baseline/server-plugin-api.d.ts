@@ -163,6 +163,27 @@ export interface PiWebHostPiSessionsV1 {
 }
 /** Exact PI sessions v1 capability supplied separately for each declaring server plugin. */
 export declare const PI_WEB_HOST_PI_SESSIONS_CAPABILITY: PluginCapability<PiWebHostPiSessionsV1, 1>;
+/** Exact hosted conversation on the selected machine; creation is separate. */
+export interface PiWebHostPiSessionSelection extends PiWebHostWorkspaceSelection {
+    readonly sessionId: string;
+}
+/** Ephemeral connection to one hosted session's native pi.events bus. */
+export interface PiWebHostPiSessionConnection {
+    /** Aborts on close, plugin disposal, or hosted runtime replacement/close. */
+    readonly signal: AbortSignal;
+    /** Subscribe before emitting: replies may arrive synchronously. No replay. */
+    readonly on: (channel: string, handler: (data: unknown) => void | Promise<void>) => () => void;
+    /** Native fire-and-forget delivery; not an acknowledgement or agent completion. */
+    readonly emit: (channel: string, data: unknown) => void;
+    /** Idempotent; detaches listeners without stopping the conversation. */
+    readonly close: () => void;
+}
+export interface PiWebHostPiSessionEventsV1 {
+    readonly version: 1;
+    readonly connect: (selection: PiWebHostPiSessionSelection) => Promise<PiWebHostPiSessionConnection>;
+}
+/** Session-local package messaging, not an agent-control or SDK capability. */
+export declare const PI_WEB_HOST_PI_SESSION_EVENTS_CAPABILITY: PluginCapability<PiWebHostPiSessionEventsV1, 1>;
 /** Resolver containing only the exact capability requirements declared by a plugin. */
 export interface ServerPluginCapabilityResolver {
     readonly resolve: <Value>(capability: PluginCapability<Value>) => Value;

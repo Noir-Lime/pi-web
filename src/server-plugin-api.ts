@@ -207,6 +207,36 @@ export const PI_WEB_HOST_PI_SESSIONS_CAPABILITY: PluginCapability<PiWebHostPiSes
   parse: snapshotPiWebHostPiSessionsV1,
 });
 
+/** Exact hosted conversation on the selected machine; creation is separate. */
+export interface PiWebHostPiSessionSelection extends PiWebHostWorkspaceSelection {
+  readonly sessionId: string;
+}
+
+/** Ephemeral connection to one hosted session's native pi.events bus. */
+export interface PiWebHostPiSessionConnection {
+  /** Aborts on close, plugin disposal, or hosted runtime replacement/close. */
+  readonly signal: AbortSignal;
+  /** Subscribe before emitting: replies may arrive synchronously. No replay. */
+  readonly on: (channel: string, handler: (data: unknown) => void | Promise<void>) => () => void;
+  /** Native fire-and-forget delivery; not an acknowledgement or agent completion. */
+  readonly emit: (channel: string, data: unknown) => void;
+  /** Idempotent; detaches listeners without stopping the conversation. */
+  readonly close: () => void;
+}
+
+export interface PiWebHostPiSessionEventsV1 {
+  readonly version: 1;
+  readonly connect: (selection: PiWebHostPiSessionSelection) => Promise<PiWebHostPiSessionConnection>;
+}
+
+/** Session-local package messaging, not an agent-control or SDK capability. */
+export const PI_WEB_HOST_PI_SESSION_EVENTS_CAPABILITY: PluginCapability<PiWebHostPiSessionEventsV1, 1> = Object.freeze({
+  pluginId: "pi-web.host",
+  id: "pi-session-events",
+  version: 1,
+  parse: snapshotPiWebHostPiSessionEventsV1,
+});
+
 /** Resolver containing only the exact capability requirements declared by a plugin. */
 export interface ServerPluginCapabilityResolver {
   readonly resolve: <Value>(capability: PluginCapability<Value>) => Value;
@@ -416,6 +446,39 @@ function snapshotPiWebHostWorkspacesV1(value: unknown): PiWebHostWorkspacesV1 {
       const requested = snapshotPiWebHostWorkspaceSelection(selection);
       const authority: unknown = await Reflect.apply(resolve, value, [requested]);
       return snapshotPiWebHostWorkspaceAuthority(authority, requested);
+    },
+  });
+}
+
+function snapshotPiWebHostPiSessionEventsV1(value: unknown): PiWebHostPiSessionEventsV1 {
+  if (typeof value !== "object" || value === null) throw new Error("Invalid PI session events capability");
+  const connect: unknown = Reflect.get(value, "connect");
+  if (Reflect.get(value, "version") !== 1 || typeof connect !== "function") throw new Error("Invalid PI session events capability");
+  return Object.freeze({
+    version: 1,
+    connect: async (selection: PiWebHostPiSessionSelection): Promise<PiWebHostPiSessionConnection> => {
+      const workspace = snapshotPiWebHostWorkspaceSelection({ projectId: selection.projectId, workspaceId: selection.workspaceId });
+      const sessionId = selection.sessionId;
+      if (typeof sessionId !== "string" || sessionId.trim() === "" || sessionId.length > 512) throw new Error("Invalid hosted session id");
+      const connection: unknown = await Reflect.apply(connect, value, [{ ...workspace, sessionId }]);
+      if (typeof connection !== "object" || connection === null) throw new Error("Invalid PI session events connection");
+      const signal: unknown = Reflect.get(connection, "signal");
+      const on: unknown = Reflect.get(connection, "on");
+      const emit: unknown = Reflect.get(connection, "emit");
+      const close: unknown = Reflect.get(connection, "close");
+      if (!(signal instanceof AbortSignal) || typeof on !== "function" || typeof emit !== "function" || typeof close !== "function") {
+        throw new Error("Invalid PI session events connection");
+      }
+      return Object.freeze({
+        signal,
+        on: (channel: string, handler: (data: unknown) => void | Promise<void>): (() => void) => {
+          const unsubscribe: unknown = Reflect.apply(on, connection, [channel, handler]);
+          if (typeof unsubscribe !== "function") throw new Error("Invalid PI event unsubscribe function");
+          return () => { Reflect.apply(unsubscribe, undefined, []); };
+        },
+        emit: (channel: string, data: unknown): void => { Reflect.apply(emit, connection, [channel, data]); },
+        close: (): void => { Reflect.apply(close, connection, []); },
+      });
     },
   });
 }

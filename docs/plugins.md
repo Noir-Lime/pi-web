@@ -870,9 +870,28 @@ PI WEB observes native extension startup activity and announces the created sess
 
 Once published, the conversation belongs to normal PI WEB hosting. Initial completion or plugin disposal does not close it or abort later user work. Plugin lifetime revocation rejects new admissions and cancels unpublished startup (including pending startup dialogs); cleanup waits for startup to settle, not for published conversations to finish. Users can continue these sessions normally, including after browser disconnection.
 
+#### Hosted Pi package messaging v1
+
+Declare `PI_WEB_HOST_PI_SESSION_EVENTS_CAPABILITY` in the backend's `requires` and resolve it in `start()`. It identifies exact `pi-web.host/pi-session-events` v1, independently of creation:
+
+```ts
+const connection = await sessionEvents.connect({ projectId, workspaceId, sessionId });
+const unsubscribe = connection.on("my-package:reply", (data) => { /* author-defined reply */ });
+connection.emit("my-package:request", { action: "inspect" });
+// Later: unsubscribe() removes this listener; connection.close() closes the connection.
+```
+
+Select a full session id on the selected machine, whether it came from the normal session UI or `piSessions.run()`. `connect()` re-resolves project/workspace authority and requires that exact session to be already hosted in that workspace on this daemon. Sessions still initializing their extensions reject. It does not open saved sessions, create sessions, or adopt independent runtimes. Browser plugins reach their backend on the selected machine through `context.peer`; pass the selected ids rather than retaining a machine-global default. Creation and connection are separate; `run()` already submits its initial prompt before it returns.
+
+The companion uses ordinary `pi.events.on("my-package:request", handler)` and `pi.events.emit("my-package:reply", data)`. Install and enable the companion through normal Pi package configuration and project trust. Register its handlers during extension loading and initialize session state in `session_start`. Subscribe in the backend before emitting: replies may be synchronous. The bus carries native in-process values, without cloning or a JSON envelope. Use package-specific channels and define your own payloads, acknowledgements, correlation, and error replies. Native emit returns immediately, does not await async handlers, and does not confirm that a companion is installed or that agent work succeeded. Pi logs listener errors. There is no buffering or replay of startup emissions.
+
+`connection.signal` aborts when the connection closes, the plugin lifetime ends, or the hosted session closes or is replaced. After that, `on()` and `emit()` throw; `close()` and unsubscribe are idempotent. Closing a connection only detaches its listeners: it never stops agent work or discards the conversation. Browser disconnection alone does not close a backend-owned connection; authors may tie a connection to their peer channel if desired. Same-session `/reload` preserves the host connection while Pi replaces companion handlers; restarting/reopening the runtime requires an explicit new connection, even for the same session id.
+
+Pi remains the agent API: use `pi.sendMessage`, `pi.sendUserMessage`, tools, and native events in the companion. Supported hosted agent activity appears through PI WEB's normal conversation and running-status observation; authors do not send running-status reports. This is trusted-author tooling, not a sandbox or a plugin permission framework. Authors own message meanings and deliberately incompatible behavior that bypasses the supported hosting lifecycle.
+
 #### Availability, safe start, and shutdown
 
-Package state is available during the early dependency phase. Current workspaces and Pi sessions start together only after sessiond has settled provider topology and constructed host session authority. A plugin that contributes a workspace provider cannot also require either late capability: doing so would make its own prerequisite depend on the provider registry it helps define, so PI WEB rejects that topology as a capability cycle. Split those responsibilities into separately identified plugins when both are needed.
+Package state is available during the early dependency phase. Current workspaces, Pi sessions, and session messaging start together only after sessiond has settled provider topology and constructed host session authority. A plugin that contributes a workspace provider cannot also require any of these late capabilities: doing so would make its own prerequisite depend on the provider registry it helps define, so PI WEB rejects that topology as a capability cycle. Split those responsibilities into separately identified plugins when both are needed.
 
 `bundled-only` safe start excludes external server plugins before their capabilities are created. `none` imports no server plugins and creates no plugin capability consumers; kernel folder workspaces and recovery/diagnostic surfaces remain available, while required Terminal and Terminal-backed workflows do not. During ordinary shutdown PI WEB closes peer ingress and aborts plugin lifetimes while host session authority is still available for startup cleanup, then disposes hosted sessions. A missing or failed optional capability disables its dependent plugins with attributed diagnostics; unrelated kernel and plugin surfaces continue.
 

@@ -31,6 +31,7 @@ import {
 import { sessiondSocketPath } from "../sessiond/config.js";
 import {
   PI_WEB_HOST_PI_SESSIONS_CAPABILITY,
+  PI_WEB_HOST_PI_SESSION_EVENTS_CAPABILITY,
   PI_WEB_HOST_WORKSPACES_CAPABILITY,
 } from "../server-plugin-api.js";
 import { getPiWebRuntimeComponent } from "./piWebStatus.js";
@@ -51,6 +52,7 @@ import { PI_WEB_SESSION_ENV, sessionEnvironmentPromptSections } from "./sessions
 import { createServerPluginExecFile } from "./plugins/serverPluginExec.js";
 import { createServerPluginRuntime } from "./plugins/serverPluginRuntime.js";
 import { createServerPluginPiSessionsCapabilityFactory } from "./plugins/serverPluginPiSessionsCapability.js";
+import { createServerPluginPiSessionEventsCapabilityFactory } from "./plugins/serverPluginPiSessionEventsCapability.js";
 import { createServerPluginStateCapabilityFactory } from "./plugins/serverPluginStateCapability.js";
 import { createServerPluginWorkspacesCapabilityFactory } from "./plugins/serverPluginWorkspacesCapability.js";
 import {
@@ -208,7 +210,7 @@ async function createSessionDaemonRuntime() {
     hostCapabilityFactories: [createServerPluginStateCapabilityFactory({
       dataDir: piWebDataDir(daemonEnvironment),
     })],
-    lateHostCapabilities: [PI_WEB_HOST_WORKSPACES_CAPABILITY, PI_WEB_HOST_PI_SESSIONS_CAPABILITY],
+    lateHostCapabilities: [PI_WEB_HOST_WORKSPACES_CAPABILITY, PI_WEB_HOST_PI_SESSIONS_CAPABILITY, PI_WEB_HOST_PI_SESSION_EVENTS_CAPABILITY],
   });
   let sessionsForFailedConstruction: PiSessionService | undefined;
   try {
@@ -311,6 +313,7 @@ async function createSessionDaemonRuntime() {
     await serverPlugins.resumeWithHostCapabilityFactories([
       createServerPluginWorkspacesCapabilityFactory({ projects, workspaces: workspaceProviders }),
       createServerPluginPiSessionsCapabilityFactory({ projects, workspaces: workspaceProviders, sessions }),
+      createServerPluginPiSessionEventsCapabilityFactory({ projects, workspaces: workspaceProviders, sessions }),
     ]);
     const providerPluginIdSet = new Set(providerPluginIds);
     const remainingActivePluginIds = serverPlugins.healthRecords()
