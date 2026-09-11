@@ -2629,6 +2629,11 @@ export class PiSessionService implements SessionRouteService {
         settled = true;
         return;
       }
+      if (event["type"] === "auto_retry_end" && event["success"] === false && event["finalError"] === "Retry cancelled") {
+        // Native Pi cancels retry sleep without an aborted assistant message.
+        failure = new DOMException("Initial PI session run was aborted", "AbortError");
+        return;
+      }
       const message = event["message"];
       if (!isRecord(message)) return;
       if (event["type"] === "message_start" && message["role"] === "user") {
@@ -3487,6 +3492,8 @@ export class PiSessionService implements SessionRouteService {
 
   private async getActive(ref: PiSessionRef, options: Pick<CreateSessionRuntimeOptions, "notificationGeneration"> = {}): Promise<ActiveSession<PiSessionRuntime>> {
     const active = this.activeForRef(ref);
+    const pending = this.pendingSessionOpens.get(JSON.stringify([canonicalizeStoredCwd(ref.cwd), active?.runtime.session.sessionId ?? ref.id]));
+    if (pending !== undefined) return pending.promise;
     if (active !== undefined) return active;
 
     const archived = await this.getArchived(ref);
@@ -3515,12 +3522,11 @@ export class PiSessionService implements SessionRouteService {
     openSessionManager: () => PiSessionManager,
     options: Pick<CreateSessionRuntimeOptions, "notificationGeneration" | "notifications"> = {},
   ): Promise<ActiveSession<PiSessionRuntime>> {
-    const active = this.activeForRef({ id: sessionId, cwd });
-    if (active !== undefined) return Promise.resolve(active);
-
     const key = JSON.stringify([canonicalizeStoredCwd(cwd), sessionId]);
     const existing = this.pendingSessionOpens.get(key);
     if (existing !== undefined) return existing.promise;
+    const active = this.activeForRef({ id: sessionId, cwd });
+    if (active !== undefined) return Promise.resolve(active);
 
     const pending: PendingSessionOpen = {
       sessionId,
@@ -3600,17 +3606,26 @@ export class PiSessionService implements SessionRouteService {
    * first is both the slowest phase and one that can fail on its own; a clear
    * that only ran for the later phases would leave a stale label behind.
    */
-  private async create(
+  private create(
     sessionManager: PiSessionManager,
     cwd: string,
     options: CreateSessionRuntimeOptions = {},
   ): Promise<ActiveSession<PiSessionRuntime>> {
     const startup = this.startupProgress(sessionManager, options.startupIntent ?? "open", options.startupToken);
-    try {
-      return await this.createSessionRuntime(sessionManager, cwd, options, startup);
-    } finally {
+    const key = JSON.stringify([canonicalizeStoredCwd(cwd), sessionManager.getSessionId()]);
+    // Early native observation must not admit ordinary operations before
+    // session_start finishes. Track new sessions as well as on-demand opens so
+    // close/dispose wait for startup before tearing down its runtime.
+    const pending: PendingSessionOpen = {
+      sessionId: sessionManager.getSessionId(),
+      promise: this.createSessionRuntime(sessionManager, cwd, options, startup),
+    };
+    pending.promise = pending.promise.finally(() => {
       startup.end();
-    }
+      if (this.pendingSessionOpens.get(key) === pending) this.pendingSessionOpens.delete(key);
+    });
+    this.pendingSessionOpens.set(key, pending);
+    return pending.promise;
   }
 
   private async createSessionRuntime(

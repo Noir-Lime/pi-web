@@ -1,11 +1,14 @@
+import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { PiSessionService, type PiSessionRuntime } from "./piSessionService.js";
 import {
   CapturingSessionEventHub,
   fakeRuntime,
+  emptyArchiveStore,
   runtimeCreator,
   sessionGateway,
   sessionRef,
+  sessionRecord,
   testModelRuntime,
   type RuntimeCreator,
 } from "./piSessionService.testSupport.js";
@@ -23,6 +26,68 @@ function deferred<T = void>() {
 }
 
 describe("PiSessionService host-owned one-shot runs", () => {
+  it.each(["managed", "existing"])("observes %s startup without admitting ordinary prompts before binding finishes", async (kind) => {
+    const entered = deferred();
+    const binding = deferred();
+    const hub = new CapturingSessionEventHub();
+    const fake = fakeRuntime("session-1", { bindExtensions: () => {
+      fake.emit({ type: "agent_start" });
+      entered.resolve();
+      return binding.promise;
+    } });
+    const service = new PiSessionService(hub, {
+      agentDir: TEST_AGENT_DIR, modelRuntime: testModelRuntime,
+      createAgentRuntime: runtimeCreator(fake.runtime),
+      sessionManager: sessionGateway([sessionRecord("session-1")]), archiveStore: emptyArchiveStore(), heartbeatIntervalMs: 60_000,
+    });
+    const starting = kind === "managed"
+      ? service.createHostedSession("/workspace", new AbortController().signal)
+      : service.messages(sessionRef("session-1"));
+    try {
+      await entered.promise;
+      expect(hub.sessionEvents).toContainEqual({ sessionId: "session-1", event: { type: "agent.start" } });
+      const prompt = service.prompt(sessionRef("session-1"), "ordinary submission");
+      // Let the request traverse its async admission path while binding is parked.
+      await setImmediate();
+      expect(fake.calls.prompt).toHaveLength(0);
+      binding.resolve();
+      await Promise.all([starting, prompt]);
+      expect(fake.calls.prompt).toHaveLength(1);
+    } finally {
+      binding.resolve();
+      await starting;
+      await service.dispose();
+    }
+  });
+
+  it.each(["stop", "dispose"])("coordinates managed startup with %s without republishing a disposed runtime", async (operation) => {
+    const entered = deferred();
+    const binding = deferred();
+    const fake = fakeRuntime("session-1", { bindExtensions: () => {
+      entered.resolve();
+      return binding.promise;
+    } });
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: TEST_AGENT_DIR, modelRuntime: testModelRuntime,
+      createAgentRuntime: runtimeCreator(fake.runtime), sessionManager: sessionGateway([]), heartbeatIntervalMs: 60_000,
+    });
+    const starting = service.createHostedSession("/workspace", new AbortController().signal);
+    try {
+      await entered.promise;
+      const closing = operation === "stop" ? service.stop(sessionRef("session-1")) : service.dispose();
+      await setImmediate();
+      expect(fake.calls.dispose).toBe(0);
+      binding.resolve();
+      await Promise.all([starting, closing]);
+      expect(fake.calls.dispose).toBe(1);
+      expect(service.activeCount()).toBe(0);
+    } finally {
+      binding.resolve();
+      await starting;
+      await service.dispose();
+    }
+  });
+
   it("observes prompt-free creation before extension startup and transfers published lifetime to hosting", async () => {
     const hub = new CapturingSessionEventHub();
     const fake = fakeRuntime("session-created");
@@ -153,6 +218,8 @@ describe("PiSessionService host-owned one-shot runs", () => {
       else fake.emit({ type: "message_start", message: { role: "user", content: "Later queued work" } });
       // A later turn finishes before the initial prompt promise's continuation.
       fake.emit({ type: "message_end", message: { role: "assistant", stopReason: reason === "stop" ? "error" : "stop", errorMessage: "later failure" } });
+      // Retry cancellation from later work must not change the initial result.
+      fake.emit({ type: "auto_retry_end", success: false, attempt: 1, finalError: "Retry cancelled" });
       prompt.resolve();
       if (reason === "stop") await expect(run.completion).resolves.toBeUndefined();
       else await expect(run.completion).rejects.toThrow(reason === "error" ? "initial failure" : "was aborted");
