@@ -41,6 +41,7 @@ import { deterministicSessionName, fallbackSessionName, generateShortSessionName
 import { computeEditPreview, type EditPreviewResult } from "./editPreview.js";
 import { attachmentsToInlineImages, saveAttachmentsToWorkspace } from "./attachmentService.js";
 import { loadEffectiveProjectAttachmentsConfig } from "../workspaces/projectPiWebConfig.js";
+import { isNodeErrorWithCode } from "../workspaces/pathSafety.js";
 import type { PiWebConfigService } from "../configRoutes.js";
 import { parsePromptAttachments } from "../../shared/promptAttachments.js";
 import { ASK_USER_ANSWERS_CUSTOM_TYPE, SESSION_TREE_CUSTOM_INSTRUCTIONS_MAX_LENGTH, SESSION_UNREAD_LIMIT } from "../../shared/apiTypes.js";
@@ -104,6 +105,12 @@ export interface PiSessionLogger {
 
 const noopLogger: PiSessionLogger = { info() { /* no-op */ } };
 const DEFAULT_UNREAD_PUBLICATION_RETRY_MS = 1_000;
+/**
+ * Opening a JSONL transcript expands it into a much larger object graph. Above
+ * this bound, fail one session request instead of letting V8 abort sessiond and
+ * take every session down with it.
+ */
+export const DEFAULT_MAX_SESSION_TRANSCRIPT_BYTES = 256 * 1024 * 1024;
 /**
  * User-facing names for the two phases of session startup PI WEB can prove it
  * is inside: it awaits exactly one call for each, so the phase is a fact rather
@@ -1058,6 +1065,8 @@ export interface PiSessionServiceDependencies {
   createAgentRuntime?: CreateAgentRuntime;
   modelRuntime: ModelRuntime;
   heartbeatIntervalMs?: number;
+  /** Test override for the largest transcript Pi Web will materialize as a runtime. */
+  maxSessionTranscriptBytes?: number;
   workspaceActivity?: Pick<WorkspaceActivityService, "applySessionStatus" | "applySessionActivity" | "removeSession" | "reconcileSessionActivity">;
   /**
    * When provided, `spawn_session` is available to sessions whose creation
@@ -1188,6 +1197,7 @@ export class PiSessionService implements SessionRouteService {
   private readonly spawnTargets: SpawnTargetResolver | undefined;
   private readonly logger: PiSessionLogger;
   private readonly now: () => Date;
+  private readonly maxSessionTranscriptBytes: number;
   private readonly notificationStore: SessionNotificationStore;
   private readonly notificationGenerationBySession = new WeakMap<PiAgentSession, SessionNotificationGeneration>();
   /** Last idle-poll transcript file resolution per runtime, throttled; entries die with their runtime. */
@@ -1218,6 +1228,7 @@ export class PiSessionService implements SessionRouteService {
     this.spawnTargets = deps.spawnTargets;
     this.logger = deps.logger ?? noopLogger;
     this.now = deps.now ?? (() => new Date());
+    this.maxSessionTranscriptBytes = deps.maxSessionTranscriptBytes ?? DEFAULT_MAX_SESSION_TRANSCRIPT_BYTES;
     this.notificationStore = deps.notificationStore ?? new SessionNotificationStore();
     this.unreadStore = deps.unreadStore ?? new SessionUnreadStore();
     this.onUnreadChanged = deps.onUnreadChanged;
@@ -3363,11 +3374,19 @@ export class PiSessionService implements SessionRouteService {
 
   private async getActive(ref: PiSessionRef, options: Pick<CreateSessionRuntimeOptions, "notificationGeneration"> = {}): Promise<ActiveSession<PiSessionRuntime>> {
     const active = this.activeForRef(ref);
-    if (active !== undefined) return active;
+    if (active !== undefined) {
+      const path = active.runtime.session.sessionFile ?? active.runtime.session.sessionManager.getSessionFile();
+      if (path !== undefined && this.transcriptExceedsRuntimeLimit(path) && !this.hasActiveWork(active.runtime.session)) {
+        await this.closeActive(active.runtime.session.sessionId, DEFER_RUNTIME_NOTIFICATIONS);
+        throw this.oversizedTranscriptError(path);
+      }
+      return active;
+    }
 
     const archived = await this.getArchived(ref);
     if (archived?.archivePath !== undefined) {
       const { archivePath } = archived;
+      this.assertTranscriptWithinRuntimeLimit(archivePath);
       return this.openExistingSession(
         archived.sessionId,
         archived.cwd,
@@ -3382,7 +3401,29 @@ export class PiSessionService implements SessionRouteService {
     // the listing would let an in-flight listing serialize unrelated sends.
     const match = await this.sessionManager.resolveSessionFile(ref.cwd, ref.id);
     if (!match) throw new Error("Session not found");
+    this.assertTranscriptWithinRuntimeLimit(match.path);
     return this.openExistingSession(match.id, match.cwd, () => this.sessionManager.open(match.path), options);
+  }
+
+  private transcriptExceedsRuntimeLimit(path: string): boolean {
+    try {
+      return statSync(path).size > this.maxSessionTranscriptBytes;
+    } catch (error: unknown) {
+      if (isNodeErrorWithCode(error, "ENOENT")) return false;
+      throw error;
+    }
+  }
+
+  private assertTranscriptWithinRuntimeLimit(path: string): void {
+    if (this.transcriptExceedsRuntimeLimit(path)) throw this.oversizedTranscriptError(path);
+  }
+
+  private oversizedTranscriptError(path: string): Error {
+    const limitMiB = Math.floor(this.maxSessionTranscriptBytes / (1024 * 1024));
+    return new Error(
+      `Session transcript exceeds Pi Web's ${String(limitMiB)} MiB safe runtime limit. ` +
+      `Archive it and continue in a fresh session instead of opening ${path}.`,
+    );
   }
 
   private openExistingSession(

@@ -90,6 +90,34 @@ describe("TranscriptBranchCache", () => {
     expect(cache.get("/sessions/b.jsonl", "sig")).toBeUndefined();
   });
 
+  it("evicts least-recently-used snapshots when their combined bytes exceed the budget", () => {
+    const cache = new TranscriptBranchCache({ limit: 10, maxBytes: 5 });
+    cache.set("/sessions/a.jsonl", snapshotOf("sig", ["a"], 3));
+    cache.set("/sessions/b.jsonl", snapshotOf("sig", ["b"], 2));
+    cache.set("/sessions/c.jsonl", snapshotOf("sig", ["c"], 2));
+
+    expect(cache.get("/sessions/a.jsonl", "sig")).toBeUndefined();
+    expect(cache.get("/sessions/b.jsonl", "sig")?.branch).toEqual(["b"]);
+    expect(cache.get("/sessions/c.jsonl", "sig")?.branch).toEqual(["c"]);
+  });
+
+  it("does not retain one snapshot larger than the complete byte budget", () => {
+    const cache = new TranscriptBranchCache({ maxBytes: 5 });
+    cache.set("/sessions/large.jsonl", snapshotOf("sig", ["large"], 6));
+
+    expect(cache.get("/sessions/large.jsonl", "sig")).toBeUndefined();
+  });
+
+  it("accounts for replacement snapshots without double-counting their old size", () => {
+    const cache = new TranscriptBranchCache({ limit: 10, maxBytes: 5 });
+    cache.set("/sessions/a.jsonl", snapshotOf("sig-1", ["a"], 4));
+    cache.set("/sessions/a.jsonl", snapshotOf("sig-2", ["a2"], 1));
+    cache.set("/sessions/b.jsonl", snapshotOf("sig", ["b"], 4));
+
+    expect(cache.get("/sessions/a.jsonl", "sig-2")?.branch).toEqual(["a2"]);
+    expect(cache.get("/sessions/b.jsonl", "sig")?.branch).toEqual(["b"]);
+  });
+
   it("bounds growth at the default limit", () => {
     const cache = new TranscriptBranchCache();
     for (let i = 0; i < DEFAULT_TRANSCRIPT_BRANCH_CACHE_LIMIT + 5; i += 1) {
@@ -103,6 +131,6 @@ describe("TranscriptBranchCache", () => {
   });
 });
 
-function snapshotOf(signature: string, branch: unknown[]): TranscriptBranchSnapshot {
-  return { signature, identity: "1:1", size: 1, entries: [], branch };
+function snapshotOf(signature: string, branch: unknown[], size = 1): TranscriptBranchSnapshot {
+  return { signature, identity: "1:1", size, entries: [], branch };
 }

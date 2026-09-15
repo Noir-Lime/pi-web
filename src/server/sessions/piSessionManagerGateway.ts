@@ -10,7 +10,7 @@ import { isNodeErrorWithCode } from "../workspaces/pathSafety.js";
 import { readSessionHeaderSummary, type SessionHeaderReader } from "./sessionFileHeader.js";
 import { tryParseEntry } from "./sessionFileFormat.js";
 import { SessionSummaryScanner } from "./sessionSummaryScanner.js";
-import { TranscriptBranchCache, type TranscriptBranchSnapshot } from "./transcriptBranchCache.js";
+import { DEFAULT_TRANSCRIPT_BRANCH_CACHE_MAX_BYTES, TranscriptBranchCache, type TranscriptBranchSnapshot } from "./transcriptBranchCache.js";
 import type { PiSessionListEntry, PiSessionManager, PiSessionManagerGateway, ResolvedSessionFile } from "./piSessionService.js";
 
 type SessionDirSource = "env" | "settings" | "pi-default";
@@ -67,10 +67,16 @@ export class SessionDirResolver {
   }
 }
 
-export type PiSessionManagerGatewayOptions = SessionDirResolverOptions;
+export interface PiSessionManagerGatewayOptions extends SessionDirResolverOptions {
+  /** Test override for the largest transcript eligible for duplicate idle snapshots. */
+  maxTranscriptSnapshotBytes?: number;
+}
 
 export function createPiSessionManagerGateway(options: PiSessionManagerGatewayOptions): PiSessionManagerGateway {
-  return new SettingsAwarePiSessionManagerGateway(new SessionDirResolver(options));
+  return new SettingsAwarePiSessionManagerGateway(
+    new SessionDirResolver(options),
+    options.maxTranscriptSnapshotBytes ?? DEFAULT_TRANSCRIPT_BRANCH_CACHE_MAX_BYTES,
+  );
 }
 
 class SettingsAwarePiSessionManagerGateway implements PiSessionManagerGateway {
@@ -86,13 +92,18 @@ class SettingsAwarePiSessionManagerGateway implements PiSessionManagerGateway {
   // (LRU) so daemon-lifetime polling cannot retain every session ever read.
   // Snapshots keep their parsed entries so a file that grew by append only is
   // extended from the appended bytes instead of re-parsed whole.
-  private readonly transcriptBranches = new TranscriptBranchCache();
+  private readonly transcriptBranches: TranscriptBranchCache;
   // In-flight snapshot reads, deduplicated per path. Each entry removes itself
   // when its read settles, so this map only ever holds genuinely concurrent
   // reads and needs no bound of its own.
   private readonly pendingTranscriptBranches = new Map<string, Promise<unknown[] | undefined>>();
 
-  constructor(private readonly resolver: SessionDirResolver) {}
+  constructor(
+    private readonly resolver: SessionDirResolver,
+    private readonly maxTranscriptSnapshotBytes: number,
+  ) {
+    this.transcriptBranches = new TranscriptBranchCache({ maxBytes: maxTranscriptSnapshotBytes });
+  }
 
   async list(cwd: string): Promise<PiSessionListEntry[]> {
     const resolution = this.resolver.resolve(cwd);
@@ -130,6 +141,9 @@ class SettingsAwarePiSessionManagerGateway implements PiSessionManagerGateway {
     // is not a failure: it means there is no disk snapshot to serve.
     const file = await statIfPresent(path);
     if (file === undefined) return undefined;
+    // The runtime already owns one parsed copy. Duplicating a large transcript
+    // for idle freshness can multiply its on-disk size into gigabytes of heap.
+    if (file.size > this.maxTranscriptSnapshotBytes) return undefined;
     const signature = transcriptFileSignature(file);
     const cached = this.transcriptBranches.get(path, signature);
     if (cached !== undefined) return cached.branch;
@@ -171,7 +185,9 @@ class SettingsAwarePiSessionManagerGateway implements PiSessionManagerGateway {
     const handle = await open(path, "r");
     let entries: Record<string, unknown>[];
     try {
-      entries = await readTranscriptEntries(handle, 0, (await handle.stat()).size, false) ?? [];
+      // Read no farther than the bounded stat above; bytes appended after it
+      // are picked up by the next poll rather than bypassing the memory guard.
+      entries = await readTranscriptEntries(handle, 0, file.size, false) ?? [];
     } finally {
       await handle.close();
     }
