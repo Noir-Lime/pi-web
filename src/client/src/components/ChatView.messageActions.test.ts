@@ -31,7 +31,7 @@ function buttons(view: ChatView) {
 
 describe("chat message history shortcuts", () => {
   it.each([
-    [0, "fork", "Are you sure you want to clone this session?"],
+    [0, "fork", "Are you sure you want to fork this session?"],
     [1, "back", "Are you sure you want to go back to this message?"],
   ] as const)("confirms shortcut %s before changing history", async (index, action, copy) => {
     const view = await mount();

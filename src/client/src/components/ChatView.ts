@@ -932,7 +932,7 @@ export class ChatView extends LitElement {
   private async actOnMessage(message: ChatLine, action: "fork" | "back", event: MouseEvent): Promise<void> {
     event.stopPropagation();
     if (this.messageActionsDisabled || this.messageActionPending || message.entryId === undefined || this.onMessageAction === undefined) return;
-    if (!window.confirm(action === "fork" ? "Are you sure you want to clone this session?" : "Are you sure you want to go back to this message?")) return;
+    if (!window.confirm(action === "fork" ? "Are you sure you want to fork this session?" : "Are you sure you want to go back to this message?")) return;
     const sessionId = this.sessionId;
     this.messageActionPending = true;
     this.messageActionError = undefined;
