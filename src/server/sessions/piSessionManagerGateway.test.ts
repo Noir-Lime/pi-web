@@ -233,6 +233,18 @@ describe("Pi session manager gateway", () => {
     expect(await gateway.readBranch(path)).toBe(first);
   });
 
+  it("skips a duplicate idle snapshot when the transcript exceeds the byte budget", async () => {
+    const sharedSessionDir = join(tempDir, "oversized-snapshots");
+    const path = await writeNamedSessionFile(sharedSessionDir, "oversized.jsonl", { id: "oversized-session", cwd });
+    const gateway = createPiSessionManagerGateway({
+      ...piProfileOptions({ PI_CODING_AGENT_SESSION_DIR: sharedSessionDir }),
+      maxTranscriptSnapshotBytes: 1,
+    });
+    if (gateway.readBranch === undefined) throw new Error("Expected transcript snapshot reader");
+
+    await expect(gateway.readBranch(path)).resolves.toBeUndefined();
+  });
+
   it("resolves no snapshot for a transcript path with no file on disk, without memoizing the miss", async () => {
     // A session created in memory and never persisted knows its future path,
     // but there is no file: absence must read as "no snapshot", not ENOENT.

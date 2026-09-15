@@ -544,6 +544,56 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
     await service.dispose();
   });
 
+  it("rejects an oversized inactive transcript before opening a runtime", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-web-oversized-inactive-"));
+    const path = join(dir, "oversized.jsonl");
+    await writeFile(path, "too large", "utf8");
+    const open = vi.fn(() => fakeSessionManager());
+    const gateway: SessionGateway = {
+      create: () => fakeSessionManager(),
+      list: () => Promise.resolve([]),
+      listAll: () => Promise.resolve([]),
+      invalidateSessionFile: () => undefined,
+      resolveSessionFile: () => Promise.resolve({ id: "oversized", cwd: "/workspace", path }),
+      open,
+    };
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: TEST_AGENT_DIR,
+      modelRuntime: testModelRuntime,
+      archiveStore: emptyArchiveStore(),
+      sessionManager: gateway,
+      maxSessionTranscriptBytes: 1,
+      heartbeatIntervalMs: 60_000,
+    });
+
+    await expect(service.messages(sessionRef("oversized"))).rejects.toThrow("safe runtime limit");
+    expect(open).not.toHaveBeenCalled();
+    await service.dispose();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("disposes an idle runtime after its transcript grows beyond the safe limit", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-web-oversized-active-"));
+    const path = join(dir, "growing.jsonl");
+    const fake = fakeRuntime("growing", { sessionFile: path });
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: TEST_AGENT_DIR,
+      modelRuntime: testModelRuntime,
+      createAgentRuntime: runtimeCreator(fake.runtime),
+      sessionManager: sessionGateway([]),
+      maxSessionTranscriptBytes: 1,
+      heartbeatIntervalMs: 60_000,
+    });
+
+    await service.start("/workspace");
+    await writeFile(path, "too large", "utf8");
+    await expect(service.messages(sessionRef("grow"))).rejects.toThrow("safe runtime limit");
+    expect(fake.calls.dispose).toBe(1);
+    expect(service.activeCount()).toBe(0);
+    await service.dispose();
+    await rm(dir, { recursive: true, force: true });
+  });
+
   /**
    * Charter-level invariant: an id-prefix ref must never act on a different,
    * prefix-extended session. This runs through the real gateway so the whole
