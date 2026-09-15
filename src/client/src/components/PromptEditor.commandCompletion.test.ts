@@ -24,6 +24,33 @@ describe("PromptEditor command completions", () => {
     ]);
   });
 
+  it("keeps all matching skills beyond twelve and still filters by name", async () => {
+    const skills = Array.from({ length: 40 }, (_, index) => ({
+      name: `skill:example-${String(index + 1).padStart(2, "0")}`,
+      source: "skill" as const,
+    }));
+    vi.spyOn(api, "commands").mockResolvedValue([
+      { name: "tree", source: "builtin" },
+      ...skills,
+    ]);
+    const editor = new PromptEditor();
+    editor.sessionId = "session-1";
+    editor.cwd = "/repo";
+
+    await refreshCompletions(editor, "/skill:");
+
+    expect(currentCompletions(editor)).toEqual(skills.map((skill) => ({
+      kind: "command", replaceFrom: 0, replaceTo: 7,
+      insertText: `/${skill.name}`, detail: "skill",
+    })));
+
+    await refreshCompletions(editor, "/skill:example-40");
+
+    expect(currentCompletions(editor)).toEqual([
+      { kind: "command", replaceFrom: 0, replaceTo: 17, insertText: "/skill:example-40", detail: "skill" },
+    ]);
+  });
+
   it("filters commands by the typed query", async () => {
     vi.spyOn(api, "commands").mockResolvedValue([
       { name: "pr", source: "prompt", argumentHint: "<PR-URL>" },

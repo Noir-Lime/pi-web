@@ -30,9 +30,11 @@ import {
 import type { ClientArchiveSessionsResponse, ClientCommand, ClientCommandResult, ClientMessagePage, ClientSession, ClientSessionCleanupExecuteResponse, ClientSessionCleanupPreviewResponse, ClientSessionModel, ClientSessionModelCatalogEntry, ClientSessionStatus, ClientSessionTreeForkRequest, ClientSessionTreeForkResult, ClientSessionTreeNavigateRequest, ClientSessionTreeNavigateResult, ClientThinkingLevel, SessionStreamSnapshot, SessionUiEvent } from "../types.js";
 import { projectBrowserMessage } from "../browserMessageProjection.js";
 import { pageMessagesAtSafeBoundary } from "./messagePaging.js";
+import { clientSessionFirstMessagePreview } from "./clientSessionPreview.js";
 import type { SessionEventHub } from "../realtime/sessionEventHub.js";
 import { BUILTIN_COMMANDS } from "./builtinCommands.js";
 import { SessionCommandService } from "./sessionCommandService.js";
+import { SessionActivityMarker } from "./sessionActivityMarker.js";
 import { projectSessionTree, type ProjectableSessionTreeNode } from "./sessionTreeProjection.js";
 import { SessionArchiveStore, type ArchivedSessionRecord, type ArchiveSessionInput } from "./sessionArchiveStore.js";
 import { findArchiveCandidateByIdOrPrefix, planSessionArchiveTree, type SessionArchiveTreeCandidate } from "./sessionArchiveTree.js";
@@ -1190,6 +1192,7 @@ export class PiSessionService implements SessionRouteService {
   private readonly workspaceActivity: Pick<WorkspaceActivityService, "applySessionStatus" | "applySessionActivity" | "removeSession" | "reconcileSessionActivity"> | undefined;
   private readonly spawnTargets: SpawnTargetResolver | undefined;
   private readonly logger: PiSessionLogger;
+  private readonly activityMarker: SessionActivityMarker;
   private readonly now: () => Date;
   private readonly notificationStore: SessionNotificationStore;
   private readonly notificationGenerationBySession = new WeakMap<PiAgentSession, SessionNotificationGeneration>();
@@ -1221,6 +1224,10 @@ export class PiSessionService implements SessionRouteService {
     this.spawnTargets = deps.spawnTargets;
     this.logger = deps.logger ?? noopLogger;
     this.now = deps.now ?? (() => new Date());
+    this.activityMarker = new SessionActivityMarker({
+      now: () => this.now().getTime(),
+      onError: (error) => { this.logger.info({ err: error }, "Could not update advisory session activity marker"); },
+    });
     this.notificationStore = deps.notificationStore ?? new SessionNotificationStore();
     this.unreadStore = deps.unreadStore ?? new SessionUnreadStore();
     this.onUnreadChanged = deps.onUnreadChanged;
@@ -1424,7 +1431,7 @@ export class PiSessionService implements SessionRouteService {
       } finally {
         await active.runtime.dispose();
       }
-    }));
+    })).finally(() => this.activityMarker.dispose());
     await this.publishUnreadMutations([]);
   }
 
@@ -2281,6 +2288,7 @@ export class PiSessionService implements SessionRouteService {
 
   async status(ref: PiSessionRef): Promise<ClientSessionStatus> {
     const session = await this.sessionForStatusOrDialogClose(ref);
+    await this.activityMarker.refresh(session.sessionFile, this.hasActiveWork(session));
     if (this.hasActiveWork(session)) return this.statusFromSession(session);
     const branch = await this.readableSessionBranch(ref, session);
     return this.statusFromSession(session, transcriptMessageCount(branch));
@@ -3291,6 +3299,7 @@ export class PiSessionService implements SessionRouteService {
     try {
       await this.abortSessionOperations(active.runtime.session);
     } finally {
+      await this.activityMarker.release(active.runtime.session.sessionFile);
       await active.runtime.dispose();
     }
   }
@@ -4030,6 +4039,7 @@ export class PiSessionService implements SessionRouteService {
       // the session still reports active work transiently, so the event-driven
       // latch may not fire. The heartbeat re-checks once the session settles.
       this.updateSubsessionTracking(session);
+      void this.refreshActivityMarker(session);
       const activity = this.activities.get(session.sessionId);
       if (!this.hasActiveWork(session)) {
         if (activity?.phase === "active") this.publishStatus(session);
@@ -4228,7 +4238,18 @@ export class PiSessionService implements SessionRouteService {
     this.observeUnreadActivityState(session);
   }
 
+  private async refreshActivityMarker(session: PiAgentSession): Promise<void> {
+    if (this.active.get(session.sessionId)?.runtime.session !== session) return;
+    const previous = this.activityMarker.isActiveElsewhere(session.sessionFile);
+    await this.activityMarker.refresh(session.sessionFile, this.hasActiveWork(session));
+    if (this.active.get(session.sessionId)?.runtime.session === session
+      && previous !== this.activityMarker.isActiveElsewhere(session.sessionFile)) {
+      this.publishStatus(session);
+    }
+  }
+
   private publishStatus(session: PiAgentSession): void {
+    void this.refreshActivityMarker(session);
     const status = this.statusFromSession(session);
     this.clearStaleActiveActivity(session);
     this.workspaceActivity?.applySessionStatus(session.sessionManager.getCwd(), status);
@@ -4284,6 +4305,13 @@ export class PiSessionService implements SessionRouteService {
   private warningsForSession(session: PiAgentSession): SessionWarning[] {
     const runtime = this.active.get(session.sessionId)?.runtime;
     const warnings = runtime === undefined ? [] : collectRuntimeWarnings(runtime);
+    if (this.activityMarker.isActiveElsewhere(session.sessionFile)) {
+      warnings.push({
+        severity: "info",
+        message: "Recently active in another PI-WEB instance. Avoid working on this session in both instances at once.",
+        source: "PI-WEB",
+      });
+    }
     const anthropic = anthropicSubscriptionWarning(session, join(this.agentDir, "auth.json"));
     if (anthropic !== undefined) warnings.push(anthropic);
     return warnings;
@@ -4394,7 +4422,7 @@ function clientSessionFromListEntry(session: PiSessionListEntry): ClientSession 
     created: session.created.toISOString(),
     modified: session.modified.toISOString(),
     messageCount: session.messageCount,
-    firstMessage: session.firstMessage,
+    firstMessage: clientSessionFirstMessagePreview(session.firstMessage),
     ...(session.parentSessionPath === undefined ? {} : { parentSessionPath: session.parentSessionPath }),
   };
 }
@@ -4500,7 +4528,7 @@ function clientSessionFromArchivedRecord(record: ArchivedSessionRecord, fallback
     created,
     modified,
     messageCount,
-    firstMessage,
+    firstMessage: clientSessionFirstMessagePreview(firstMessage),
     ...(parentSessionPath === undefined ? {} : { parentSessionPath }),
     archived: true,
     archivedAt: record.archivedAt,
