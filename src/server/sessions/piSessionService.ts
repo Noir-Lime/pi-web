@@ -2678,6 +2678,13 @@ export class PiSessionService implements SessionRouteService {
         return { cancelled: true, ...(result.aborted === undefined ? {} : { aborted: result.aborted }) };
       }
 
+      if (session.sessionManager.getLeafId() !== oldLeafId) {
+        // Questions belong to the position we left. Close them for every browser
+        // without appending a cancellation message or waking the rewound session.
+        const outcome = this.pendingAskStore.cancelOpen(session.sessionId);
+        if (outcome !== undefined) this.publishAskClosed(session.sessionId, outcome);
+      }
+
       if (result.summaryEntry !== undefined) {
         // A summary entry durably identifies the selected branch as the file's
         // newest leaf, superseding any earlier bare selection.
