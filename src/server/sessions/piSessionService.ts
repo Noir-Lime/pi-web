@@ -84,6 +84,7 @@ import { DEFAULT_EXTENSION_DIALOGS_TIMEOUT_MS } from "../../config.js";
 import { createSpawnSessionToolDefinition, type SpawnSessionInvocation, type SpawnSessionResult } from "./spawnSessionTool.js";
 import { createSubsessionToolDefinitions, type SpawnSubsessionInvocation, type SpawnSubsessionResult, type SubsessionCheckResult, type SubsessionReadQuery, type SubsessionReadResult, type SubsessionStatus, type SubsessionSummary, type SubsessionToolDeps } from "./spawnSubsessionTool.js";
 import { buildTranscriptView } from "./subsessionTranscript.js";
+import { annotateAssistantThinkingLevel, historyMessagesFromEntries } from "./transcriptMessages.js";
 import { planSessionCleanup, summarizeSessionCleanupExecution, type NormalizedSessionCleanupRequest, type SessionCleanupPlan } from "./sessionCleanup.js";
 import type { SpawnTargetDecision, SpawnTargetResolver } from "./spawnTargetResolver.js";
 import {
@@ -4755,43 +4756,8 @@ function buildPromptOptions(behavior: QueuedPromptKind | undefined, images: Imag
   return Object.keys(options).length > 0 ? options : undefined;
 }
 
-function stringValue(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-/**
- * Attach the thinking level in effect when an assistant message was generated,
- * so chat bubbles can show it next to the model. Non-assistant messages pass
- * through by reference; assistant messages are copied only when a level is set.
- * "off" is the absence of thinking, not a level worth labeling on every bubble.
- */
-function annotateAssistantThinkingLevel(message: unknown, thinkingLevel: string | undefined): unknown {
-  if (thinkingLevel === undefined || thinkingLevel === "" || thinkingLevel === "off") return message;
-  if (!isRecord(message) || message["role"] !== "assistant") return message;
-  return { ...message, thinkingLevel };
-}
-
 function historyMessages(session: PiAgentSession): unknown[] {
   return historyMessagesFromEntries(session.sessionManager.getBranch());
-}
-
-function historyMessagesFromEntries(entries: readonly unknown[]): unknown[] {
-  const messages: unknown[] = [];
-  // Pi records the initial level at session creation and every later change, so
-  // walking the branch yields the level in effect for each assistant message.
-  let thinkingLevel: string | undefined;
-  for (const entry of entries) {
-    if (!isRecord(entry)) continue;
-    if (entry["type"] === "message") messages.push(annotateAssistantThinkingLevel(entry["message"], thinkingLevel));
-    else if (entry["type"] === "thinking_level_change") {
-      const level = getString(entry, "thinkingLevel");
-      if (level !== undefined) thinkingLevel = level;
-    }
-    else if (entry["type"] === "custom_message" && entry["display"] === true) messages.push({ role: "custom", content: entry["content"], customType: entry["customType"], details: entry["details"] });
-    else if (entry["type"] === "compaction") messages.push({ role: "system", source: "compaction", content: `Compacted history:\n\n${stringValue(entry["summary"])}` });
-    else if (entry["type"] === "branch_summary") messages.push({ role: "system", source: "branch_summary", content: `Branch summary:\n\n${stringValue(entry["summary"])}` });
-  }
-  return messages;
 }
 
 function transcriptMessageCount(entries: readonly unknown[]): number {
