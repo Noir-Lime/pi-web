@@ -118,7 +118,7 @@ const DEFAULT_UNREAD_PUBLICATION_RETRY_MS = 1_000;
  * this bound, fail one session request instead of letting V8 abort sessiond and
  * take every session down with it.
  */
-export const DEFAULT_MAX_SESSION_TRANSCRIPT_BYTES = 256 * 1024 * 1024;
+export const DEFAULT_MAX_SESSION_TRANSCRIPT_BYTES = 512 * 1024 * 1024;
 /**
  * User-facing names for the two phases of session startup PI WEB can prove it
  * is inside: it awaits exactly one call for each, so the phase is a fact rather
