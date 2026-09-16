@@ -1,4 +1,6 @@
-# Workspace Reviews — opt-in Pi package
+# Workspace Reviews — source-only example
+
+For the maintained, interactive demo that installs without compilation, use **Captain's Log** from **Settings → Pi packages → Available packages**. See [Captain's Log](../../docs/plugins.md#try-captains-log). This older example remains available for reference; its saved reviews are not migrated.
 
 Review uncommitted workspace changes in a dedicated Pi session, save the findings, and browse them in a simple **Reviews** panel. This replaces the session-bridge greeting demo; it is **not installed or enabled by default**.
 

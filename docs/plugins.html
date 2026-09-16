@@ -503,40 +503,39 @@ import type { PiWebServerPlugin, ServerPluginPeer, WorkspaceProvider } from "@jm
                 kernel folder workspace and recovery/diagnostic surfaces remain available.
               </p>
 
-              <h3>Try the companion/backend example</h3>
+              <h3>Try Captain's Log</h3>
               <p>
-                The <a href="https://github.com/jmfederico/pi-web/tree/main/examples/session-bridge-plugin">Workspace Reviews example</a>
-                replaces the greeting demo with an opt-in Pi package; it is not installed by default.
-                <strong>Start review</strong> reviews uncommitted changes in a dedicated conversation;
-                <strong>Refresh reviews</strong>, a selector, and previous/next buttons browse saved plain-text findings.
-                The panel uses selected-machine <code>context.peer</code>; the backend derives workspace authority
-                from the host-resolved request, not browser-supplied paths or session ids.
+                <strong>Captain's Log</strong> is an optional, prebuilt Pi package. Select a conversation and click
+                <strong>Let the Captain tell it</strong>. The source companion reads its latest completed assistant reply
+                without prompting or modifying that session; a separate pirate conversation retells it as a theatrical crew briefing,
+                with nautical metaphors and humor. The prompt asks to preserve important facts, warnings, and next steps, and keep code and commands exact.
+                The pirate is reused while loaded, or created automatically otherwise. To keep its context after a restart,
+                open the most recent Captain's Log in Sessions before selecting the source and translating.
+                Previous sessions and results are preserved, with no recovery confirmations or plain-English mode.
+                The themed panel renders the translation as Markdown, with <strong>Previous translations</strong> and <strong>Diagnostics</strong> collapsed below.
+                Embedded HTML stays literal, unsafe links are inert, and images are not loaded automatically.
               </p>
               <p>
-                Enable both halves on the target machine. PI WEB loads the <code>piWeb</code> browser/backend entries;
-                Pi loads the companion through the package's <code>pi.extensions</code> manifest field. Add the absolute
-                package directory to <code>packages</code> in the Pi profile's <code>settings.json</code>, preserving
-                other entries and resource filters. Use sessiond's Pi profile, not an unrelated terminal profile.
-                A PI WEB plugin link alone does not enable the companion. Project-local configuration needs normal trust.
-                Manually restart sessiond when safe to activate the backend (this can interrupt sessions), then reload
-                the browser. Use <code>/reload</code> in an existing hosted session after enabling the companion.
+                Install it from <strong>Settings → Pi packages → Available packages</strong> on the target machine,
+                then explicitly enable it in <strong>Settings → PI WEB plugins</strong>. It is neither automatically
+                installed nor enabled, and the shipped browser, backend, and native companion modules need no compilation.
+                Manually restart the target session daemon when safe, from outside its hosted sessions, then reload
+                the browser. Leave the package's native Pi companion enabled in resource filters; a PI WEB plugin symlink
+                alone does not install it. Model credentials are required; source text goes to the pirate's model provider.
+                This is trusted agent code, not a tool sandbox.
               </p>
               <p>
-                The backend declares both session capabilities, creates a conversation, connects separately, and
-                subscribes before emitting a correlated request. The companion uses native <code>pi.sendUserMessage</code>,
-                message/tool hooks, and <code>agent_settled</code> to capture final text. Receipt is not completion.
-                Provider errors, aborts, failed tools, interfering prompts, and empty/truncated responses fail conservatively.
-                Model credentials are required. Review instructions request no modifications but are not a tool sandbox.
-              </p>
-              <p>
-                Admitted reviews belong to the backend lifetime, independently of browser requests. Receipt waits
-                are bounded to five seconds and completion to ten minutes. Cleanup closes capture, not agent work;
-                inspect Sessions before retrying a timeout. Workspace-scoped plugin-owned JSON files in
-                <code>dataDirectory</code> store status and findings through atomic replacement. Refresh loads metadata
-                and one selected text record; stale running records after restart display as interrupted, never successful.
-                There is no automatic retry, event replay, durable job recovery, retention policy, or pagination.
-                See the <a href="plugins.md#try-the-companionbackend-example">full author guidance</a> and
-                <a href="https://github.com/jmfederico/pi-web/blob/main/examples/session-bridge-plugin/docs/usage.md">example usage guide</a>.
+                The public-API round trip is browser peer channel → backend → hosted session events → native Pi companion → Pi
+                and back. Translation requests travel over the bidirectional channel; the backend pushes progress without polling.
+                Opening or reconnecting restores current state without automatically resending uncertain requests. The backend derives workspace authority from the host,
+                connects separately to the source and pirate, and subscribes before sending correlated requests.
+                The source companion reads its active session branch without a model call; only the pirate receives a prompt. Receipt is not completion.
+                Source lives in <code>pi-packages/captains-log/</code>, with the prebuilt package shipped at
+                <code>dist/pi-packages/captains-log/</code>. See the
+                <a href="plugins.md#try-captains-log">author guidance</a> and
+                <a href="https://github.com/jmfederico/pi-web/blob/main/pi-packages/captains-log/docs/usage.md">package usage guide</a>
+                for lifecycle, limits, and troubleshooting. Workspace Reviews remains a source-only example;
+                Captain's Log is the maintained, no-build interactive demo.
               </p>
 
               <h3>Exact-package peer</h3>
@@ -774,7 +773,9 @@ import type { PiWebServerPlugin, ServerPluginPeer, WorkspaceProvider } from "@jm
 }</code></pre>
               </div>
               <p>
-                Plugins default to enabled. A browser-only change applies after a page reload. A server entry captures
+                Plugins default to enabled unless their <code>piWeb.plugins</code> entry declares the optional boolean
+                <code>defaultEnabled: false</code>. Explicit enablement config overrides that default; mandatory bundled
+                Terminal cannot be disabled. A browser-only change applies after a page reload. A server entry captures
                 enablement and JSON settings only at sessiond startup; replacing package files or saving config changes
                 desired state without hot-reloading the active provider registry.
               </p>

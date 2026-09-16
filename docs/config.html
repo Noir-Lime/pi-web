@@ -1002,7 +1002,9 @@ PI_CODING_AGENT_SESSION_DIR=/opt/pi-profiles/lab-sessions</code></pre>
               <h2>PI WEB plugin config and recovery</h2>
               <p>
                 The global <code>plugins</code> key controls desired enablement and JSON settings for browser-only,
-                server-only, and dual-entry plugins. It does not install packages. Plugins default to enabled;
+                server-only, and dual-entry plugins. It does not install packages. Plugins default to enabled unless their
+                package metadata declares <code>defaultEnabled: false</code>, as Captain's Log does. Explicit
+                <code>plugins.&lt;id&gt;.enabled</code> config overrides that default.
                 <code>plugins.&lt;id&gt;.enabled: false</code> hides a browser-only entry on the next page load. For a
                 server-backed entry, desired disablement takes effect on the next sessiond start, and its paired browser
                 entry continues to follow the still-active server entry until then. The bundled

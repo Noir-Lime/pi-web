@@ -291,8 +291,8 @@ export interface PiPackageInfo {
 export interface PiPackagesResponse {
   packages: PiPackageInfo[];
   /**
-   * Known Pi packages PI WEB ships and can auto-install (see the
-   * `relay-pi-package-autoinstall` relay) that are not currently configured
+   * Known Pi packages PI WEB ships (including explicit opt-in packages)
+   * that are not currently configured
    * for the active profile — omitted or empty once every known package is
    * configured. Lets the Settings UI offer a one-click (re)install with no
    * path typing for a package the user dismissed or never installed.

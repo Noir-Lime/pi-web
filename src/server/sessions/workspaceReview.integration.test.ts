@@ -1,4 +1,4 @@
-import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
@@ -14,7 +14,10 @@ import { createTestModelRuntime, testModel } from "./piSessionService.testSuppor
 it.each(["stop", "error", "aborted", "length", "empty", "interference", "tools", "tool-error"] as const)("copied review package records native %s outcome", async (outcome) => {
   const root = await mkdtemp(join(tmpdir(), "pi-review-native-"));
   const packageRoot = join(root, "package");
-  await cp(resolve("examples/session-bridge-plugin"), packageRoot, { recursive: true });
+  // Exercise package discovery without copying a developer's installed dependencies/build output.
+  await mkdir(packageRoot);
+  await cp(resolve("examples/session-bridge-plugin/package.json"), join(packageRoot, "package.json"));
+  await cp(resolve("examples/session-bridge-plugin/src"), join(packageRoot, "src"), { recursive: true });
   const manifest: unknown = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
   expect(manifest).toMatchObject({ pi: { extensions: ["./src/companion.ts"] } });
   const modelRuntime = await createTestModelRuntime();

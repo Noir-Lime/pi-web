@@ -409,7 +409,7 @@ The `plugins` key controls desired enablement and JSON settings for PI WEB brows
 }
 ```
 
-Plugins are enabled by default. `plugins.<id>.enabled: false` hides a browser-only entry on the next page load. For a server-backed entry, desired disablement takes effect on the next sessiond start; its paired browser entry continues to follow the still-active server entry until that restart. The bundled `pi-web.terminal` plugin is required during normal startup: ordinary config cannot disable it, and Settings renders it non-editable. Server settings are copied into sessiond's startup snapshot, and diagnostics expose only a fingerprint, never the values.
+Plugins are enabled by default unless their package metadata declares `defaultEnabled: false`, as Captain's Log does. Explicit `plugins.<id>.enabled` config overrides the package default. `plugins.<id>.enabled: false` hides a browser-only entry on the next page load. For a server-backed entry, desired disablement takes effect on the next sessiond start; its paired browser entry continues to follow the still-active server entry until that restart. The bundled `pi-web.terminal` plugin is required during normal startup: ordinary config cannot disable it, and Settings renders it non-editable. Server settings are copied into sessiond's startup snapshot, and diagnostics expose only a fingerprint, never the values.
 
 #### Desired versus active plugin state
 

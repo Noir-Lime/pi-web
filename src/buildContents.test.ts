@@ -60,9 +60,17 @@ describe("production build contents", () => {
         writeFile(join(fixtureDist, "app.testSupport.js.map"), "{}\n", "utf8"),
       ]);
 
+      const example = join(fixtureRoot, "examples", "session-bridge-plugin");
+      await mkdir(join(example, "node_modules", "dependency"), { recursive: true });
+      await mkdir(join(example, "dist"), { recursive: true });
+      await writeFile(join(example, "package.json"), '{"name":"example","version":"1.0.0"}\n');
+      await writeFile(join(example, "node_modules", "dependency", "index.d.ts"), "export {};\n");
+      await writeFile(join(example, "dist", "stale.js"), "export {};\n");
       const stdout = await runNpm(["pack", "--dry-run", "--json", "--ignore-scripts"], fixtureRoot);
       const packagedFiles = packageFilePaths(stdout);
 
+      expect(packagedFiles).toContain("examples/session-bridge-plugin/package.json");
+      expect(packagedFiles.some((path) => path.includes("/node_modules/") || path.includes("/session-bridge-plugin/dist/"))).toBe(false);
       expect(packagedFiles).toEqual(expect.arrayContaining([
         "dist/plugin-api.d.ts",
         "dist/server-plugin-api.d.ts",
