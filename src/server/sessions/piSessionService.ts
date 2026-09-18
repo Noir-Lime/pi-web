@@ -31,9 +31,11 @@ import {
 import type { ClientArchiveSessionsResponse, ClientCommand, ClientCommandResult, ClientMessagePage, ClientSession, ClientSessionCleanupExecuteResponse, ClientSessionCleanupPreviewResponse, ClientSessionModel, ClientSessionModelCatalogEntry, ClientSessionStatus, ClientSessionTreeForkRequest, ClientSessionTreeForkResult, ClientSessionTreeNavigateRequest, ClientSessionTreeNavigateResult, ClientThinkingLevel, SessionStreamSnapshot, SessionUiEvent } from "../types.js";
 import { projectBrowserMessage } from "../browserMessageProjection.js";
 import { pageMessagesAtSafeBoundary } from "./messagePaging.js";
+import { clientSessionFirstMessagePreview } from "./clientSessionPreview.js";
 import type { SessionEventHub } from "../realtime/sessionEventHub.js";
 import { BUILTIN_COMMANDS } from "./builtinCommands.js";
 import { SessionCommandService } from "./sessionCommandService.js";
+import { SessionActivityMarker } from "./sessionActivityMarker.js";
 import { projectSessionTree, type ProjectableSessionTreeNode } from "./sessionTreeProjection.js";
 import { SessionArchiveStore, type ArchivedSessionRecord, type ArchiveSessionInput } from "./sessionArchiveStore.js";
 import { findArchiveCandidateByIdOrPrefix, planSessionArchiveTree, type SessionArchiveTreeCandidate } from "./sessionArchiveTree.js";
@@ -87,6 +89,7 @@ import { DEFAULT_EXTENSION_DIALOGS_TIMEOUT_MS } from "../../config.js";
 import { createSpawnSessionToolDefinition, type SpawnSessionInvocation, type SpawnSessionResult } from "./spawnSessionTool.js";
 import { createSubsessionToolDefinitions, type SpawnSubsessionInvocation, type SpawnSubsessionResult, type SubsessionCheckResult, type SubsessionReadQuery, type SubsessionReadResult, type SubsessionStatus, type SubsessionSummary, type SubsessionToolDeps } from "./spawnSubsessionTool.js";
 import { buildTranscriptView } from "./subsessionTranscript.js";
+import { annotateAssistantThinkingLevel, historyMessagesFromEntries } from "./transcriptMessages.js";
 import { planSessionCleanup, summarizeSessionCleanupExecution, type NormalizedSessionCleanupRequest, type SessionCleanupPlan } from "./sessionCleanup.js";
 import type { SpawnTargetDecision, SpawnTargetResolver } from "./spawnTargetResolver.js";
 import {
@@ -1199,6 +1202,7 @@ export class PiSessionService implements SessionRouteService {
   private readonly workspaceActivity: Pick<WorkspaceActivityService, "applySessionStatus" | "applySessionActivity" | "removeSession" | "reconcileSessionActivity"> | undefined;
   private readonly spawnTargets: SpawnTargetResolver | undefined;
   private readonly logger: PiSessionLogger;
+  private readonly activityMarker: SessionActivityMarker;
   private readonly now: () => Date;
   private readonly notificationStore: SessionNotificationStore;
   private readonly notificationGenerationBySession = new WeakMap<PiAgentSession, SessionNotificationGeneration>();
@@ -1230,6 +1234,10 @@ export class PiSessionService implements SessionRouteService {
     this.spawnTargets = deps.spawnTargets;
     this.logger = deps.logger ?? noopLogger;
     this.now = deps.now ?? (() => new Date());
+    this.activityMarker = new SessionActivityMarker({
+      now: () => this.now().getTime(),
+      onError: (error) => { this.logger.info({ err: error }, "Could not update advisory session activity marker"); },
+    });
     this.notificationStore = deps.notificationStore ?? new SessionNotificationStore();
     this.unreadStore = deps.unreadStore ?? new SessionUnreadStore();
     this.onUnreadChanged = deps.onUnreadChanged;
@@ -1435,7 +1443,7 @@ export class PiSessionService implements SessionRouteService {
       } finally {
         await active.runtime.dispose();
       }
-    }));
+    })).finally(() => this.activityMarker.dispose());
     await this.publishUnreadMutations([]);
   }
 
@@ -2355,6 +2363,7 @@ export class PiSessionService implements SessionRouteService {
 
   async status(ref: PiSessionRef): Promise<ClientSessionStatus> {
     const session = await this.sessionForStatusOrDialogClose(ref);
+    await this.activityMarker.refresh(session.sessionFile, this.hasActiveWork(session));
     if (this.hasActiveWork(session)) return this.statusFromSession(session);
     const branch = await this.readableSessionBranch(ref, session);
     return this.statusFromSession(session, transcriptMessageCount(branch));
@@ -2797,6 +2806,13 @@ export class PiSessionService implements SessionRouteService {
           this.publishActivity(session, result.aborted === true ? "branch summary aborted" : "tree navigation cancelled", "idle");
         }
         return { cancelled: true, ...(result.aborted === undefined ? {} : { aborted: result.aborted }) };
+      }
+
+      if (session.sessionManager.getLeafId() !== oldLeafId) {
+        // Questions belong to the position we left. Close them for every browser
+        // without appending a cancellation message or waking the rewound session.
+        const outcome = this.pendingAskStore.cancelOpen(session.sessionId);
+        if (outcome !== undefined) this.publishAskClosed(session.sessionId, outcome);
       }
 
       if (result.summaryEntry !== undefined) {
@@ -3405,6 +3421,7 @@ export class PiSessionService implements SessionRouteService {
     try {
       await this.abortSessionOperations(active.runtime.session);
     } finally {
+      await this.activityMarker.release(active.runtime.session.sessionFile);
       await active.runtime.dispose();
     }
   }
@@ -4186,6 +4203,7 @@ export class PiSessionService implements SessionRouteService {
       // the session still reports active work transiently, so the event-driven
       // latch may not fire. The heartbeat re-checks once the session settles.
       this.updateSubsessionTracking(session);
+      void this.refreshActivityMarker(session);
       const activity = this.activities.get(session.sessionId);
       if (!this.hasActiveWork(session)) {
         if (activity?.phase === "active") this.publishStatus(session);
@@ -4384,7 +4402,18 @@ export class PiSessionService implements SessionRouteService {
     this.observeUnreadActivityState(session);
   }
 
+  private async refreshActivityMarker(session: PiAgentSession): Promise<void> {
+    if (this.active.get(session.sessionId)?.runtime.session !== session) return;
+    const previous = this.activityMarker.isActiveElsewhere(session.sessionFile);
+    await this.activityMarker.refresh(session.sessionFile, this.hasActiveWork(session));
+    if (this.active.get(session.sessionId)?.runtime.session === session
+      && previous !== this.activityMarker.isActiveElsewhere(session.sessionFile)) {
+      this.publishStatus(session);
+    }
+  }
+
   private publishStatus(session: PiAgentSession): void {
+    void this.refreshActivityMarker(session);
     const status = this.statusFromSession(session);
     this.clearStaleActiveActivity(session);
     this.workspaceActivity?.applySessionStatus(session.sessionManager.getCwd(), status);
@@ -4440,6 +4469,13 @@ export class PiSessionService implements SessionRouteService {
   private warningsForSession(session: PiAgentSession): SessionWarning[] {
     const runtime = this.active.get(session.sessionId)?.runtime;
     const warnings = runtime === undefined ? [] : collectRuntimeWarnings(runtime);
+    if (this.activityMarker.isActiveElsewhere(session.sessionFile)) {
+      warnings.push({
+        severity: "info",
+        message: "Recently active in another PI-WEB instance. Avoid working on this session in both instances at once.",
+        source: "PI-WEB",
+      });
+    }
     const anthropic = anthropicSubscriptionWarning(session, join(this.agentDir, "auth.json"));
     if (anthropic !== undefined) warnings.push(anthropic);
     return warnings;
@@ -4550,7 +4586,7 @@ function clientSessionFromListEntry(session: PiSessionListEntry): ClientSession 
     created: session.created.toISOString(),
     modified: session.modified.toISOString(),
     messageCount: session.messageCount,
-    firstMessage: session.firstMessage,
+    firstMessage: clientSessionFirstMessagePreview(session.firstMessage),
     ...(session.parentSessionPath === undefined ? {} : { parentSessionPath: session.parentSessionPath }),
   };
 }
@@ -4656,7 +4692,7 @@ function clientSessionFromArchivedRecord(record: ArchivedSessionRecord, fallback
     created,
     modified,
     messageCount,
-    firstMessage,
+    firstMessage: clientSessionFirstMessagePreview(firstMessage),
     ...(parentSessionPath === undefined ? {} : { parentSessionPath }),
     archived: true,
     archivedAt: record.archivedAt,
@@ -4919,43 +4955,8 @@ function buildPromptOptions(behavior: QueuedPromptKind | undefined, images: Imag
   return Object.keys(options).length > 0 ? options : undefined;
 }
 
-function stringValue(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-/**
- * Attach the thinking level in effect when an assistant message was generated,
- * so chat bubbles can show it next to the model. Non-assistant messages pass
- * through by reference; assistant messages are copied only when a level is set.
- * "off" is the absence of thinking, not a level worth labeling on every bubble.
- */
-function annotateAssistantThinkingLevel(message: unknown, thinkingLevel: string | undefined): unknown {
-  if (thinkingLevel === undefined || thinkingLevel === "" || thinkingLevel === "off") return message;
-  if (!isRecord(message) || message["role"] !== "assistant") return message;
-  return { ...message, thinkingLevel };
-}
-
 function historyMessages(session: PiAgentSession): unknown[] {
   return historyMessagesFromEntries(session.sessionManager.getBranch());
-}
-
-function historyMessagesFromEntries(entries: readonly unknown[]): unknown[] {
-  const messages: unknown[] = [];
-  // Pi records the initial level at session creation and every later change, so
-  // walking the branch yields the level in effect for each assistant message.
-  let thinkingLevel: string | undefined;
-  for (const entry of entries) {
-    if (!isRecord(entry)) continue;
-    if (entry["type"] === "message") messages.push(annotateAssistantThinkingLevel(entry["message"], thinkingLevel));
-    else if (entry["type"] === "thinking_level_change") {
-      const level = getString(entry, "thinkingLevel");
-      if (level !== undefined) thinkingLevel = level;
-    }
-    else if (entry["type"] === "custom_message" && entry["display"] === true) messages.push({ role: "custom", content: entry["content"], customType: entry["customType"], details: entry["details"] });
-    else if (entry["type"] === "compaction") messages.push({ role: "system", source: "compaction", content: `Compacted history:\n\n${stringValue(entry["summary"])}` });
-    else if (entry["type"] === "branch_summary") messages.push({ role: "system", source: "branch_summary", content: `Branch summary:\n\n${stringValue(entry["summary"])}` });
-  }
-  return messages;
 }
 
 function transcriptMessageCount(entries: readonly unknown[]): number {
