@@ -33,7 +33,10 @@ export class LogStore {
 
   async read(scope: string, id: unknown): Promise<LogEntry> {
     if (typeof id !== "string" || !/^[a-f0-9-]{36}$/.test(id)) throw new Error("Invalid captain id");
-    const file = await open(join(await this.directory(scope), `${id}.json`), constants.O_RDONLY | constants.O_NOFOLLOW);
+    const path = join(await this.directory(scope), `${id}.json`);
+    // O_NOFOLLOW is not enforced on Windows; reject existing links there too.
+    if (!(await lstat(path)).isFile()) throw new Error("Invalid captain file");
+    const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
       const stat = await file.stat();
       if (!stat.isFile() || stat.size > 300_000) throw new Error("Invalid captain file");

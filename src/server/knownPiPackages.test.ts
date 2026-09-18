@@ -50,7 +50,7 @@ describe("optional shipped Pi packages", () => {
     await expect(readFile(join(agentDir, "settings.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
 
     const installed = await service.install(source);
-    const configuredSource = "../dist/pi-packages/captains-log";
+    const configuredSource = join("..", "dist", "pi-packages", "captains-log");
     expect(installed.packages).toContainEqual(expect.objectContaining({ source: configuredSource, installedPath: source, scope: "user" }));
     expect(installed.installableKnownPackages?.some((suggestion) => suggestion.id === packageId)).toBe(false);
     expect(JSON.parse(await readFile(join(agentDir, "settings.json"), "utf8"))).toMatchObject({ packages: [configuredSource] });
