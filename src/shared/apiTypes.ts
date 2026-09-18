@@ -206,7 +206,7 @@ export type PiWebPluginScope = "bundled" | "local" | "user" | "project";
 export const PI_WEB_PLUGIN_LIFECYCLE_VERSION = 2;
 
 export type PiWebPluginServerState = "active" | "failed" | "incompatible" | "disabled" | "missing" | "unknown";
-export type PiWebPluginLifecyclePhase = "import" | "activate" | "validate" | "start" | "health" | "stop";
+export type PiWebPluginLifecyclePhase = "import" | "activate" | "validate" | "start" | "health" | "dispose";
 export type PiWebPluginHealthStatus = "healthy" | "degraded" | "unhealthy";
 export type PiWebPluginRuntimeStatus = "available" | "unavailable" | "incompatible";
 export type PiWebPluginSafeStart = "bundled-only" | "none";
@@ -291,8 +291,8 @@ export interface PiPackageInfo {
 export interface PiPackagesResponse {
   packages: PiPackageInfo[];
   /**
-   * Known Pi packages PI WEB ships and can auto-install (see the
-   * `relay-pi-package-autoinstall` relay) that are not currently configured
+   * Known Pi packages PI WEB ships (including explicit opt-in packages)
+   * that are not currently configured
    * for the active profile — omitted or empty once every known package is
    * configured. Lets the Settings UI offer a one-click (re)install with no
    * path typing for a package the user dismissed or never installed.
