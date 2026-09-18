@@ -233,6 +233,9 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
     const activeAgentProfile = await agentProfileProvider.getActiveAgentProfile();
     return getPiWebVersionStatus(sessionDaemon, activeAgentProfile.status === "available" ? { activeAgentProfile: activeAgentProfile.profile } : {});
   });
+  // Web readiness must not wait for sessiond: dev Compose starts the daemon
+  // only after the web-owned initial build and API startup have completed.
+  app.get("/api/pi-web/health", () => Promise.resolve({ ok: true }));
   app.get("/api/pi-web/runtime", async () => getPiWebRuntime(sessionDaemon));
   app.get("/api/plugins", async (_request, reply) => withProfileDependency(reply, () => piWebPlugins.plugins()));
   app.get("/api/machines/local/plugins", async (_request, reply) => withProfileDependency(reply, () => piWebPlugins.plugins()));

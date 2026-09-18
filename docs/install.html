@@ -204,6 +204,12 @@
                 From a PI WEB checkout, <code>pi-web install --dev</code> installs the split development services on supported user-service platforms.
                 <code>pi-web uninstall</code> removes both production and development service files; no uninstall flags are needed.
               </p>
+              <h3 id="development-restarts">Development restarts</h3>
+              <p>
+                Run <code>pi-web restart</code> to restart the installed development services. It handles
+                build readiness and restart order for you. Restarting interrupts active sessions, so wait for
+                important work to finish first.
+              </p>
             </section>
 
             <section id="remote-access">

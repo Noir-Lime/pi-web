@@ -14,7 +14,7 @@ const publicApiDeclarationPaths = [
 ] as const;
 
 describe("production build contents", () => {
-  it("builds bundled plugins before every development sessiond entrypoint", async () => {
+  it("keeps development sessiond startup build-free and gives web a single builder", async () => {
     const metadata: unknown = JSON.parse(await readFile(join(repoRoot, "package.json"), "utf8"));
     if (!isRecord(metadata) || !isRecord(metadata["scripts"])) throw new Error("package.json scripts are missing");
 
@@ -23,9 +23,11 @@ describe("production build contents", () => {
     for (const scriptName of ["dev:sessiond", "start:sessiond"] as const) {
       const command = scripts[scriptName];
       if (typeof command !== "string") throw new Error(`package.json script is missing: ${scriptName}`);
-      expect(command).toMatch(/^npm run build:plugins && /u);
-      expect(command).toContain("src/server/sessiond.ts");
+      expect(command).toMatch(/^node scripts\/dev-sessiond\.mjs(?: --watch)?$/u);
+      expect(command).not.toContain("build:plugins");
     }
+    expect(scripts["dev:web"]).toBe("tsc -p tsconfig.plugins.json && node scripts/dev-web.mjs");
+    expect(scripts["dev:plugins"]).toBe("node scripts/build-plugins.mjs --watch");
   });
 
   // Constructing the full compiler graph can exceed Vitest's default timeout under parallel-suite CPU contention.
@@ -136,6 +138,8 @@ describe("production build contents", () => {
     try {
       await createCleanPluginBuildFixture(fixtureRoot);
       await runNpm(["run", "build:plugins"], fixtureRoot, 60_000);
+      const readyPath = join(fixtureRoot, "dist", ".plugins-ready");
+      expect(await readFile(readyPath, "utf8")).toBe("ready\n");
 
       const sourcePlugins = await bundledServerPlugins(join(fixtureRoot, "pi-web-plugins"));
       const builtPluginsRoot = join(fixtureRoot, "dist", "pi-web-plugins");
@@ -196,6 +200,11 @@ describe("production build contents", () => {
       );
       if (!isRecord(builtRelaysPackage)) throw new Error("Built relays package metadata was not an object");
       expect(builtRelaysPackage["name"]).toBe("@jmfederico/pi-relay");
+
+      // An intentionally broken rebuild must not leave a successful cold-start marker behind.
+      await rm(join(fixtureRoot, "pi-web-plugins", "files", "package.json"));
+      await expect(execUtf8(process.execPath, ["scripts/build-plugins.mjs"], fixtureRoot, 30_000)).rejects.toThrow();
+      await expect(readFile(readyPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await rm(fixtureRoot, { recursive: true, force: true });
     }

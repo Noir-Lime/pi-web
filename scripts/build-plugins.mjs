@@ -38,6 +38,9 @@ if (isDirectExecution()) {
 }
 
 async function buildAll() {
+  // Cold-start readiness only; the supported restart command orders web before sessiond.
+  const readyPath = resolve("dist", ".plugins-ready");
+  await rm(readyPath, { force: true });
   for (const target of buildTargets) {
     await rm(target.outDir, { recursive: true, force: true });
     const excludedDirectories = target.rootDir === bundledPluginsSourceDir
@@ -63,6 +66,8 @@ async function buildAll() {
     const bundleSuffix = target.rootDir === bundledPluginsSourceDir ? " and the Files/Terminal browser bundles" : "";
     console.log(`[plugins] built ${String(result.transpiled)} TypeScript ${target.label} ${suffix}${bundleSuffix} into ${relative(cwd, target.outDir)}`);
   }
+  await writeFile(readyPath, "ready\n");
+  process.send?.({ type: "plugin-build-ready" });
 }
 
 // Packages with a standalone tsconfig retain their own src -> dist layout.
@@ -307,6 +312,7 @@ async function watchAndBuild() {
   let timer;
   let building = false;
   let pending = false;
+  let builtOnce = false;
 
   const closeWatchers = () => {
     for (const watcher of watchers) watcher.close();
@@ -330,9 +336,14 @@ async function watchAndBuild() {
         pending = false;
         await refreshWatchers();
         await buildAll();
+        builtOnce = true;
       } while (pending);
     } catch (error) {
       console.error(`[plugins] ${formatUnknownError(error)}`);
+      if (!builtOnce) {
+        closeWatchers();
+        throw error;
+      }
     } finally {
       building = false;
     }
