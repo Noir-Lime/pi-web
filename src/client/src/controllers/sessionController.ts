@@ -4,6 +4,7 @@ import { BrowserErrorReporter, sessionBrowserErrorScope, workspaceBrowserErrorSc
 import { forgetCachedNewSession, isCachedNewSessionInfo, markCachedNewSessionInfo, mergeCachedNewSessions, rememberCachedNewSession, stripCachedNewSessionMarker } from "../cachedNewSessions";
 import { textMessage } from "../chatMessages";
 import { machineSessionKey } from "../machineKeys";
+import { isCreatingSessionId } from "../route";
 import { clearDraft, moveDraft, saveDraft } from "../promptDraftStorage";
 import { clearStagedAttachments, moveStagedAttachments } from "../promptAttachmentStaging";
 import { clearAskDraft } from "../askDrafts";
@@ -153,7 +154,6 @@ export class SessionController {
   private pendingStatusBySession = new Map<string, SessionStatus>();
   private pendingActivityBySession = new Map<string, SessionActivity>();
   private pendingFrame: number | undefined;
-  private pendingSessionStartSeq = 0;
   private pendingQueuedSendSeq = 0;
   private readonly pendingSessionStarts = new Map<string, PendingSessionStart>();
   private readonly suppressedCreatedSessions = new Map<string, SuppressedCreatedSession>();
@@ -252,14 +252,11 @@ export class SessionController {
     const pending = this.createPendingSessionStart(workspace, machineId, this.navigationSelection(), pendingUrlPublished);
     this.pendingSessionStarts.set(pending.tempId, pending);
     this.insertAndSelectPendingSession(pending.session, { updateUrl: options?.updateUrl });
-    // When the temporary row is published, its session id is intentionally
-    // omitted from the URL. The stable handshake must therefore expect the
-    // post-publication route, not the route captured before the row existed.
+    // The creation route is the handoff identity, not the previously selected session.
     if (pendingUrlPublished) pending.expectedNavigation = this.navigationSelection();
     // Start the freshness window after the pending-row URL publication. The
-    // publication is part of this operation's setup; a later change to the
-    // machine/project/workspace/session route retires the completion, while a
-    // view or tool change remains an independent surface update.
+    // publication is part of this operation's setup. The URL guard authorizes
+    // published-token handoffs; freshness also protects unpublished starts.
     pending.navigation = this.beginNavigationOperation?.(PENDING_SESSION_START_SCOPE);
     try {
       const session = await this.api.startSession(workspace.path, machineId, pending.tempId);
@@ -270,6 +267,14 @@ export class SessionController {
   }
 
   preferredSession(cwd: string, sessions: SessionInfo[], targetSessionId: string | undefined): SessionInfo | undefined {
+    if (isCreatingSessionId(targetSessionId)) {
+      const pending = this.pendingSessionStarts.get(targetSessionId);
+      // Reloaded/expired creation links are inert: never join a backend with
+      // this token, fall back to another session, or issue another create.
+      return pending !== undefined && !pending.discarded && pending.cwd === cwd && this.isCurrentPendingStart(pending)
+        ? pending.session
+        : undefined;
+    }
     return selectPreferredSession(sessions, { targetSessionId, latestSessionId: this.sessionSelection.latestSessionId(this.workspaceSelectionKey(cwd)) });
   }
 
@@ -1467,7 +1472,7 @@ export class SessionController {
       machineId: selectedMachineId(state),
       projectId: state.selectedProject?.id,
       workspaceId: state.selectedWorkspace?.id,
-      ...(!isClientPendingStartSessionInfo(selectedSession) ? { sessionId: selectedSession?.id } : {}),
+      sessionId: selectedSession?.id,
     };
   }
 
@@ -1482,7 +1487,9 @@ export class SessionController {
   }
 
   private createPendingSessionStart(workspace: Workspace, machineId: string, expectedNavigation: NavigationSelection, pendingUrlPublished: boolean): PendingSessionStart {
-    const tempId = `pending-session-${String(++this.pendingSessionStartSeq)}-${Date.now().toString(36)}`;
+    // getRandomValues also works for LAN HTTP deployments (randomUUID requires HTTPS).
+    const token = Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, "0")).join("");
+    const tempId = `creating:${token}`;
     const now = new Date().toISOString();
     const session: ClientPendingStartSessionInfo = {
       id: tempId,
@@ -1520,7 +1527,7 @@ export class SessionController {
     const pendingStart = this.pendingSessionStarts.get(session.id);
     const activity = options?.activity ?? state.sessionActivities[session.id] ?? (pendingStart !== undefined ? creatingPendingSessionActivity(session.id, pendingStart.queuedSends.length) : undefined);
     this.setState({
-      ...(options?.sessions === undefined ? {} : { sessions: options.sessions }),
+      sessions: options?.sessions ?? (state.sessions.some((candidate) => candidate.id === session.id) ? state.sessions : [session, ...state.sessions]),
       selectedSession: session,
       messages: [],
       messagePageStart: 0,
@@ -1595,7 +1602,7 @@ export class SessionController {
    */
   private async reconcileCompletedPendingSelection(pending: PendingSessionStart, session: SessionInfo): Promise<void> {
     const navigation = pending.navigation;
-    if (!navigationIsCurrent(navigation)) {
+    if (!pending.pendingUrlPublished && !navigationIsCurrent(navigation)) {
       this.clearUnreconciledPendingSelection(pending, session);
       return;
     }
@@ -1604,7 +1611,7 @@ export class SessionController {
     if (this.navigateToSession !== undefined) {
       try {
         const accepted = await this.navigateToSession(session, {
-          ...(pending.pendingUrlPublished ? { replace: true } : {}),
+          ...(pending.pendingUrlPublished ? { replace: true, creationHandoff: true } : {}),
           expected: pending.expectedNavigation,
         });
         // A successful navigator intentionally changes the session URL, so its
@@ -1615,7 +1622,7 @@ export class SessionController {
         this.clearUnreconciledPendingSelection(
           pending,
           session,
-          accepted || !navigationIsCurrent(navigation)
+          accepted || pending.pendingUrlPublished || !navigationIsCurrent(navigation)
             ? undefined
             : "Session started, but its navigation changed before selection completed. Select it from the session list.",
         );
@@ -1644,10 +1651,14 @@ export class SessionController {
 
   private pendingStartExpectedNavigation(pending: PendingSessionStart): NavigationSelection {
     const current = this.navigationSelection();
-    if (pending.pendingUrlPublished) return current;
+    if (pending.pendingUrlPublished) return {
+      machineId: pending.machineId,
+      projectId: pending.originWorkspace.projectId,
+      workspaceId: pending.workspaceId,
+      sessionId: pending.tempId,
+    };
     // An updateUrl:false start leaves an already selected session in the
-    // address bar while its temporary row is rendered. The controller's
-    // capture intentionally omits that temporary row, so retain the route
+    // address bar while its temporary row is rendered. Retain the route
     // session id captured before the start and refresh only the live surface.
     return { ...current, sessionId: pending.expectedNavigation.sessionId };
   }

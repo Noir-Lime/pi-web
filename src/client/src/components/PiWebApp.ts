@@ -47,7 +47,7 @@ import { BrowserResumeController } from "../appShell/browserResumeController";
 import { NavigationSectionsController, type NavigationSection } from "../appShell/navigationState";
 import { PanelCollapseController, mainViewClass } from "../appShell/panelCollapseController";
 import { PanelResizeController, type PanelResizeConstraints, type ResizablePanelSide } from "../appShell/panelResizeController";
-import { readRoute, resolveAppRoute, resolveWorkspacePanelRouteValue, routeMatchesWorkspaceIdentity, writeRoute, type AppRoute, type ParsedAppRoute, type WorkspaceRouteIdentity } from "../route";
+import { isCreatingSessionId, readRoute, resolveAppRoute, resolveWorkspacePanelRouteValue, routeMatchesWorkspaceIdentity, writeRoute, type AppRoute, type ParsedAppRoute, type WorkspaceRouteIdentity } from "../route";
 import { readSettingsSection, writeSettingsSection, type SettingsSection } from "../settingsRoute";
 import { applyActiveShortcutPreferences } from "../shortcutPreferences";
 import { canDeleteWorkspace, isWorkspaceDeletionPending, isWorkspaceDeletionRunPending, latestWorkspaceDeletionRuns, pendingWorkspaceDeletionIds, targetWorkspaceIdForRun, workspaceDeletionRunFilter, workspaceRemovalConfirmation } from "../workspaceDeletion";
@@ -668,7 +668,14 @@ export class PiWebApp extends LitElement {
   }
 
   private async commitAndRestoreNavigation(snapshot: MachineNavigationSnapshot, options: NavigationDestinationOptions = {}): Promise<boolean> {
-    if (options.expected !== undefined && !this.navigationSelectionMatchesUrl(options.expected)) return false;
+    if (options.expected !== undefined && !this.navigationSelectionMatchesUrl(options.expected, options.creationHandoff === true)) return false;
+    if (options.creationHandoff === true) {
+      if (!isCreatingSessionId(options.expected?.sessionId)) return false;
+      // A creation handoff owns only the session field. Surface changes may
+      // already be in the URL while their asynchronous restore is still running.
+      writeRoute({ ...readRoute(), sessionId: snapshot.sessionId }, { replace: true });
+      return this.restoreRoute(false, undefined, "deferred");
+    }
     this.commitMachineNavigationSnapshot(snapshot, { replace: options.replace });
     return this.restoreCommittedNavigation(snapshot);
   }
@@ -1156,18 +1163,19 @@ export class PiWebApp extends LitElement {
       && current.view === route.view;
   }
 
-  private navigationSelectionMatchesUrl(expected: NavigationSelection): boolean {
+  private navigationSelectionMatchesUrl(expected: NavigationSelection, selectionOnly = false): boolean {
     const current = readRoute();
     return (current.machineId ?? "local") === expected.machineId
       && current.projectId === expected.projectId
       && current.workspaceId === expected.workspaceId
       // Restoration accepts abbreviated session IDs; guarded handoffs must
       // recognize the same resolved identity without relaxing hierarchy checks.
-      && (current.sessionId === undefined
-        ? expected.sessionId === undefined
-        : sessionMatchesRouteTarget(expected.sessionId, current.sessionId))
-      && current.tool === expected.tool
-      && current.view === expected.view;
+      && (isCreatingSessionId(expected.sessionId)
+        ? current.sessionId === expected.sessionId
+        : current.sessionId === undefined
+          ? expected.sessionId === undefined
+          : sessionMatchesRouteTarget(expected.sessionId, current.sessionId))
+      && (selectionOnly || (current.tool === expected.tool && current.view === expected.view));
   }
 
   private routeSelectionMatchesUrl(route: Pick<ParsedAppRoute, "machineId" | "projectId" | "workspaceId" | "sessionId">): boolean {
@@ -1871,16 +1879,15 @@ export class PiWebApp extends LitElement {
   }
 
   private async startSessionAndOpenChat(shouldComplete: () => boolean = () => true): Promise<void> {
-    // Publish the synchronous Chat destination before capturing the route that
-    // the stable-session handshake must replace. Otherwise the handshake can
-    // reject its own completion after focus changes the view.
+    // Open Chat before publishing the creation token; completion owns only
+    // that token and leaves subsequent surface navigation untouched.
     const navigationSeq = this.navigationSelectionSeq;
     const isCurrent = () => navigationSeq === this.navigationSelectionSeq && shouldComplete();
     const workspace = this.state.selectedWorkspace;
     const machineId = selectedMachineId(this.state);
     if (isCurrent()) await this.focusChatComposer(isCurrent);
     if (!isCurrent()) return;
-    const start = this.sessions.startSession({ updateUrl: false }).catch((error: unknown) => {
+    const start = this.sessions.startSession().catch((error: unknown) => {
       if (workspace === undefined) return;
       this.browserErrors.report(workspaceBrowserErrorScope(machineId, workspace.projectId, workspace.id), String(error));
     });
@@ -3388,7 +3395,7 @@ function navigationSelectionFromState(state: Pick<AppState, "selectedMachine" | 
     machineId: selectedMachineId(state),
     projectId: state.selectedProject?.id,
     workspaceId: state.selectedWorkspace?.id,
-    ...(state.selectedSession === undefined || Reflect.get(state.selectedSession, "clientPendingStart") !== true ? { sessionId: state.selectedSession?.id } : {}),
+    sessionId: state.selectedSession?.id,
     ...(route.tool === undefined ? {} : { tool: route.tool }),
     ...(route.view === undefined ? {} : { view: route.view }),
   };

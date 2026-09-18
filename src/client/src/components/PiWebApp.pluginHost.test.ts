@@ -489,8 +489,8 @@ describe("PiWebApp plugin host", () => {
     await vi.waitFor(() => { expect(appState(app).sessions[0]?.id).toBe(started.id); });
 
     expect(appState(app).sessions.map((session) => session.id)).toEqual([started.id, previousSession.id]);
-    expect(appState(app).selectedSession).toBeUndefined();
-    expect(browser.url.searchParams.has("session")).toBe(false);
+    await vi.waitFor(() => { expect(appState(app).selectedSession?.id).toBe(started.id); });
+    expect(browser.url.searchParams.get("session")).toBe(started.id);
     expect(browser.url.searchParams.get("view")).toBe(TERMINAL_PANEL_ID);
   });
 
@@ -1209,6 +1209,87 @@ describe("PiWebApp plugin host", () => {
 
     expect(routeOperation.isCurrent()).toBe(false);
     expect(browser.url.searchParams.get("view")).toBe("chat");
+  });
+
+  it.each([false, true])("replaces the selected creation without losing its surface (return via Back: %s)", async (returnViaBack) => {
+    const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&view=chat");
+    const app = new PiWebApp();
+    const session = runtimeRecoverySession(workspace);
+    setAppState(app, { ...initialAppState(), projects: [project], selectedProject: project, selectedWorkspace: workspace, workspaces: [workspace], mainView: "chat" });
+    const sessions = await installRuntimeRecoveryBoundaries(app, () => Promise.resolve([workspace]), session);
+    const started = deferredValue<SessionInfo>();
+    const api: unknown = Reflect.get(sessions, "api");
+    if (typeof api !== "object" || api === null) throw new Error("Missing session API");
+    Reflect.set(api, "startSession", () => started.promise);
+
+    const starting = sessions.startSession();
+    const token = browser.url.searchParams.get("session");
+    expect(token).toMatch(/^creating:[0-9a-f]{32}$/);
+    expect(appState(app).selectedSession?.id).toBe(token);
+    const pushes = browser.pushed.length;
+    const creatingUrl = browser.url.href;
+    if (returnViaBack) {
+      browser.navigate("http://localhost/app?project=project-1&workspace=workspace-1&view=chat");
+      await callAsyncAppMethod(app, "restoreRoute", false);
+      browser.navigate(creatingUrl);
+      await callAsyncAppMethod(app, "restoreRoute", false);
+      expect(appState(app).selectedSession?.id).toBe(token);
+    }
+    const surfaceUrl = new URL(browser.url.href);
+    surfaceUrl.searchParams.set("tool", TERMINAL_PANEL_ID);
+    surfaceUrl.searchParams.set("view", TERMINAL_PANEL_ID);
+    surfaceUrl.searchParams.set("pi-web.terminal.workspace.terminal--terminal", "new-terminal");
+    browser.navigate(surfaceUrl.href);
+    // Leave rendered tool/view state behind the URL, as during an in-flight restore.
+    started.resolve(session);
+    await starting;
+
+    expect(browser.url.searchParams.get("session")).toBe(session.id);
+    expect(browser.url.searchParams.get("tool")).toBe(TERMINAL_PANEL_ID);
+    expect(browser.url.searchParams.get("view")).toBe(TERMINAL_PANEL_ID);
+    expect(browser.url.searchParams.get("pi-web.terminal.workspace.terminal--terminal")).toBe("new-terminal");
+    expect(browser.pushed).toHaveLength(pushes);
+    expect(appState(app).selectedSession?.id).toBe(session.id);
+    expect(Object.values(appState(app).browserErrors)).toEqual([]);
+  });
+
+  it.each([
+    "session=creating:other-token",
+    "session=creating:token-prefix",
+    "session=another-session",
+    "machine=remote&session=creating:token",
+    "workspace=another-workspace&session=creating:token",
+    "project=another-project&session=creating:token",
+    "view=chat",
+  ])("does not hand off a creation after navigating away: %s", async (selection) => {
+    const url = new URL("http://localhost/app?project=project-1&workspace=workspace-1");
+    for (const [key, value] of new URLSearchParams(selection)) url.searchParams.set(key, value);
+    const browser = installBrowserWindow(url.href);
+    const app = new PiWebApp();
+    const before = browser.url.href;
+    const result = await callAppMethod(app, "commitAndRestoreNavigation", {
+      machineId: "local", projectId: project.id, workspaceId: workspace.id, sessionId: "completed", surface: {},
+    }, { creationHandoff: true, expected: { machineId: "local", projectId: project.id, workspaceId: workspace.id, sessionId: "creating:token" } });
+    expect(result).toBe(false);
+    expect(browser.url.href).toBe(before);
+    expect(browser.pushed).toEqual([]);
+    expect(browser.replaced).toEqual([]);
+  });
+
+  it("recovers an unresolved creation link to its workspace without starting or joining a session", async () => {
+    const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&session=creating:expired&view=chat");
+    const app = new PiWebApp();
+    setAppState(app, { ...initialAppState(), projects: [project] });
+    const sessions = await installRuntimeRecoveryBoundaries(app, () => Promise.resolve([workspace]), runtimeRecoverySession(workspace));
+    const select = vi.spyOn(sessions, "selectSession");
+    const start = vi.spyOn(sessions, "startSession");
+    await callAsyncAppMethod(app, "restoreRoute", false);
+    expect(appState(app).selectedWorkspace?.id).toBe(workspace.id);
+    expect(appState(app).selectedSession).toBeUndefined();
+    expect(browser.url.searchParams.has("session")).toBe(false);
+    expect(browser.pushed).toEqual([]);
+    expect(start).not.toHaveBeenCalled();
+    expect(select).not.toHaveBeenCalled();
   });
 
   it("rejects an async navigation whose tool/view origin changed in the URL", async () => {
