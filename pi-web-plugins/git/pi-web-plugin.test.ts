@@ -170,6 +170,196 @@ describe("bundled Git browser plugin", () => {
     render(null, container);
   });
 
+  it.each([false, true])("keeps unchanged background polls quiet (selected diff: %s)", async (selected) => {
+    vi.useFakeTimers();
+    const backend = backendFixture();
+    const panel = requiredPanel(activate("git"));
+    const requestRender = vi.fn();
+    const context = { ...panelContext(backend.request), host: { requestRender } };
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(panel.render(context), container);
+    render(panel.render(context), container);
+    expect(button(container, "Refresh").disabled).toBe(true);
+    await settleBackend();
+    render(panel.render(context), container);
+    if (selected) {
+      button(container, "src/main.ts").click();
+      await settleBackend();
+      render(panel.render(context), container);
+    }
+    requestRender.mockClear();
+    const respond = backend.request.getMockImplementation();
+    if (respond === undefined) throw new Error("Expected backend implementation");
+    let release: () => void = () => { throw new Error("Expected pending request"); };
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    backend.request.mockImplementation(async (operation, input) => {
+      await pending;
+      return respond(operation, input);
+    });
+
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(requestRender).not.toHaveBeenCalled();
+    render(panel.render(context), container);
+    expect(button(container, "Refresh").disabled).toBe(false);
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(requestRender).not.toHaveBeenCalled();
+
+    button(container, "Refresh").click();
+    render(panel.render(context), container);
+    expect(button(container, "Refresh").disabled).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+    render(panel.render(context), container);
+    expect(button(container, "Refresh").disabled).toBe(false);
+    expect(requestRender).toHaveBeenCalled();
+    render(null, container);
+  });
+
+  it("shows explicit refresh feedback when joining an in-flight background poll", async () => {
+    vi.useFakeTimers();
+    const backend = backendFixture();
+    const panel = requiredPanel(activate("git"));
+    const requestRender = vi.fn();
+    const context = { ...panelContext(backend.request), host: { requestRender } };
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(panel.render(context), container);
+    await settleBackend();
+    render(panel.render(context), container);
+    const respond = backend.request.getMockImplementation();
+    if (respond === undefined) throw new Error("Expected backend implementation");
+    let release: () => void = () => { throw new Error("Expected pending request"); };
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    backend.request.mockImplementation(async (operation, input) => {
+      await pending;
+      return respond(operation, input);
+    });
+    await vi.advanceTimersByTimeAsync(8_000);
+    backend.request.mockClear();
+    requestRender.mockClear();
+    button(container, "Refresh").click();
+    expect(backend.request).not.toHaveBeenCalled();
+    expect(requestRender).toHaveBeenCalledOnce();
+    render(panel.render(context), container);
+    expect(button(container, "Refresh").disabled).toBe(true);
+    requestRender.mockClear();
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(requestRender).toHaveBeenCalledOnce();
+    render(panel.render(context), container);
+    expect(button(container, "Refresh").disabled).toBe(false);
+    render(null, container);
+  });
+
+  it.each(["status", "diff"])("renders background %s errors and recovery, but not repeated failures", async (operation) => {
+    vi.useFakeTimers();
+    const backend = backendFixture();
+    const panel = requiredPanel(activate("git"));
+    const container = document.createElement("div");
+    const requestRender = vi.fn();
+    const context = { ...panelContext(backend.request), host: { requestRender } };
+    document.body.append(container);
+    render(panel.render(context), container);
+    await settleBackend();
+    render(panel.render(context), container);
+    button(container, "src/main.ts").click();
+    await settleBackend();
+    const respond = backend.request.getMockImplementation();
+    if (respond === undefined) throw new Error("Expected backend implementation");
+    backend.request.mockImplementation((requested, input) => requested === operation
+      ? Promise.reject(new Error("Polling failed")) : respond(requested, input));
+    requestRender.mockClear();
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(requestRender).toHaveBeenCalled();
+    render(panel.render(context), container);
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Polling failed");
+    requestRender.mockClear();
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(requestRender).not.toHaveBeenCalled();
+
+    backend.request.mockImplementation(respond);
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(requestRender).toHaveBeenCalled();
+    render(panel.render(context), container);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    render(null, container);
+  });
+
+  it("renders changed status, staged and unstaged diffs, and removed selection during polls", async () => {
+    vi.useFakeTimers();
+    const backend = backendFixture();
+    const panel = requiredPanel(activate("git"));
+    const container = document.createElement("div");
+    const requestRender = vi.fn();
+    const context = { ...panelContext(backend.request), host: { requestRender } };
+    document.body.append(container);
+    render(panel.render(context), container);
+    await settleBackend();
+    render(panel.render(context), container);
+    button(container, "src/main.ts").click();
+    await settleBackend();
+    requestRender.mockClear();
+    backend.status.files.push(changedFile("added.ts"));
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(requestRender).toHaveBeenCalled();
+    render(panel.render(context), container);
+    expect(button(container, "added.ts")).toBeDefined();
+
+    const respond = backend.request.getMockImplementation();
+    if (respond === undefined) throw new Error("Expected backend implementation");
+    for (const staged of [true, false]) {
+      backend.request.mockImplementation(async (operation, input) => {
+        const response = await respond(operation, input);
+        return operation === "diff" && isRecord(response) && response["staged"] === staged
+          ? { ...response, hash: `changed-${String(staged)}`, diff: `@@ -1 +1 @@\n-old\n+changed-${String(staged)}` }
+          : response;
+      });
+      requestRender.mockClear();
+      await vi.advanceTimersByTimeAsync(8_000);
+      expect(requestRender).toHaveBeenCalled();
+      render(panel.render(context), container);
+      expect(container.textContent).toContain(`changed-${String(staged)}`);
+    }
+    backend.status.files = [];
+    requestRender.mockClear();
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(requestRender).toHaveBeenCalled();
+    render(panel.render(context), container);
+    expect(container.querySelector('[aria-label="Unified diff"]')).toBeNull();
+    render(null, container);
+  });
+
+  it("refreshes truncation metadata even when polled diff text has the same hash", async () => {
+    vi.useFakeTimers();
+    const backend = backendFixture();
+    const panel = requiredPanel(activate("git"));
+    const requestRender = vi.fn();
+    const context = { ...panelContext(backend.request), host: { requestRender } };
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(panel.render(context), container);
+    await settleBackend();
+    render(panel.render(context), container);
+    button(container, "src/main.ts").click();
+    await settleBackend();
+    const respond = backend.request.getMockImplementation();
+    if (respond === undefined) throw new Error("Expected backend implementation");
+    backend.request.mockImplementation(async (operation, input) => {
+      const response = await respond(operation, input);
+      return operation === "diff" && isRecord(response) ? { ...response, truncated: true } : response;
+    });
+    requestRender.mockClear();
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(requestRender).toHaveBeenCalled();
+    render(panel.render(context), container);
+    expect(container.querySelector(".git-viewer-header")?.textContent).toContain("truncated");
+    requestRender.mockClear();
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(requestRender).not.toHaveBeenCalled();
+    render(null, container);
+  });
+
   it("preserves a deep link when entering a fresh workspace after route initialization", async () => {
     window.history.replaceState({}, "", `/?project=${projectId}&workspace=${workspaceId}`);
     const panel = requiredPanel(activate("git"));
