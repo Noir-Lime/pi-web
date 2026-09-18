@@ -52,6 +52,11 @@ const plugin: PiWebPlugin = {
       actions: [{
         id: "identity",
         title: context.pluginId,
+        enabled: ({ state }) => {
+          const session = state.selectedSession;
+          return session !== undefined && session.id !== "" && session.cwd !== ""
+            && (session.name === undefined || typeof session.name === "string") && !session.archived && !session.pending;
+        },
         run: ({ selectWorkspaceTool }) => {
           selectWorkspaceTool(`${context.runtimePluginId}:workspace.fixture`);
         },

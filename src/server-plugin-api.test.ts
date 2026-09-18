@@ -262,7 +262,7 @@ describe("public server plugin API", () => {
         runtime: { private: true },
       });
     });
-    const source = { version: 1 as const, run };
+    const source = { version: 1 as const, create: () => ({ sessionId: "created" }), run };
     const sessions = PI_WEB_HOST_PI_SESSIONS_CAPABILITY.parse(source);
     Reflect.set(source, "run", () => Promise.reject(new Error("mutated run was used")));
 
@@ -287,7 +287,7 @@ describe("public server plugin API", () => {
     expect(Object.isFrozen(completion)).toBe(true);
 
     expect(() => PI_WEB_HOST_PI_SESSIONS_CAPABILITY.parse({ version: 1 }))
-      .toThrow("must expose run");
+      .toThrow("must expose create and run");
     await expect(Reflect.apply(sessions.run, sessions, [{ ...input, path: "/caller/path" }]))
       .rejects.toThrow("Unsupported PI WEB host PI sessions capability v1 run input field: path");
     await expect(sessions.run({ ...input, projectId: "x".repeat(513) }))
@@ -296,16 +296,18 @@ describe("public server plugin API", () => {
       .rejects.toThrow("prompt must be at most 65536 UTF-8 bytes");
     await expect(PI_WEB_HOST_PI_SESSIONS_CAPABILITY.parse({
       version: 1,
+      create: () => ({ sessionId: "created" }),
       run: () => ({ sessionId: "session-2", completion: { status: "completed" } }),
     }).run(input)).rejects.toThrow("run must expose completion");
     await expect(PI_WEB_HOST_PI_SESSIONS_CAPABILITY.parse({
       version: 1,
+      create: () => ({ sessionId: "created" }),
       run: () => ({ sessionId: "session-2", completion: Promise.resolve({ status: "unknown" }) }),
     }).run(input).then(({ completion: invalidCompletion }) => invalidCompletion))
       .rejects.toThrow("completion status is invalid");
   });
 
-  it("snapshots prompt-free creation and preserves run on older v1 hosts", async () => {
+  it("snapshots prompt-free creation", async () => {
     const selection = { projectId: "project", workspaceId: "workspace" };
     const create = vi.fn((input: PiWebHostWorkspaceSelection) => {
       void input;
@@ -323,9 +325,16 @@ describe("public server plugin API", () => {
     await expect(Reflect.apply(sessions.create, sessions, [{ ...selection, prompt: "unexpected" }])).rejects.toThrow("Unsupported");
     await expect(sessions.create({ ...selection, workspaceId: "" })).rejects.toThrow();
     await expect(PI_WEB_HOST_PI_SESSIONS_CAPABILITY.parse({ version: 1, run, create: () => ({ sessionId: "" }) }).create(selection)).rejects.toThrow("sessionId");
-    const older = PI_WEB_HOST_PI_SESSIONS_CAPABILITY.parse({ version: 1, run });
-    await expect(older.create(selection)).rejects.toThrow("creation is unavailable; update the host");
-    await expect((await older.run({ ...selection, prompt: "work" })).completion).resolves.toEqual({ status: "completed" });
+  });
+
+  it.each([
+    { version: 1, run: (): undefined => undefined },
+    { version: 1, create: (): undefined => undefined },
+    { version: 1, create: true, run: (): undefined => undefined },
+    { version: 1, create: (): undefined => undefined, run: true },
+    { version: 2, create: (): undefined => undefined, run: (): undefined => undefined },
+  ])("rejects incomplete or incompatible session capabilities before use: %o", (value) => {
+    expect(() => PI_WEB_HOST_PI_SESSIONS_CAPABILITY.parse(value)).toThrow("must expose create and run");
   });
 
   it("keeps host inputs readonly and concrete services out of the declaration surface", async () => {

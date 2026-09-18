@@ -59,11 +59,21 @@ export interface PluginMachine {
     name: string;
     kind: MachineKind;
 }
+/** Selected conversation snapshot, scoped to PluginRuntimeState.selectedMachine. */
+export interface PluginSelectedSession {
+    id: string;
+    /** Workspace working directory. */
+    cwd: string;
+    name?: string;
+    archived: boolean;
+    /** True while the browser is waiting for session creation to finish. */
+    pending: boolean;
+}
 export interface PluginRuntimeState {
     /** Identity of the currently selected machine. Undefined only on older hosts or before machines load. */
     selectedMachine?: PluginMachine;
     selectedWorkspace?: Workspace;
-    selectedSession?: unknown;
+    selectedSession?: PluginSelectedSession;
     workspaceTool?: string;
     mainView?: string;
     piWebStatus?: PiWebStatusResponse;

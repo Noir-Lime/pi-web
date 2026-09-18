@@ -8,7 +8,7 @@ import type { JsonValue, PluginPeerChannelClose, PluginPeerChannelOptions, Works
 import { parsePluginBackendChannelServerEnvelope } from "../../shared/pluginBackendProtocol.js";
 
 afterEach(() => { document.body.replaceChildren(); localStorage.clear(); vi.useRealTimers(); });
-const source = { id: "source-session-a", name: "Fix the login flow", cwd: "/workspace" };
+const source = { id: "source-session-a", name: "Fix the login flow", cwd: "/workspace", archived: false, pending: false };
 const entry: LogEntry = { id: "11111111-1111-4111-8111-111111111111", createdAt: "2026-09-01", status: "running", text: "", sessionId: "captain-session", question: "Translate the last reply", stages: ["Backend admitted channel translation"], sourceSessionId: source.id };
 const flush = async () => { for (let i = 0; i < 15; i++) await Promise.resolve(); };
 async function setup(requestHandler: (operation: string) => Promise<JsonValue> = (operation) => Promise.resolve(operation === "list" ? [] : { ...entry })) {
@@ -41,7 +41,8 @@ async function setup(requestHandler: (operation: string) => Promise<JsonValue> =
   };
   context.host.requestRender(); await flush();
   return { container, lifetime, activation, channels, request, openChannel,
-    selectSession(selectedSession: unknown) { context = { ...context, state: { selectedSession } }; context.host.requestRender(); },
+    selectSession(selectedSession: NonNullable<WorkspacePanelContext["state"]>["selectedSession"]) { context = { ...context, state: selectedSession === undefined ? {} : { selectedSession } }; context.host.requestRender(); },
+    selectMachine(id: string) { context = { ...context, state: { ...context.state, selectedMachine: { id, name: id, kind: "remote" } } }; context.host.requestRender(); },
     switchScope() { context = { ...context, machine: { id: "remote-b", name: "B", kind: "remote" } }; context.host.requestRender(); },
     async dispose() { lifetime.abort(); await activation.dispose?.(new AbortController().signal); } };
 }
@@ -83,9 +84,13 @@ it("translates the session selected at click time, renders frozen reply chunks, 
 it("disables translation without a usable source or when the pirate itself is selected", async () => {
   const app = await setup();
   try {
-    for (const selected of [undefined, {}, { id: "" }, { ...source, archived: true }, { ...source, clientPendingStart: true }, { ...source, cwd: "/other" }]) {
+    for (const selected of [undefined, { ...source, archived: true }, { ...source, pending: true }, { ...source, cwd: "/other" }]) {
       app.selectSession(selected); expect(button().disabled).toBe(true);
     }
+    app.selectSession({ ...source, name: " " });
+    expect(document.querySelector(".captain-source")?.textContent).toContain(`Session ${source.id.slice(0, 8)}`);
+    app.selectMachine("remote-b"); expect(button().disabled).toBe(true);
+    app.selectMachine("remote-a"); expect(button().disabled).toBe(false);
     app.selectSession(source); expect(button().disabled).toBe(false);
     for (const frame of entryFrames({ ...entry, status: "completed", text: "Arrr" }, true)) required(app.channels[0]).options.onData(frame);
     app.selectSession({ ...source, id: entry.sessionId });

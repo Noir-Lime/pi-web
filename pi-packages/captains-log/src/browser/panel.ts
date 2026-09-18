@@ -7,10 +7,8 @@ export interface SourceSession { id: string; name: string }
 export function selectedSourceSession(context: WorkspacePanelContext): SourceSession | undefined {
   if (context.state?.selectedMachine && context.state.selectedMachine.id !== context.machine.id) return;
   const selected = context.state?.selectedSession;
-  if (selected === null || typeof selected !== "object" || !("id" in selected) || typeof selected.id !== "string" || !selected.id.trim() || selected.id.length > 512) return;
-  if (("archived" in selected && selected.archived === true) || ("clientPendingStart" in selected && selected.clientPendingStart === true)) return;
-  if ("cwd" in selected && selected.cwd !== context.workspace.path) return;
-  return { id: selected.id, name: "name" in selected && typeof selected.name === "string" && selected.name.trim() ? selected.name : `Session ${selected.id.slice(0, 8)}` };
+  if (!selected || selected.archived || selected.pending || selected.cwd !== context.workspace.path) return;
+  return { id: selected.id, name: selected.name !== undefined && selected.name.trim() !== "" ? selected.name : `Session ${selected.id.slice(0, 8)}` };
 }
 export interface CaptainPanelView {
   entries: LogEntry[]; selected?: LogEntry; status: string;

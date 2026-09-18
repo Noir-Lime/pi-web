@@ -290,6 +290,31 @@ describe("server plugin runtime", () => {
     expect(() => runtime.resolve(service)).toThrow("is not active");
   });
 
+  it("keeps provision, requirement, and resolve parser boundaries distinct", async () => {
+    const provider = testCapability("fixture.host", "service", 1);
+    const requirement = { ...provider, parse: vi.fn((value: unknown) => ({ label: `requirement:${provider.parse(value).label}` })) };
+    const request = { ...provider, parse: (value: unknown) => ({ label: `request:${provider.parse(value).label}` }) };
+    const rejectingRequest = { ...provider, parse: () => { throw new Error("request rejected"); } };
+    let resolved: TestCapabilityValue | undefined;
+    const runtime = await createServerPluginRuntime({
+      catalog: { snapshot: () => Promise.resolve(testSnapshot([entry("consumer")])) },
+      hostCapabilities: [{ capability: provider, value: { label: "ready" } }],
+      importer: () => Promise.resolve({
+        default: plugin("Consumer", () => ({
+          start: ({ capabilities }) => {
+            expect(requirement.parse).toHaveBeenCalledWith({ label: "ready" });
+            resolved = capabilities.resolve(request);
+            expect(() => capabilities.resolve(rejectingRequest)).toThrow("request rejected");
+          },
+        }), [requirement]),
+      }),
+      logger: testLogger(),
+    });
+    expect(resolved).toEqual({ label: "request:ready" });
+    expect(runtime.healthRecords()).toEqual([expect.objectContaining({ pluginId: "consumer", state: "active" })]);
+    await runtime.stop();
+  });
+
   it("pre-registers host capabilities and limits each start resolver to declared requirements", async () => {
     const hostService = testCapability("pi-web.host.fixture", "clock", 1);
     let resolved: TestCapabilityValue | undefined;

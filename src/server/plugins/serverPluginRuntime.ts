@@ -660,6 +660,8 @@ export class ServerPluginRuntime {
       } else {
         throw new Error(`Server plugin ${staged.entry.id} requires inactive capability ${formatCapability(requirement)}`);
       }
+      // Validate the declared requirement before start, but retain the provider value:
+      // resolve() may supply a different parser for this same capability key.
       parseCapabilityValue(
         requirement,
         provisionValue,

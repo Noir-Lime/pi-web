@@ -6,8 +6,13 @@ export interface JsonObject {
 }
 /**
  * Typed token for one exact host/plugin capability version. The provider id
- * and package-local id form the stable capability identity; `parse` snapshots
- * and validates values whenever they cross a composition boundary.
+ * and package-local id together with the version form the stable capability
+ * identity; matching keys do not imply matching parsers. `parse` validates and
+ * may snapshot values at provider, declared-requirement, and resolution boundaries.
+ * Parsers must be pure (no input mutation or lifecycle side effects) and tolerate
+ * repeated calls; invocation counts and returned object identity are not guaranteed.
+ * A resolver's parser receives the provider-parsed value, not the discarded result
+ * of declared-requirement validation.
  */
 export interface PluginCapability<Value = unknown, Version extends number = number> {
     readonly pluginId: string;

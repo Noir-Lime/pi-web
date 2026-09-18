@@ -13,6 +13,8 @@ import type {
   PluginCapabilityResolver,
   PluginContributions,
   PluginStartContext,
+  PluginSelectedSession,
+  PluginRuntimeState,
   Workspace,
   PluginPeerChannel,
   PluginPeerChannelOptions,
@@ -78,6 +80,11 @@ declare class ImplementedWorkspacePanelFiles implements WorkspacePanelFiles {
 }
 
 describe("public browser plugin API", () => {
+  it("exposes a minimal selected-session snapshot", () => {
+    expectTypeOf<PluginRuntimeState["selectedSession"]>().toEqualTypeOf<PluginSelectedSession | undefined>();
+    expectTypeOf<keyof PluginSelectedSession>().toEqualTypeOf<"id" | "cwd" | "name" | "archived" | "pending">();
+  });
+
   it("keeps host-owned activation and workspace snapshots readonly", () => {
     expectTypeOf<keyof PluginActivationResult>().toEqualTypeOf<"contributions" | "provides" | "start" | "dispose">();
     expectTypeOf<ReadonlyKeys<PluginActivationContext>>().toEqualTypeOf<keyof PluginActivationContext>();

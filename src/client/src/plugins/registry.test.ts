@@ -9,6 +9,7 @@ import { PluginRegistry, installWorkspaceLabelScope, installWorkspacePanelScope 
 import { themePackPlugin } from "./themes";
 import type { PiWebPlugin, PluginActivationResult, PluginCapability, PluginRuntimeContext, QualifiedContributionId, ThemeTokens, WorkspaceFiles, WorkspaceHost, WorkspaceInvalidation, WorkspaceLabelContext, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePanelContribution, WorkspacePluginBinding } from "./types";
 import { createPluginPeer } from "./pluginPeer";
+import { adaptPublicPlugin, publicPluginState } from "./publicContext";
 import type { PluginBackendRequestTarget } from "../api/pluginBackends";
 
 function createContext(statePatch: Partial<AppState> = {}) {
@@ -53,6 +54,28 @@ function createContext(statePatch: Partial<AppState> = {}) {
 }
 
 describe("PluginRegistry", () => {
+  it("projects selected-session state for external action checks and execution", async () => {
+    const registry = new PluginRegistry();
+    const enabled = vi.fn(() => true);
+    const disabledReason = vi.fn(() => undefined);
+    const run = vi.fn();
+    await registry.register({ id: "external", plugin: adaptPublicPlugin({
+      apiVersion: 4, name: "External", activate: () => ({ contributions: {
+        actions: [{ id: "action", title: "Action", enabled, disabledReason, run }],
+      } }),
+    }) });
+    const { context } = createContext({ selectedSession: testSession() });
+    const action = registry.getActions(context)[0];
+    expect(action).toBeDefined();
+    await action?.run();
+    enabled.mockReturnValue(false);
+    registry.getActions(context);
+    for (const callback of [enabled, disabledReason, run]) {
+      expect(callback).toHaveBeenCalledWith(expect.objectContaining({ state: publicPluginState(context.state) }));
+    }
+    expect(context.state.selectedSession).toHaveProperty("path");
+  });
+
   it("namespaces contribution ids with the owning plugin id", async () => {
     const registry = new PluginRegistry();
     await registry.register({ id: "core", plugin: corePlugin });
@@ -532,6 +555,29 @@ describe("PluginRegistry", () => {
     expect(() => registry.resolveCapability("provider", service)).toThrow("is not active");
   });
 
+  it.each(["host", "plugin"] as const)("keeps %s provision, requirement, and resolve parser boundaries distinct", async (source) => {
+    const provider = testPluginCapability("provider", "service", 1);
+    const requirement = { ...provider, parse: vi.fn((value: unknown) => ({ label: `requirement:${provider.parse(value).label}` })) };
+    const request = { ...provider, parse: (value: unknown) => ({ label: `request:${provider.parse(value).label}` }) };
+    const rejectingRequest = { ...provider, parse: () => { throw new Error("request rejected"); } };
+    const provision = { capability: provider, value: { label: "ready" } };
+    const registry = new PluginRegistry(source === "host" ? { hostCapabilities: [provision] } : {});
+    if (source === "plugin") {
+      await registry.register({ id: "provider", plugin: lifecyclePlugin("Provider", { provides: [provision] }) });
+    }
+    let resolved: TestPluginCapabilityValue | undefined;
+    await registry.register({ id: "consumer", plugin: lifecyclePlugin("Consumer", {
+      requires: [requirement],
+      start: ({ capabilities }) => {
+        expect(requirement.parse).toHaveBeenCalledWith({ label: "ready" });
+        resolved = capabilities.resolve(request);
+        expect(() => capabilities.resolve(rejectingRequest)).toThrow("request rejected");
+      },
+    }) });
+    expect(resolved).toEqual({ label: "request:ready" });
+    await registry.dispose();
+  });
+
   it("retains the host-required capability snapshot that was validated before publication", async () => {
     const registry = new PluginRegistry();
     const providerToken = testPluginCapability("provider", "service", 1);
@@ -542,7 +588,7 @@ describe("PluginRegistry", () => {
       version: 1,
       parse(value: unknown): TestPluginCapabilityValue {
         parseCount += 1;
-        if (parseCount > 1 || typeof value !== "object" || value === null) throw new Error("Host parser is single-use");
+        if (typeof value !== "object" || value === null) throw new Error("Expected a host capability object");
         const label: unknown = Reflect.get(value, "label");
         if (typeof label !== "string") throw new Error("Missing host capability label");
         return Object.freeze({ label: `host:${label}` });

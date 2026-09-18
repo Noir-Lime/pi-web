@@ -450,12 +450,10 @@ function snapshotPiWebHostPiSessionsV1(value: unknown): PiWebHostPiSessionsV1 {
   const version: unknown = Reflect.get(value, "version");
   const run: unknown = Reflect.get(value, "run");
   const create: unknown = Reflect.get(value, "create");
-  if (version !== 1 || typeof run !== "function") throw invalidPiWebHostPiSessions();
+  if (version !== 1 || typeof run !== "function" || typeof create !== "function") throw invalidPiWebHostPiSessions();
   return Object.freeze({
     version: 1,
     create: async (input: PiWebHostWorkspaceSelection) => {
-      // Older v1 providers remain usable for run(); creation requires an updated host.
-      if (typeof create !== "function") throw new Error("PI WEB host PI sessions capability v1 creation is unavailable; update the host");
       const requested = snapshotPiWebHostWorkspaceSelection(input);
       const result: unknown = await Reflect.apply(create, value, [requested]);
       if (!isPublicJsonObject(result)) throw new Error("PI WEB host PI sessions capability v1 must return a created session object");
@@ -691,5 +689,5 @@ function invalidPiWebHostWorkspaces(): Error {
 }
 
 function invalidPiWebHostPiSessions(): Error {
-  return new Error("PI WEB host PI sessions capability v1 must expose run");
+  return new Error("PI WEB host PI sessions capability v1 must expose create and run");
 }

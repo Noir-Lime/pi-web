@@ -4,6 +4,7 @@ import { requirePluginBackendRevision } from "../../../shared/pluginBackendProto
 import { isPiWebBundledPluginId, isPiWebPluginId, isReservedPiWebPluginId } from "../../../shared/pluginIds";
 import { REQUIRED_TERMINAL_PLUGIN_ID, type TerminalPluginMode } from "../../../shared/requiredTerminalPlugin";
 import { resolveAppUrl, type AppUrlContext } from "../appUrl";
+import { adaptPublicPlugin } from "./publicContext";
 import type { PiWebPlugin, PiWebPluginRegistration, PiWebPluginRegistrationDeclaration } from "./types";
 
 export interface PluginManifestEntry {
@@ -203,7 +204,7 @@ function parsePluginModule(module: unknown, moduleUrl: string): PiWebPlugin {
     throw new Error(`Unsupported browser plugin API version for ${moduleUrl}: ${String(plugin["apiVersion"])} (expected 4)`);
   }
   if (!isPiWebPlugin(plugin)) throw new Error(`Plugin module ${moduleUrl} default export is not a PiWebPlugin`);
-  return plugin;
+  return adaptPublicPlugin(plugin);
 }
 
 function isPiWebPlugin(value: unknown): value is PiWebPlugin {

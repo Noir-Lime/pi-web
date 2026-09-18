@@ -469,14 +469,11 @@ export class PluginRegistry {
     for (const requirement of staged.plugin.requires) {
       const key = capabilityKey(requirement);
       const host = this.hostCapabilitiesByKey.get(key);
-      if (host !== undefined) {
-        parseCapabilityValue(requirement, host.value, `Required capability ${formatCapability(requirement)} for browser plugin ${staged.registration.id}`);
-        resolved.set(key, host.value);
-        continue;
-      }
-      const provider = this.providerDeclaration(staged.declaration, requirement.pluginId);
-      const provision = provider === undefined ? undefined : this.activeCapabilitiesByRegistration.get(provider.id)?.get(key);
+      const provider = host === undefined ? this.providerDeclaration(staged.declaration, requirement.pluginId) : undefined;
+      const provision = host ?? (provider === undefined ? undefined : this.activeCapabilitiesByRegistration.get(provider.id)?.get(key));
       if (provision === undefined) throw new Error(`Browser plugin ${staged.registration.id} requires inactive capability ${formatCapability(requirement)}`);
+      // Validate the declared requirement before start, but retain the provider value:
+      // resolve() may supply a different parser for this same capability key.
       parseCapabilityValue(requirement, provision.value, `Required capability ${formatCapability(requirement)} for browser plugin ${staged.registration.id}`);
       resolved.set(key, provision.value);
     }
