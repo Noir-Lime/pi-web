@@ -646,6 +646,15 @@ export class PluginRegistry {
     return [...this.workspacePanels].sort((left, right) => (left.order ?? 1000) - (right.order ?? 1000) || left.title.localeCompare(right.title));
   }
 
+  resolveWorkspaceFileOpen(context: WorkspacePanelContext, path: string) {
+    for (const panel of this.getWorkspacePanels()) {
+      if (panel.visible?.(context) === false) continue;
+      const query = panel.fileOpenQuery?.(context, path);
+      if (query !== undefined) return { contributionId: panel.id, navigationAliases: panel.navigationAliases, query };
+    }
+    return undefined;
+  }
+
   resolveWorkspacePanelRouteId(value: string, selectedMachineId: string): QualifiedContributionId | undefined {
     const activePanels = this.workspacePanels.filter((panel) => this.isContributionActive(panel.pluginId, panel.machineId, selectedMachineId, panel.sourcePluginId));
     const exact = activePanels.find((panel) => panel.id === value);
@@ -741,6 +750,7 @@ export class PluginRegistry {
     contributionIds: Set<QualifiedContributionId>,
   ): QualifiedWorkspacePanelContribution {
     const id = this.qualify(pluginId, panel.id, contributionIds);
+    const fileOpenQuery = panel.fileOpenQuery;
     const badge = panel.badge;
     const visible = panel.visible;
     const onInvalidate = panel.onInvalidate;
@@ -761,6 +771,7 @@ export class PluginRegistry {
       ...(machineId === undefined ? {} : { machineId }),
       ...(sourcePluginId === undefined ? {} : { sourcePluginId }),
       visible: (context: WorkspacePanelContext) => this.isContributionActive(pluginId, machineId, context.machine.id, sourcePluginId) && (visible?.(scopedContext(context)) ?? true),
+      ...(fileOpenQuery === undefined ? {} : { fileOpenQuery: (context: WorkspacePanelContext, path: string) => this.isContributionActive(pluginId, machineId, context.machine.id, sourcePluginId) ? fileOpenQuery(scopedContext(context), path) : undefined }),
       ...(badge === undefined ? {} : { badge: (context: WorkspacePanelContext) => this.isContributionActive(pluginId, machineId, context.machine.id, sourcePluginId) ? badge(scopedContext(context)) : undefined }),
       ...(onInvalidate === undefined ? {} : { onInvalidate: (context: WorkspacePanelContext, invalidation?: WorkspaceInvalidation) => {
         if (!this.isContributionActive(pluginId, machineId, context.machine.id, sourcePluginId)) return undefined;

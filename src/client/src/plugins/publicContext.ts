@@ -47,9 +47,10 @@ export function adaptPublicPlugin(plugin: PiWebPlugin): PiWebPlugin {
             ...(disabledReason === undefined ? {} : { disabledReason: (context) => disabledReason(publicContext(context)) }),
             run: (context) => run(publicContext(context)),
           })) }),
-          ...(workspacePanels === undefined ? {} : { workspacePanels: workspacePanels.map(({ visible, badge, onInvalidate, render, ...panel }) => ({
+          ...(workspacePanels === undefined ? {} : { workspacePanels: workspacePanels.map(({ visible, fileOpenQuery, badge, onInvalidate, render, ...panel }) => ({
             ...panel,
             ...(visible === undefined ? {} : { visible: (context) => visible(publicContext(context)) }),
+            ...(fileOpenQuery === undefined ? {} : { fileOpenQuery: (context, path) => fileOpenQuery(publicContext(context), path) }),
             ...(badge === undefined ? {} : { badge: (context) => badge(publicContext(context)) }),
             ...(onInvalidate === undefined ? {} : { onInvalidate: (context, invalidation) => onInvalidate(publicContext(context), invalidation) }),
             render: (context) => render(publicContext(context)),

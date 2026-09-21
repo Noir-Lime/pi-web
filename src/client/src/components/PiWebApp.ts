@@ -1,6 +1,7 @@
 import { LitElement, html, type TemplateResult } from "lit";
 import { customElement, query, state } from "lit/decorators.js";
 import { guard } from "lit/directives/guard.js";
+import { markdownWorkspaceContext, type WorkspaceFileOpenRequest } from "../formatting/workspaceLinks";
 import { configApi, effectiveWorkspaceAttachmentsFolder, effectiveWorkspaceUploadFolder, sessionsApi, workspacesApi, workspaceEffectiveAttachmentsFolder, workspaceEffectiveUploadFolder, type AskUserSubmission, type CommandOption, type ExtensionDialogAnswer, type Machine, type MachineHealth, type PiWebConfigValues, type PiWebShortcutConfig, type Project, type SessionCleanupExecuteResponse, type SessionCleanupPreviewResponse, type SessionCleanupRequest, type SessionInfo, type SessionModel, type SessionModelCatalogEntry, type SessionModelScopeMode, type SessionTreeForkResult, type SessionTreeNavigateResult, type SessionTreeSummaryChoice, type TerminalCommandRun, type Workspace } from "../api";
 import type { AppAction } from "../actions";
 import { initialAppState, type AppState, type ModelDialogOrigin } from "../appState";
@@ -1976,6 +1977,18 @@ export class PiWebApp extends LitElement {
     `;
   }
 
+  private readonly handleWorkspaceFileOpen = (event: CustomEvent<WorkspaceFileOpenRequest>): void => {
+    const workspace = this.state.selectedWorkspace;
+    const request = event.detail;
+    if (event.defaultPrevented || workspace === undefined || request.machineId !== selectedMachineId(this.state)
+      || request.projectId !== workspace.projectId || request.workspaceId !== workspace.id || request.root !== workspace.path) return;
+    const navigation = this.plugins.resolveWorkspaceFileOpen(this.createWorkspacePanelContext(workspace), request.path);
+    if (navigation === undefined) return;
+    const query = patchContributionQueryRecord(this.currentContributionQueryForState(), navigation.contributionId, navigation.navigationAliases ?? [], navigation.query);
+    event.preventDefault();
+    this.publishWorkspaceTool(navigation.contributionId, query);
+  };
+
   private visibleWorkspacePanels(): QualifiedWorkspacePanelContribution[] {
     const workspace = this.state.selectedWorkspace;
     if (workspace === undefined) return [];
@@ -3230,7 +3243,7 @@ export class PiWebApp extends LitElement {
       this.notificationView = selectedNotificationView(state.selectedNotificationInbox);
     }
     return html`
-      <chat-view .sessionId=${session.id} .onMessageAction=${this.handleMessageAction} .messageActionsDisabled=${session.archived === true || state.sendingPrompts[session.id] === true || isSessionActive(state.status, state.activity)} .messages=${state.messages} .messageStart=${state.messagePageStart} .messageEnd=${state.messagePageEnd} .messageTotal=${state.messagePageTotal} .hasMore=${state.messagePageStart > 0} .loadingMore=${state.isLoadingEarlierMessages} .isSendingPrompt=${state.sendingPrompts[session.id] === true} .isCompacting=${state.status?.isCompacting === true} .pendingMessageCount=${state.status?.pendingMessageCount ?? 0} .clientQueuedMessages=${state.clientQueuedSessionMessages[session.id] ?? this.emptyClientQueue} .status=${state.status} .activity=${state.activity} .pendingAsk=${state.pendingAsk} .pendingDialogs=${state.pendingDialogs} .closedDialogs=${state.closedDialogs} .onAnswerDialog=${this.handleAnswerDialog} .onCancelDialog=${this.handleCancelDialog} .onDismissClosedDialog=${this.handleDismissClosedDialog} .askDraftSessionId=${machineSessionKey(selectedMachineId(state), session.id)} .onSubmitAsk=${this.handleSubmitAsk} .notificationInbox=${this.notificationView} .onClearServerQueue=${this.handleClearServerQueue} .onDismissWarning=${this.handleDismissWarning} .onDismissNotification=${this.handleDismissNotification} .onDismissAllNotifications=${this.handleDismissAllNotifications} .warningsVisible=${!this.sessionWarningVisibility.collapsed} .onToggleWarnings=${this.handleToggleWarnings} .onLoadMore=${this.handleLoadEarlierMessages}></chat-view>
+      <chat-view @workspace-file-open=${this.handleWorkspaceFileOpen} .workspaceContext=${markdownWorkspaceContext(selectedMachineId(state), state.selectedWorkspace, session)} .sessionId=${session.id} .onMessageAction=${this.handleMessageAction} .messageActionsDisabled=${session.archived === true || state.sendingPrompts[session.id] === true || isSessionActive(state.status, state.activity)} .messages=${state.messages} .messageStart=${state.messagePageStart} .messageEnd=${state.messagePageEnd} .messageTotal=${state.messagePageTotal} .hasMore=${state.messagePageStart > 0} .loadingMore=${state.isLoadingEarlierMessages} .isSendingPrompt=${state.sendingPrompts[session.id] === true} .isCompacting=${state.status?.isCompacting === true} .pendingMessageCount=${state.status?.pendingMessageCount ?? 0} .clientQueuedMessages=${state.clientQueuedSessionMessages[session.id] ?? this.emptyClientQueue} .status=${state.status} .activity=${state.activity} .pendingAsk=${state.pendingAsk} .pendingDialogs=${state.pendingDialogs} .closedDialogs=${state.closedDialogs} .onAnswerDialog=${this.handleAnswerDialog} .onCancelDialog=${this.handleCancelDialog} .onDismissClosedDialog=${this.handleDismissClosedDialog} .askDraftSessionId=${machineSessionKey(selectedMachineId(state), session.id)} .onSubmitAsk=${this.handleSubmitAsk} .notificationInbox=${this.notificationView} .onClearServerQueue=${this.handleClearServerQueue} .onDismissWarning=${this.handleDismissWarning} .onDismissNotification=${this.handleDismissNotification} .onDismissAllNotifications=${this.handleDismissAllNotifications} .warningsVisible=${!this.sessionWarningVisibility.collapsed} .onToggleWarnings=${this.handleToggleWarnings} .onLoadMore=${this.handleLoadEarlierMessages}></chat-view>
     `;
   }
 

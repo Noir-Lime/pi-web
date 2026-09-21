@@ -42,6 +42,7 @@ export function activateFilesPlugin(context: PluginActivationContext, filesRunti
         routeAliases: ["files", "core:workspace.files"],
         navigationAliases: ["core:workspace.files"],
         invalidationResources: ["workspace.files"],
+        fileOpenQuery: (_workspaceContext, path) => ({ file: path }),
         onInvalidate: (workspaceContext, invalidation) => filesRuntime.invalidate(workspaceContext, invalidation),
         render: (workspaceContext) => context.html`<pi-web-files-panel .context=${workspaceContext} .runtime=${filesRuntime}></pi-web-files-panel>`,
       }],

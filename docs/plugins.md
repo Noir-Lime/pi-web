@@ -46,6 +46,12 @@ A plugin package declares a browser entry, a server entry, or both:
 
 Plugins declare contributions in `activate()`, initialize dependency-backed work in `start()`, and release resources in `dispose()`. Long-lived work follows the plugin's `lifetimeSignal`. Simple browser plugins only need to return their contributions.
 
+### Opening workspace files from chat
+
+Chat Markdown links to relative files (including `./file`) or absolute paths inside the session workspace open in the bundled Files panel. The link retains a download URL for modifier/new-tab clicks and when no panel accepts it. File access still uses server-side workspace containment checks.
+
+A workspace panel can opt in with `fileOpenQuery(context, path)`. This synchronous hook receives its contribution-scoped context and a decoded workspace-relative path; return a navigation query such as `{ file: path }`, or `undefined` to decline. Keep the hook free of side effects: the host opens the first accepting visible, enabled panel for the selected machine, ordered by panel `order` then title, and applies its namespaced query through normal panel navigation. The panel reads the selection from `context.navigation.query`; no Files-plugin dependency is required.
+
 ### Conversations and companion extensions
 
 A server plugin can create a normal, visible Pi conversation, with or without an initial prompt. A companion Pi extension can exchange messages with the backend and use Pi's own APIs to do agent work.

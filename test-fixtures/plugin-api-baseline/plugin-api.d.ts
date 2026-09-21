@@ -296,6 +296,8 @@ export interface WorkspacePanelContribution {
     /** Former qualified contribution ids whose namespaced query keys remain readable. */
     navigationAliases?: QualifiedContributionId[];
     visible?: (context: WorkspacePanelContext) => boolean;
+    /** Return a deep-link query to open a workspace-relative file, or undefined if unsupported. */
+    fileOpenQuery?: (context: WorkspacePanelContext, path: string) => Readonly<Record<string, ContributionQueryValue>> | undefined;
     badge?: (context: WorkspacePanelContext) => string | number | TemplateResult | undefined;
     /** Fixed workspace resources whose automatic invalidations this contribution receives. */
     invalidationResources?: readonly WorkspaceResource[];

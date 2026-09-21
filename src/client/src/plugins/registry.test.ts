@@ -12,6 +12,30 @@ import { createPluginPeer } from "./pluginPeer";
 import { adaptPublicPlugin, publicPluginState } from "./publicContext";
 import type { PluginBackendRequestTarget } from "../api/pluginBackends";
 
+it("resolves file-opening panels by availability, applicability, order and scoped context", async () => {
+  let enabled = true;
+  const registry = new PluginRegistry({ isContributionEnabled: () => enabled });
+  const fileOpenQuery = vi.fn((_context: WorkspacePanelContext, path: string) => ({ file: path }));
+  await registry.register({ id: "viewer", machineId: "remote", plugin: {
+    apiVersion: 4, name: "Viewer", activate: () => ({ contributions: { workspacePanels: [
+      { id: "hidden", title: "Hidden", order: 0, visible: () => false, fileOpenQuery, render: () => html`` },
+      { id: "unsupported", title: "Unsupported", order: 1, fileOpenQuery: () => undefined, render: () => html`` },
+      { id: "files", title: "Files", order: 2, fileOpenQuery, render: () => html`` },
+    ] } }),
+  } });
+  const base = createWorkspacePanelContext("remote");
+  const scoped: WorkspacePanelContext = { ...base, navigation: { version: 1, contributionId: "viewer:files", query: {}, set: vi.fn() } };
+  installWorkspacePanelScope(base, () => scoped);
+  expect(registry.resolveWorkspaceFileOpen(base, "a.txt")).toMatchObject({ contributionId: "viewer:files", query: { file: "a.txt" } });
+  expect(fileOpenQuery).toHaveBeenCalledExactlyOnceWith(scoped, "a.txt");
+  expect(registry.resolveWorkspaceFileOpen(createWorkspacePanelContext("local"), "a.txt")).toBeUndefined();
+  enabled = false;
+  expect(registry.resolveWorkspaceFileOpen(base, "a.txt")).toBeUndefined();
+  enabled = true;
+  await registry.dispose();
+  expect(registry.resolveWorkspaceFileOpen(base, "a.txt")).toBeUndefined();
+});
+
 function createContext(statePatch: Partial<AppState> = {}) {
   const calls: string[] = [];
   const context: PluginRuntimeContext = {

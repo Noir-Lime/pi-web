@@ -9,6 +9,7 @@ import { corePlugin } from "../plugins/core";
 import type { WorkspacePanelContext } from "../plugins/types";
 import { PiWebApp } from "./PiWebApp";
 import { ChatView } from "./ChatView";
+import { FormattedText } from "./FormattedText";
 import { WorkspacePanel } from "./WorkspacePanel";
 import { WorkspaceList } from "./WorkspaceList";
 import { ProjectList } from "./ProjectList";
@@ -180,6 +181,55 @@ describe("application rendering boundaries", () => {
     folder.click();
     await settle(app);
     expect(new URL(window.location.href).searchParams.get("render-test.panel--folder")).toBe("src");
+  });
+
+  it("opens chat file links through generic panel navigation and rejects stale workspace requests", async () => {
+    const app = await mountApp({
+      selectedProject: { id: "project", name: "Project", path: "/repo", createdAt: "now" },
+      selectedWorkspace: workspace, workspaces: [workspace], selectedSession: session, sessions: [session],
+      mainView: "chat", messages: [{ role: "assistant", parts: [{ type: "text", text: "[file](./reports/a%20%231.txt)" }] }],
+    });
+    const registry: unknown = Reflect.get(app, "plugins");
+    if (!(registry instanceof PluginRegistry)) throw new Error("Expected plugin registry");
+    Reflect.set(app, "verifiedPluginModeByMachine", new Map([["local", "recovery-disabled"]]));
+    const fileOpenQuery = vi.fn((_context: WorkspacePanelContext, path: string) => ({ file: path }));
+    await registry.register({ id: "viewer", plugin: {
+      apiVersion: 4, name: "Viewer", activate: () => ({ contributions: { workspacePanels: [{
+        id: "files", title: "Viewer", fileOpenQuery,
+        render: (context) => html`<p>Selected: ${context.navigation?.query["file"]}</p>`,
+      }] } }),
+    } });
+    await settle(app);
+    const chat = app.shadowRoot?.querySelector("chat-view");
+    const formatted = chat?.shadowRoot?.querySelector("formatted-text");
+    if (!(formatted instanceof FormattedText)) throw new Error("Expected formatted chat text");
+    const anchor = formatted.shadowRoot?.querySelector("a");
+    if (!(anchor instanceof HTMLAnchorElement)) throw new Error("Expected file link");
+    const detail = { machineId: "local", projectId: "project", workspaceId: "workspace", root: "/repo", path: "reports/a #1.txt" };
+    for (const field of ["machineId", "projectId", "workspaceId", "root"] as const) {
+      const stale = new CustomEvent("workspace-file-open", {
+        detail: { ...detail, [field]: "stale" }, bubbles: true, composed: true, cancelable: true,
+      });
+      formatted.dispatchEvent(stale);
+      expect(stale.defaultPrevented).toBe(false);
+    }
+    expect(fileOpenQuery).not.toHaveBeenCalled();
+
+    const click = new MouseEvent("click", { bubbles: true, composed: true, cancelable: true });
+    anchor.dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(true);
+    expect(fileOpenQuery).toHaveBeenCalledOnce();
+    expect(anchor.href).toContain("download=1");
+    await settle(app);
+    const query = new URL(window.location.href).searchParams;
+    expect(query.get("tool")).toBe("viewer:files");
+    expect(query.get("viewer.files--file")).toBe("reports/a #1.txt");
+    expect(app.shadowRoot?.querySelector("workspace-panel")?.shadowRoot?.textContent).toContain("Selected: reports/a #1.txt");
+
+    await registry.dispose();
+    const unhandled = new CustomEvent("workspace-file-open", { detail, bubbles: true, composed: true, cancelable: true });
+    formatted.dispatchEvent(unhandled);
+    expect(unhandled.defaultPrevented).toBe(false);
   });
 
   it("updates the workspace empty state as project loading completes", async () => {
