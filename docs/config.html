@@ -1105,9 +1105,33 @@ PI_CODING_AGENT_SESSION_DIR=/opt/pi-profiles/lab-sessions</code></pre>
             <section id="shortcut-config">
               <h2>Shortcut config</h2>
               <p>
-                Shortcut values are keyed by action id. Use strings such as <code>mod+k</code> or <code>mod+g p</code>;
+                Shortcut values are keyed by action id. Use strings such as <code>mod+k</code>, <code>g p</code>, or <code>shift+enter</code>;
                 <code>null</code> disables that action's shortcut. See the <a href="#global-config">global example</a>.
-                Prefer <strong>Settings → Keyboard</strong> for interactive editing.
+                Prefer <strong>Settings → Keyboard</strong> for editing, recording, disabling, or resetting shortcuts.
+                <code>mod</code> accepts Ctrl or ⌘; browsers and operating systems may reserve some combinations.
+              </p>
+              <p>
+                App shortcuts support single keys and sequences. Unmodified and Shift-only shortcuts do not start in
+                inputs, textareas, selects, or contenteditable editors. Sequences expire after 1.2 seconds; Escape or a
+                focus change cancels them. Custom bindings win over defaults, ties resolve by action id, and shorter
+                bindings shadow longer sequences with the same prefix.
+              </p>
+              <p>
+                Under <strong>Chat composer</strong>, configure <code>composer.send.desktop</code> and
+                <code>composer.send.mobile</code> independently with one key combination each, not sequences.
+                <strong>Send message — desktop</strong> defaults to Enter; <strong>Send message — touch or narrow screen</strong>
+                defaults to Shift+Enter. The latter applies when the browser reports a coarse primary pointer (typically
+                touch) or a viewport at most 760px wide; otherwise, desktop applies. Its config key remains
+                <code>composer.send.mobile</code>. For example, set the desktop binding to <code>mod+enter</code>
+                and the touch or narrow screen binding to <code>shift+enter</code>.
+                Unassigned Enter and Shift+Enter insert newlines. Send bindings take priority over app shortcuts only in
+                the message editor, even when sending is unavailable. Plain Enter accepts a selected completion first.
+                <code>null</code> disables keyboard submission; the send button remains available.
+              </p>
+              <p>
+                Existing browser-local Enter preferences remain the fallback until a composer binding is configured.
+                Reset removes the override and restores that fallback. New bindings are saved in the gateway config;
+                old preferences are not copied there. Automatic touch-keyboard capitalization is ignored for Shift+Enter.
               </p>
             </section>
 
