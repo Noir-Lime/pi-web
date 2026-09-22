@@ -6,6 +6,7 @@ import {
   type StatusFlags,
 } from "../../shared/machineStatus.js";
 import type { WorkspaceAttribution } from "./workspaceAttribution.js";
+import { cwdPathsEqual } from "../workingDirectory.js";
 
 /** One active working directory as recorded by `WorkspaceActivityService`. */
 export interface ActiveCwdActivity {
@@ -148,8 +149,17 @@ export class MachineStatusService {
         unattributed.push(flags);
         continue;
       }
-      projects.add(attribution.projectId, flags);
-      workspaces.add(attribution.workspaceId, flags);
+      // Session lists are exact-cwd scoped. An ancestor cannot expose/read a
+      // descendant's completion, even though it owns that cwd's live activity.
+      const { [CORE_STATUS_FLAGS.unread]: unread, ...otherFlags } = flags;
+      let attributedFlags = flags;
+      if (unread === true && !cwdPathsEqual(cwd, attribution.workspacePath)) {
+        unattributed.push({ [CORE_STATUS_FLAGS.unread]: true });
+        attributedFlags = otherFlags;
+      }
+      if (Object.keys(attributedFlags).length === 0) continue;
+      projects.add(attribution.projectId, attributedFlags);
+      workspaces.add(attribution.workspaceId, attributedFlags);
     }
 
     const rolledProjects = projects.rollUp();

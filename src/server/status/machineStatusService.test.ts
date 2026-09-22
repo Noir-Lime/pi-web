@@ -1,13 +1,85 @@
 import { describe, expect, it, vi } from "vitest";
 import { CORE_STATUS_FLAGS, type MachineStatusSnapshot } from "../../shared/machineStatus.js";
 import { MachineStatusService, type ActiveCwdActivity } from "./machineStatusService.js";
-import type { CwdAttribution } from "./workspaceAttribution.js";
+import { CachedWorkspaceAttribution, type CwdAttribution } from "./workspaceAttribution.js";
+import type { Project } from "../types.js";
 
 const WORKING = CORE_STATUS_FLAGS.working;
 const TERMINAL = CORE_STATUS_FLAGS.terminal;
 const UNREAD = CORE_STATUS_FLAGS.unread;
 
 describe("MachineStatusService", () => {
+  it.each(["/", "/srv"])("does not transfer a removed project's unread status to ancestor %s", async (ancestor) => {
+    const project = (id: string, path: string): Project => ({ id, path, name: id, createdAt: "2026-08-01T00:00:00Z" });
+    const parent = project("ancestor", ancestor);
+    const removed = project("removed", "/srv/removed");
+    const retained = project("retained", "/srv/retained");
+    let projects = [parent, removed, retained];
+    const logger = { warn: vi.fn() };
+    const attribution = new CachedWorkspaceAttribution({
+      projects: { list: () => Promise.resolve(projects) },
+      workspaces: { list: (owner) => Promise.resolve([
+        { id: owner.id, projectId: owner.id, path: owner.path, label: owner.name, isMain: true },
+      ]) },
+      logger,
+    });
+    // Cwd-only summaries also cover legacy catalog entries without completionKind.
+    const sessions = [{ cwd: removed.path }, { cwd: retained.path }];
+    const service = new MachineStatusService({
+      activity: { snapshot: () => ({ workspaces: [
+        { cwd: removed.path, hasSessionActivity: true, hasTerminalActivity: true },
+      ] }) },
+      unread: { catalogSnapshot: () => ({ sessions }) },
+      attribution,
+      publisher: { publish: vi.fn() },
+      logger,
+    });
+    await service.refresh();
+    expect(service.snapshot().projects["removed"]).toEqual({ [WORKING]: true, [TERMINAL]: true, [UNREAD]: true });
+
+    projects = [parent, retained];
+    attribution.invalidate();
+    await service.refresh();
+    expect(service.snapshot()).toMatchObject({
+      projects: { ancestor: { [WORKING]: true, [TERMINAL]: true }, retained: { [UNREAD]: true } },
+      workspaces: { ancestor: { [WORKING]: true, [TERMINAL]: true }, retained: { [UNREAD]: true } },
+      unattributed: { [UNREAD]: true },
+    });
+    expect(service.snapshot().projects["ancestor"]).not.toHaveProperty(UNREAD);
+    expect(service.snapshot().workspaces["ancestor"]).not.toHaveProperty(UNREAD);
+    expect(service.snapshot().projects).not.toHaveProperty("removed");
+
+    // Re-adding the project restores its unread state without altering the catalog.
+    projects.push(removed);
+    attribution.invalidate();
+    await service.refresh();
+    expect(service.snapshot().projects["removed"]?.[UNREAD]).toBe(true);
+    expect(service.snapshot().projects).not.toHaveProperty("ancestor");
+    expect(service.snapshot().unattributed).toEqual({});
+  });
+
+  it("leaves an orphan-only completion unattributed without emitting empty ancestor nodes", async () => {
+    const { service } = statusService({
+      unread: ["/srv/removed"],
+      topology: { "/srv/removed": { projectId: "root", workspaceId: "root", workspacePath: "/" } },
+    });
+    await service.refresh();
+    const { projects, workspaces, machine, unattributed } = service.snapshot();
+    expect({ projects, workspaces, machine, unattributed }).toEqual({
+      projects: {}, workspaces: {}, machine: { [UNREAD]: true }, unattributed: { [UNREAD]: true },
+    });
+  });
+
+  it("attributes unread to a normalized exact workspace root", async () => {
+    const { service } = statusService({
+      unread: ["/srv/project/"],
+      topology: { "/srv/project/": { projectId: "project", workspaceId: "workspace", workspacePath: "/srv/project" } },
+    });
+    await service.refresh();
+    expect(service.snapshot().workspaces["workspace"]).toEqual({ [UNREAD]: true });
+    expect(service.snapshot().unattributed).toEqual({});
+  });
+
   it("lights the project and workspace of an active session in a project the browser never opened", async () => {
     const { service, published } = statusService({
       activity: [{ cwd: "/srv/wt/feature", hasSessionActivity: true, hasTerminalActivity: false }],
@@ -172,7 +244,7 @@ describe("MachineStatusService", () => {
 interface StatusServiceScenario {
   activity?: readonly ActiveCwdActivity[];
   unread?: readonly string[];
-  topology?: Record<string, CwdAttribution>;
+  topology?: Record<string, Omit<CwdAttribution, "workspacePath"> & { workspacePath?: string }>;
 }
 
 /**
@@ -191,7 +263,7 @@ function statusService(scenario: StatusServiceScenario = {}) {
   const attribute = vi.fn((cwds: Iterable<string>) => Promise.resolve(
     new Map([...cwds].flatMap((cwd) => {
       const attribution = topology[cwd];
-      return attribution === undefined ? [] : [[cwd, attribution] as const];
+      return attribution === undefined ? [] : [[cwd, { workspacePath: cwd, ...attribution }] as const];
     })),
   ));
 
