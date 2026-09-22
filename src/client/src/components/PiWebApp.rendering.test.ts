@@ -101,7 +101,7 @@ describe("application rendering boundaries", () => {
       expect(destinations()).toEqual(expected);
       expect(dialog.selectedTab).toBe(next > 1180 ? "render-test:panel" : "chat");
       const labels: Record<string, string> = { navigation: "Sessions", chat: "Chat", "render-test:panel": "Test" };
-      expect(tabIds()).toEqual(expected.map((id) => labels[id]));
+      expect(tabIds()).toEqual([...expected.map((id) => labels[id]), "Navigation"]);
       expect(loadNavigationPreferences().pinnedIds).toEqual([]);
     }
     const search = dialog.shadowRoot?.querySelector("input");
@@ -114,7 +114,7 @@ describe("application rendering boundaries", () => {
     expect(loadNavigationPreferences().pinnedIds).toEqual(["navigation", "chat"]);
     await resize(760);
     expect(loadNavigationPreferences().pinnedIds).toEqual(["navigation", "chat"]);
-    expect(tabIds()).toEqual(["Sessions", "Chat"]);
+    expect(tabIds()).toEqual(["Sessions", "Chat", "Navigation"]);
     search.value = "";
     search.dispatchEvent(new Event("input", { bubbles: true }));
     await settle(app);
@@ -125,7 +125,7 @@ describe("application rendering boundaries", () => {
     await settle(app);
     expect(loadNavigationPreferences().pinnedIds).toEqual(["navigation", "render-test:panel"]);
     await resize(760);
-    expect(tabIds()).toEqual(["Sessions", "Test"]);
+    expect(tabIds()).toEqual(["Sessions", "Test", "Navigation"]);
   });
   it.each([
     { mobile: true, desktop: false, view: "chat", pins: ["navigation"], selected: true },
@@ -248,7 +248,7 @@ describe("application rendering boundaries", () => {
     expect(open?.querySelector("svg")).not.toBeNull();
     expect(open?.classList.contains("selected")).toBe(false);
     const tabStrip = app.shadowRoot?.querySelector("app-mobile-main-tabs");
-    expect(tabStrip?.shadowRoot?.querySelector(".mobile-tabs-frame > button:last-child")?.getAttribute("aria-label")).toBe("Navigation");
+    expect(tabStrip?.shadowRoot?.querySelector(".mobile-tabs > button:last-child")?.getAttribute("aria-label")).toBe("Navigation");
     expect(tabStrip?.shadowRoot?.querySelector('button[aria-label="Navigation"]')?.classList.contains("selected")).toBe(false);
     open?.click();
     await settle(app);
@@ -304,7 +304,7 @@ describe("application rendering boundaries", () => {
     const hamburger = tabStrip?.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Navigation"]');
     expect(hamburger?.querySelector("svg")).not.toBeNull();
     expect(hamburger?.classList.contains("selected")).toBe(false);
-    expect(tabStrip?.shadowRoot?.querySelector(".mobile-tabs-frame > button:last-child")).toBe(hamburger);
+    expect(tabStrip?.shadowRoot?.querySelector(".mobile-tabs > button:last-child")).toBe(hamburger);
     dialog?.shadowRoot?.querySelector<HTMLButtonElement>("header button")?.click();
     await settle(app);
     expect(deepActiveElement(document)).toBe(hamburger);

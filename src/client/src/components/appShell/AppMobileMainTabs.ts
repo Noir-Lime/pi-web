@@ -63,8 +63,8 @@ export class AppMobileMainTabs extends LitElement {
               </button>
             `;
           })}
+          ${this.onShowNavigation === undefined ? null : html`<button type="button" class=${`navigation-menu-button${this.hiddenActiveDestination ? " selected" : ""}`} title="Navigation" aria-label="Navigation" aria-haspopup="dialog" @click=${this.onShowNavigation}>${renderNavigationMenuIcon()}</button>`}
         </div>
-        ${this.onShowNavigation === undefined ? null : html`<button type="button" class=${`navigation-menu-button${this.hiddenActiveDestination ? " selected" : ""}`} title="Navigation" aria-label="Navigation" aria-haspopup="dialog" @click=${this.onShowNavigation}>${renderNavigationMenuIcon()}</button>`}
       </div>
     `;
   }
@@ -163,7 +163,6 @@ export class AppMobileMainTabs extends LitElement {
     .mobile-tabs-frame.can-scroll-left::before, .mobile-tabs-frame.can-scroll-right::after { opacity: 1; }
     .mobile-tabs { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 8px; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: thin; }
     .mobile-tabs-frame button { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
-    .navigation-menu-button { align-self: center; margin: 0 8px 0 0; }
     .mobile-tabs .navigation-tab { display: none; }
     .mobile-tabs-frame button.selected { border-color: var(--pi-accent); background: var(--pi-selection-bg); }
     .tab-icon { flex: 0 0 auto; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
