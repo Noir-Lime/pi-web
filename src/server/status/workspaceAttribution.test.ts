@@ -13,7 +13,6 @@ describe("CachedWorkspaceAttribution", () => {
     expect(resolved.get("/srv/dev/pi-web-feature")).toEqual({
       projectId: "project-1",
       workspaceId: "project-1-workspace-1",
-      workspacePath: "/srv/dev/pi-web-feature",
     });
   });
 
@@ -27,7 +26,6 @@ describe("CachedWorkspaceAttribution", () => {
     expect(resolved.get("/srv/worktrees/detached")).toEqual({
       projectId: "project-1",
       workspaceId: "project-1-workspace-1",
-      workspacePath: "/srv/worktrees/detached",
     });
   });
 

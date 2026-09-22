@@ -10,7 +10,7 @@ export class ProjectService {
     return this.store.list();
   }
 
-  async add(input: { name?: string; path: string; create?: boolean }, beforeRegister?: (project: Project) => Promise<void>): Promise<Project> {
+  async add(input: { name?: string; path: string; create?: boolean }): Promise<Project> {
     // Trim so stray whitespace cannot diverge the stored path from the
     // trimmed key the trust lookup (projectTrustRoutes) previews decisions for.
     const requestedPath = expandUserPath(input.path.trim());
@@ -18,7 +18,7 @@ export class ProjectService {
     const resolved = await realpath(requestedPath);
     const s = await stat(resolved);
     if (!s.isDirectory()) throw new Error("Project path must be a directory");
-    return this.store.add(input.name === undefined ? { path: resolved } : { name: input.name, path: resolved }, beforeRegister);
+    return this.store.add(input.name === undefined ? { path: resolved } : { name: input.name, path: resolved });
   }
 
   async close(id: string): Promise<void> {

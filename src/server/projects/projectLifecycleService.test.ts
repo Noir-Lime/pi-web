@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { Project, WorkspaceProviderAuthorityResolution } from "../../shared/apiTypes.js";
 import { SessionUnreadStore, type SessionUnreadMutation } from "../sessions/sessionUnreadStore.js";
 import { ProjectLifecycleService } from "./projectLifecycleService.js";
+import { MachineStatusService } from "../status/machineStatusService.js";
+import { CachedWorkspaceAttribution } from "../status/workspaceAttribution.js";
 
 const root = project("root", "/");
 const removed = project("removed", "/srv/removed");
@@ -12,7 +14,22 @@ describe("ProjectLifecycleService", () => {
     const fixture = lifecycle([root, kept]);
     complete(fixture.unread, removed.path);
     complete(fixture.unread, kept.path);
+    const logger = { warn: vi.fn() };
+    const status = new MachineStatusService({
+      activity: { snapshot: () => ({ workspaces: [] }) },
+      unread: fixture.unread,
+      attribution: new CachedWorkspaceAttribution({
+        projects: fixture.projects,
+        workspaces: { list: async (owner) => [...(await fixture.workspaces.resolve(owner)).workspaces] },
+        logger,
+      }),
+      publisher: { publish: vi.fn() },
+      logger,
+    });
     await fixture.service.refresh();
+    await status.refresh();
+    expect(status.snapshot().projects).toEqual({ kept: { "core:unread": true } });
+    expect(status.snapshot().unattributed).toEqual({});
     expect(fixture.unread.catalogSnapshot().sessions.map((entry) => entry.cwd)).toEqual([kept.path]);
     expect(fixture.mutations).toHaveLength(1);
     expect(fixture.mutations[0]?.event).toMatchObject({ cwd: removed.path, unread: null });
@@ -73,24 +90,18 @@ describe("ProjectLifecycleService", () => {
     expect(fixture.projects.add).not.toHaveBeenCalled();
   });
 
-  it("preserves unread when startup health or safe-start has hidden providers", async () => {
-    const fixture = lifecycle([kept]);
-    complete(fixture.unread, "/external/worktree");
-    fixture.workspaceAuthorityAvailable.mockReturnValue(false);
-    await expect(fixture.service.refresh()).rejects.toThrow("providers are unavailable");
-    expect(fixture.unread.catalogSnapshot().sessions).toHaveLength(1);
-    expect(fixture.workspaces.resolve).not.toHaveBeenCalled();
-  });
+  it("admits a new root directly and discovers its extra workspaces through normal refresh", async () => {
+    const paths = new Map<string, string[]>();
+    const fixture = lifecycle([kept], paths);
+    const added = await fixture.service.add({ path: removed.path });
+    expect(fixture.workspaces.resolve.mock.calls.map(([owner]) => owner.id)).toEqual([kept.id]);
+    complete(fixture.unread, added.path);
+    expect(fixture.unread.catalogSnapshot().sessions.map((entry) => entry.cwd)).toEqual([added.path]);
 
-  it("validates the prospective provider before committing a new project", async () => {
-    const fixture = lifecycle([kept]);
-    fixture.workspaces.resolve.mockImplementation((owner) => owner.path === removed.path
-      ? Promise.reject(new Error("new provider offline"))
-      : Promise.resolve(resolution(owner, [owner.path])));
-    await expect(fixture.service.add({ path: removed.path })).rejects.toThrow("new provider offline");
-    expect(await fixture.projects.list()).toEqual([kept]);
-    complete(fixture.unread, kept.path);
-    expect(fixture.unread.catalogSnapshot().sessions).toHaveLength(1);
+    paths.set(added.id, [added.path, "/external/new"]);
+    await fixture.service.refresh();
+    complete(fixture.unread, "/external/new");
+    expect(fixture.unread.catalogSnapshot().sessions.map((entry) => entry.cwd)).toEqual(["/external/new", added.path]);
   });
 
   it("restores tracking eligibility when the registration removal write fails", async () => {
@@ -174,11 +185,10 @@ function lifecycle(initial: Project[], paths = new Map<string, string[]>()) {
   let registered = [...initial];
   const projects = {
     list: vi.fn(() => Promise.resolve([...registered])),
-    add: vi.fn(async (input: { path: string }, beforeRegister?: (candidate: Project) => Promise<void>) => {
+    add: vi.fn((input: { path: string }) => {
       const added = project(`new-${String(registered.length)}`, input.path);
-      await beforeRegister?.(added);
       registered.push(added);
-      return added;
+      return Promise.resolve(added);
     }),
     close: vi.fn((id: string) => {
       registered = registered.filter((entry) => entry.id !== id);
@@ -197,12 +207,11 @@ function lifecycle(initial: Project[], paths = new Map<string, string[]>()) {
     return restore;
   });
   const onChanged = vi.fn();
-  const workspaceAuthorityAvailable = vi.fn(() => true);
   const service = new ProjectLifecycleService({
-    projects, workspaces, reconcileUnreadWorkspaces: reconcile, onChanged, workspaceAuthorityAvailable,
+    projects, workspaces, reconcileUnreadWorkspaces: reconcile, onChanged,
     allowUnreadWorkspaces: (cwds) => { unread.allowWorkspaces(cwds); },
   });
-  return { service, projects, workspaces, unread, mutations, reconcile, onChanged, workspaceAuthorityAvailable };
+  return { service, projects, workspaces, unread, mutations, reconcile, onChanged };
 }
 
 function resolution(owner: Project, paths: string[]): WorkspaceProviderAuthorityResolution {

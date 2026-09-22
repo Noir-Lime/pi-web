@@ -6,8 +6,6 @@ import { canonicalizeStoredCwd } from "../workingDirectory.js";
 export interface CwdAttribution {
   projectId: string;
   workspaceId: string;
-  /** Canonical root, used by status sources scoped to an exact workspace cwd. */
-  workspacePath: string;
 }
 
 /**
@@ -143,7 +141,7 @@ function attributedWorkspacePath(workspace: WorkspaceListing): AttributedWorkspa
     depth: path.split(/[\\/]+/).filter((segment) => segment !== "").length,
     // A workspace carries its own project id, so a worktree outside the
     // project directory is still attributed to its project.
-    attribution: { projectId: workspace.projectId, workspaceId: workspace.id, workspacePath: path },
+    attribution: { projectId: workspace.projectId, workspaceId: workspace.id },
   };
 }
 

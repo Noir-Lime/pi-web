@@ -248,9 +248,8 @@ async function createSessionDaemonRuntime() {
     const providerContributions = serverPlugins.providerContributions();
     const providerPluginIds = providerContributions.map(({ pluginId }) => pluginId);
     const providerHealth = await serverPlugins.inspectHealth(providerPluginIds);
-    const eligibleProviders = eligibleWorkspaceProviderContributions(providerContributions, providerHealth);
     const workspaceProviders = new WorkspaceProviderRegistry({
-      contributions: eligibleProviders,
+      contributions: eligibleWorkspaceProviderContributions(providerContributions, providerHealth),
       logger: app.log,
     });
     const statusAttribution = new CachedWorkspaceAttribution({
@@ -271,11 +270,6 @@ async function createSessionDaemonRuntime() {
     const projectLifecycle: ProjectLifecycleService = new ProjectLifecycleService({
       projects,
       workspaces: workspaceProviders,
-      // Startup filtering can hide providers before per-project resolution has
-      // a chance to produce diagnostics. Never use that view to delete state.
-      workspaceAuthorityAvailable: () => serverPlugins.safeStartLevel() === undefined
-        && eligibleProviders.length === providerContributions.length
-        && serverPlugins.healthRecords().every(({ state }) => state === "active" || state === "disabled"),
       reconcileUnreadWorkspaces: (cwds): Promise<() => void> => sessions.reconcileUnreadWorkspaces(cwds),
       allowUnreadWorkspaces: (cwds) => { sessions.allowUnreadWorkspaces(cwds); },
       onChanged: () => {

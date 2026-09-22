@@ -4,8 +4,6 @@ import type { Project, WorkspaceProviderAuthorityResolution } from "../../shared
 interface ProjectLifecycleDependencies {
   projects: Pick<ProjectService, "list" | "add" | "close">;
   workspaces: { resolve(project: Project): Promise<WorkspaceProviderAuthorityResolution> };
-  /** False when startup health or safe-start filtering may hide providers. */
-  workspaceAuthorityAvailable(): boolean;
   /** Returns a rollback for transient eligibility if a subsequent registration write fails. */
   reconcileUnreadWorkspaces(cwds: Iterable<string>): Promise<() => void>;
   allowUnreadWorkspaces(cwds: Iterable<string>): void;
@@ -38,16 +36,12 @@ export class ProjectLifecycleService {
   add(input: Parameters<ProjectService["add"]>[0]): Promise<Project> {
     return this.serialized(async () => {
       // Prune legacy orphan state BEFORE admitting its cwd again.
-      const currentCwds = await this.currentWorkspaceCwds();
-      await this.dependencies.reconcileUnreadWorkspaces(currentCwds);
-      let nextCwds = currentCwds;
-      const project = await this.dependencies.projects.add(input, async (candidate) => {
-        // Validate the prospective provider before registration is written.
-        nextCwds = [...currentCwds, ...await this.workspaceCwds([candidate])];
-      });
-      // Additive eligibility has no durable state and cannot leave a committed
-      // registration half-added because of an unrelated unread flush failure.
-      this.dependencies.allowUnreadWorkspaces(nextCwds);
+      await this.dependencies.reconcileUnreadWorkspaces(await this.currentWorkspaceCwds());
+      const project = await this.dependencies.projects.add(input);
+      // The new root is immediately eligible. Additional workspaces are picked
+      // up by the normal workspace-list/catalog refresh, not a second admission
+      // phase that could fail after registration has already succeeded.
+      this.dependencies.allowUnreadWorkspaces([project.path]);
       this.dependencies.onChanged();
       return project;
     });
@@ -88,9 +82,6 @@ export class ProjectLifecycleService {
   }
 
   private async workspaceCwds(projects: readonly Project[]): Promise<string[]> {
-    if (projects.length > 0 && !this.dependencies.workspaceAuthorityAvailable()) {
-      throw new Error("Cannot reconcile project unread state while workspace providers are unavailable or safe-start is active");
-    }
     const resolutions = await Promise.all(projects.map((project) => this.dependencies.workspaces.resolve(project)));
     // Attribution's best-effort, cached listings are NOT deletion authority.
     // Even a fallback folder can hide worktrees after a provider probe failure.
