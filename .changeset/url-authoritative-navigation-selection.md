@@ -2,4 +2,4 @@
 "@jmfederico/pi-web": patch
 ---
 
-Commit machine, project, workspace, and session selections to the URL before asynchronous loading completes without clearing already-loaded workspace or session navigation during in-app selections.
+Keep the address bar and displayed machine, project, workspace, session, and tool aligned during overlapping navigation and loading. Preserve loaded lists when switching views, and prevent stale results, plugin failures, or session recovery from replacing a newer destination. Fix archive and history navigation from abbreviated session links, and preserve the selected session during cached-session recovery.

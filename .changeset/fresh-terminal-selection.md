@@ -2,4 +2,4 @@
 "@jmfederico/pi-web": patch
 ---
 
-Restore shell selection when opening Terminal immediately after switching projects, so existing shell tabs do not leave the input blank or the terminal ID missing from the URL.
+Keep Terminal shell selection and URLs correct when switching projects or workspaces, starting or closing shells, and reconnecting during overlapping loads. Prevent superseded Terminal navigation from starting an unwanted shell or overwriting a newer selection.

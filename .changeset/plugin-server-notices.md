@@ -2,4 +2,4 @@
 "@jmfederico/pi-web": patch
 ---
 
-Add a host-attributed server-plugin notice reporter with source identities that cannot collide with core notices and strict JSON context validation, and preserve workspace-removal failure notices through the bundled Terminal plugin.
+Let server plugins report project-, workspace-, and session-scoped notices with clear plugin attribution. Validate and limit retained plugin notices without displacing core notices, stop accepting reports after plugin shutdown, and preserve Terminal workspace-removal failure messages.
