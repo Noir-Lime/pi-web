@@ -108,6 +108,7 @@ function activationContext(runtimePluginId = "files"): PluginActivationContext {
 
 function createRuntimeContext(overrides: Partial<PluginRuntimeContext> = {}): PluginRuntimeContext {
   const context = {
+    navigate: () => Promise.resolve(),
     state: { selectedWorkspace: { id: "workspace-1", projectId: "project-1", path: "/repo", label: "main", isMain: true } },
     prompt: { insertText: vi.fn(), getText: vi.fn(() => ""), getSelection: vi.fn(() => null) },
     openActionPalette: vi.fn(),
@@ -133,6 +134,7 @@ function createRuntimeContext(overrides: Partial<PluginRuntimeContext> = {}): Pl
 
 function createWorkspaceContext(): WorkspacePanelContext {
   return {
+    navigate: () => Promise.resolve(),
     machine: { id: "local", name: "Local", kind: "local" },
     workspace: { id: "workspace-1", projectId: "project-1", path: "/repo", label: "main", isMain: true },
     files: {

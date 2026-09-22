@@ -501,6 +501,7 @@ function changedFile(path: string, patch: Record<string, JsonValue> = {}) {
 function panelContext(request: NonNullable<PluginPeer["request"]> | undefined, workspace = gitWorkspace, machineId = "local"): WorkspacePanelContext {
   const noop = () => undefined;
   return {
+    navigate: () => Promise.resolve(),
     machine: { id: machineId, name: machineId, kind: machineId === "local" ? "local" : "remote" },
     workspace,
     state: { selectedWorkspace: workspace, workspaceTool: "git:workspace.git", mainView: "workspace" },
@@ -521,6 +522,7 @@ function panelContext(request: NonNullable<PluginPeer["request"]> | undefined, w
 function runtimeContext(patch: Partial<PluginRuntimeContext> = {}): PluginRuntimeContext {
   const noop = () => undefined;
   return {
+    navigate: () => Promise.resolve(),
     state: { selectedWorkspace: gitWorkspace, workspaceTool: "git:workspace.git", mainView: "workspace" },
     prompt: { insertText: noop, getText: () => "", getSelection: () => null },
     openActionPalette: noop,
