@@ -17,7 +17,7 @@ it("focuses search, supports button navigation and traps Tab, then restores focu
   opener.focus();
   const dialog = new NavigationDialog();
   dialog.tabs = [{ id: "chat", label: "Chat" }, { id: "tools:files", label: "Files" }];
-  dialog.selectedView = "tools:files";
+  dialog.selectedTab = "tools:files";
   dialog.onClose = () => { dialog.remove(); };
   const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => undefined);
   document.body.append(dialog);
@@ -113,7 +113,7 @@ it("offers unpinned destinations and closes after navigating without modifying p
   const dialog = new NavigationDialog();
   dialog.tabs = [{ id: "chat", label: "Chat" }, { id: "tools:files", label: "Files" }];
   dialog.preferences = { pinnedIds: ["chat", "missing:tool"], mobileCollapsed: true };
-  dialog.selectedView = "tools:files";
+  dialog.selectedTab = "tools:files";
   dialog.onSelect = vi.fn();
   dialog.onClose = vi.fn();
   dialog.onPreferencesChange = vi.fn();

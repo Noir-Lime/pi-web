@@ -48,7 +48,7 @@ import { BrowserResumeController } from "../appShell/browserResumeController";
 import { NavigationSectionsController, type NavigationSection } from "../appShell/navigationState";
 import { PanelCollapseController, mainViewClass } from "../appShell/panelCollapseController";
 import { PanelResizeController, type PanelResizeConstraints, type ResizablePanelSide } from "../appShell/panelResizeController";
-import { isCreatingSessionId, readRoute, resolveAppRoute, resolveWorkspacePanelRouteValue, routeMatchesWorkspaceIdentity, writeRoute, type AppRoute, type ParsedAppRoute, type WorkspaceRouteIdentity } from "../route";
+import { isCreatingSessionId, parseMainView, readRoute, resolveAppRoute, routeMatchesWorkspaceIdentity, writeRoute, type AppRoute, type ParsedAppRoute, type WorkspaceRouteIdentity } from "../route";
 import { readSettingsSection, writeSettingsSection, type SettingsSection } from "../settingsRoute";
 import { applyActiveShortcutPreferences } from "../shortcutPreferences";
 import { loadNavigationPreferences, saveNavigationPreferences, pinnedNavigationTabs, type NavigationPreferences } from "../navigationPreferences";
@@ -112,7 +112,6 @@ interface WorkspaceRouteFinishOptions {
   unavailableToolRoute: boolean;
   unavailablePanelViewRoute: boolean;
   requestedTool: AppRoute["tool"];
-  requestedView: AppRoute["view"];
   restoredWorkspaceIdentity?: WorkspaceRouteIdentity | undefined;
   requestedRoute?: ParsedAppRoute | undefined;
   restoreSeq?: number | undefined;
@@ -429,8 +428,9 @@ export class PiWebApp extends LitElement {
       if (typeof document.hasFocus === "function" && !document.hasFocus()) return false;
     }
     if (this.isRenderedModalOpen()) return false;
-    if (this.state.mainView === "chat") return true;
-    if (this.state.mainView === "navigation") return !this.appShell.isMobileNavigationLayout;
+    const mainView = this.effectiveMainView();
+    if (mainView === "chat") return true;
+    if (mainView === "navigation") return !this.appShell.isMobileNavigationLayout;
     return this.isDesktopSideBySideLayout();
   }
 
@@ -519,7 +519,10 @@ export class PiWebApp extends LitElement {
   private async loadProjectsAndRestoreRoute() {
     this.restoreSettingsRoute();
     const route = readRoute();
-    await this.machines.loadMachines(route.machineId);
+    if (!await this.machines.loadMachines(route.machineId)) {
+      this.setContentError(route, this.state.error);
+      return;
+    }
     if (!this.routeLocationMatchesUrl(route)) {
       await this.projects.loadProjects();
       await this.withChatScrollTransition(async () => { await this.restoreRoute(false); });
@@ -650,7 +653,7 @@ export class PiWebApp extends LitElement {
 
   private async refreshCurrentWorkspaceSurface(): Promise<void> {
     const workspace = this.state.selectedWorkspace;
-    const tool = this.state.mainView !== "chat" && this.state.mainView !== "navigation" ? this.state.mainView : this.effectiveWorkspaceTool();
+    const tool = this.effectiveWorkspaceTool();
     if (workspace !== undefined && tool !== undefined) await this.invalidateWorkspacePanels(tool);
   }
 
@@ -700,6 +703,7 @@ export class PiWebApp extends LitElement {
     restoredMainView?: AppState["mainView"],
     urlPublication: WorkspaceRouteUrlPublication = "current-url",
   ) {
+    this.setContentError(parsedRoute, "");
     const machineBeforeRestore = selectedMachineId(this.state);
     const routeSurface = parsedRoute.projectId === undefined || parsedRoute.projectId === "" ? emptyWorkspaceRouteSurface() : surface;
     const navigation = this.beginNavigationOperation(ROUTE_RESTORE_SCOPE);
@@ -724,14 +728,18 @@ export class PiWebApp extends LitElement {
         this.workspaces.clearSelection({ updateUrl: false });
         if (error !== "") this.setState({ error });
         const machineId = parsedRoute.machineId ?? "local";
-        this.browserErrors.report(machineBrowserErrorScope(machineId), `Machine not found: ${machineId}`);
+        this.setContentError(parsedRoute, `Machine not found: ${machineId}`);
+        const scope = machineBrowserErrorScope(machineId);
+        if (this.state.browserErrors[browserErrorScopeKey(scope)] === undefined) {
+          this.browserErrors.report(scope, error || `Machine not found: ${machineId}`);
+        }
         return;
       }
       await this.loadPluginsForSelectedMachine();
       if (!selectionNavigation.isCurrent()) return;
       const route = resolveAppRoute(parsedRoute, (value) => this.plugins.resolveWorkspacePanelRouteId(value, selectedMachineId(this.state)));
       const unavailableToolRoute = parsedRoute.tool !== undefined && route.tool === undefined;
-      const unavailablePanelViewRoute = parsedRoute.view !== undefined && parsedRoute.view !== "chat" && route.view === undefined;
+      const unavailablePanelViewRoute = parsedRoute.view !== undefined && route.view === undefined;
       const restoredWorkspaceIdentity = workspaceRouteIdentity(route);
       const finishOptions: WorkspaceRouteFinishOptions = {
         updateUrl,
@@ -739,7 +747,6 @@ export class PiWebApp extends LitElement {
         unavailableToolRoute,
         unavailablePanelViewRoute,
         requestedTool: route.tool,
-        requestedView: route.view,
         requestedRoute: parsedRoute,
         restoreSeq,
         navigation,
@@ -749,8 +756,8 @@ export class PiWebApp extends LitElement {
       // hierarchy load needed by that same workspace/session destination.
       if (this.isCurrentRouteRestore(restoreSeq, navigation)) {
         this.setState({
-          workspaceTool: route.tool ?? this.state.workspaceTool,
-          mainView: this.resolveRestoredMainView(restoredMainView) ?? route.view ?? this.defaultRouteView(),
+          workspaceTool: route.tool,
+          mainView: restoredMainView ?? route.view ?? this.defaultRouteView(),
         });
       }
       if (route.projectId === undefined || route.projectId === "") {
@@ -773,6 +780,7 @@ export class PiWebApp extends LitElement {
         const error = this.state.error;
         this.workspaces.clearSelection({ updateUrl: false });
         if (error !== "") this.setState({ error });
+        this.setContentError(parsedRoute, this.projects.loadErrors.get(selectedMachineId(this.state)) ?? `Project not found: ${route.projectId}`);
         const scope = machineBrowserErrorScope(selectedMachineId(this.state));
         if (this.state.browserErrors[browserErrorScopeKey(scope)] === undefined) {
           this.browserErrors.report(scope, `Project not found: ${route.projectId}`);
@@ -794,13 +802,15 @@ export class PiWebApp extends LitElement {
       // Re-enter at the deepest loaded parent instead of blanking and relisting its
       // unchanged ancestors. Current-URL restores still validate through their
       // normal workspace and session listing requests.
+      let loadError: string | undefined;
       if (loadedSession !== undefined) {
         await this.sessions.selectSession(loadedSession, { updateUrl: false, navigation: selectionNavigation });
       } else if (loadedWorkspace !== undefined) {
-        await this.workspaces.selectWorkspace(loadedWorkspace, { sessionId: route.sessionId, updateUrl: false, navigation: selectionNavigation });
+        loadError = await this.workspaces.selectWorkspace(loadedWorkspace, { sessionId: route.sessionId, updateUrl: false, navigation: selectionNavigation });
       } else {
-        await this.workspaces.selectProject(project, { workspaceId: route.workspaceId, sessionId: route.sessionId, updateUrl: false, navigation: selectionNavigation });
+        loadError = await this.workspaces.selectProject(project, { workspaceId: route.workspaceId, sessionId: route.sessionId, updateUrl: false, navigation: selectionNavigation });
       }
+      if (selectionNavigation.isCurrent()) this.setContentError(parsedRoute, loadError ?? "");
       if (!this.isCurrentRouteRestore(restoreSeq, navigation)) return;
       await this.finishWorkspaceRouteRestore(routeSurface, finishOptions);
     } finally {
@@ -817,31 +827,26 @@ export class PiWebApp extends LitElement {
     const panels = this.visibleWorkspacePanels();
     const requestedToolUnavailable = options.requestedTool !== undefined
       && this.availableWorkspacePanelId(options.requestedTool, panels) === undefined;
-    const requestedPanelView = options.requestedView === "chat" ? undefined : options.requestedView;
-    const requestedViewUnavailable = requestedPanelView !== undefined
-      && this.availableWorkspacePanelId(requestedPanelView, panels) === undefined;
     const requestedWorkspaceUnavailable = options.requestedRoute?.workspaceId !== undefined
       && (this.state.selectedProject?.id !== options.requestedRoute.projectId
         || this.state.selectedWorkspace?.id !== options.requestedRoute.workspaceId);
     const requestedSessionUnavailable = options.requestedRoute?.sessionId !== undefined
       && !sessionMatchesRouteTarget(this.state.selectedSession?.id, options.requestedRoute.sessionId);
     const unavailablePanel = options.unavailableToolRoute || options.unavailablePanelViewRoute
-      || requestedToolUnavailable || requestedViewUnavailable;
-    if (unavailablePanel) {
+      || requestedToolUnavailable;
+    // Invalid destinations belong to panel content, not the notification history.
+    const panelLoadError = this.pluginLoadErrors.get(selectedMachineId(this.state));
+    if (unavailablePanel && panelLoadError !== undefined) {
       const workspace = this.state.selectedWorkspace;
       const scope = workspace === undefined
         ? machineBrowserErrorScope(selectedMachineId(this.state))
         : workspaceBrowserErrorScope(selectedMachineId(this.state), workspace.projectId, workspace.id);
-      const panel = options.unavailableToolRoute || requestedToolUnavailable
-        ? options.requestedRoute?.tool ?? options.requestedTool
-        : options.requestedRoute?.view ?? options.requestedView;
-      this.browserErrors.report(scope, `Workspace panel unavailable: ${panel ?? "unknown"}`);
-    }
-    if (options.unavailablePanelViewRoute || requestedViewUnavailable) {
-      const fallback = this.effectiveWorkspaceTool(panels);
-      if (fallback !== undefined) this.setState({ mainView: fallback });
+      if (this.state.browserErrors[browserErrorScopeKey(scope)] === undefined) {
+        this.browserErrors.report(scope, panelLoadError);
+      }
     }
     this.reconcileWorkspacePanelSelection();
+    if (options.unavailablePanelViewRoute) this.setState({ mainView: this.effectiveMainView() });
     const contributionQueryRestore = options.restoredWorkspaceIdentity === undefined
       ? undefined
       : { identity: options.restoredWorkspaceIdentity, query: surface.contributionQuery ?? {} };
@@ -1073,11 +1078,6 @@ export class PiWebApp extends LitElement {
     if (tool !== undefined) await this.invalidateWorkspacePanels(tool, contributionQueryRestore);
   }
 
-  private resolveRestoredMainView(view: AppState["mainView"] | undefined): AppState["mainView"] | undefined {
-    if (view === undefined || view === "chat" || view === "navigation") return view;
-    return resolveWorkspacePanelRouteValue(view, (value) => this.plugins.resolveWorkspacePanelRouteId(value, selectedMachineId(this.state)));
-  }
-
   private async withChatScrollTransition(action: () => Promise<void>, shouldComplete: () => boolean = () => true) {
     this.chatView?.saveScrollPosition();
     await action();
@@ -1305,18 +1305,18 @@ export class PiWebApp extends LitElement {
   ): void {
     const availableTool = this.availableWorkspacePanelId(tool);
     if (availableTool === undefined) return;
-    const selectionChanged = this.state.workspaceTool !== availableTool || this.state.mainView !== availableTool;
+    const selectionChanged = this.state.workspaceTool !== availableTool || this.state.mainView !== "workspace";
     if (selectionChanged && options.invalidateNavigationSelection !== false) this.invalidateNavigationSelection();
     const currentSnapshot = machineNavigationSnapshotFromState(this.state, contributionQuery);
     this.commitMachineNavigationSnapshot({
       ...currentSnapshot,
       tool: availableTool,
-      view: availableTool,
+      view: "workspace",
       surface: { contributionQuery },
     });
     if (selectionChanged) this.retireRouteRestoreForSynchronousNavigation();
     else this.routeRestoreSeq += 1;
-    if (selectionChanged) this.setState({ workspaceTool: availableTool, mainView: availableTool });
+    if (selectionChanged) this.setState({ workspaceTool: availableTool, mainView: "workspace" });
     this.refreshSelectedWorkspaceTool(availableTool);
   }
 
@@ -1351,7 +1351,7 @@ export class PiWebApp extends LitElement {
       workspaceId: workspace.id,
       sessionId: undefined,
       tool: navigation.contributionId,
-      view: navigation.contributionId,
+      view: "workspace",
       surface: { contributionQuery },
     };
 
@@ -1424,10 +1424,6 @@ export class PiWebApp extends LitElement {
   }
 
   private selectMainView(view: AppState["mainView"], options: { invalidateNavigationSelection?: boolean | undefined } = {}) {
-    if (view !== "navigation" && view !== "chat") {
-      this.openWorkspaceTool(view, options);
-      return;
-    }
     if (options.invalidateNavigationSelection !== false) this.invalidateNavigationSelection();
     const currentSnapshot = machineNavigationSnapshotFromState(this.state, this.currentContributionQueryForState());
     this.commitMachineNavigationSnapshot({ ...currentSnapshot, view });
@@ -1576,9 +1572,9 @@ export class PiWebApp extends LitElement {
     const state = this.state;
     return [
       state.selectedMachine, state.selectedWorkspace, state.selectedSession,
-      state.workspaceTool, state.mainView, state.piWebStatus,
+      state.workspaceTool, state.mainView, state.piWebStatus, this.appShell.isMobileNavigationLayout,
       state.selectedProject, state.projects, state.workspaces,
-      state.isLoadingProjects, state.isLoadingWorkspaces,
+      state.isLoadingProjects, state.isLoadingWorkspaces, this.workspaceContentError(),
       this.workspaceUploadDefaultFolder, this.workspaceSurfaceRevision,
       this.navigationPreferences, this.appShell.isMobileNavigationLayout, this.appShell.isDesktopSideBySideLayout,
       currentBrowserUrl(),
@@ -1596,6 +1592,7 @@ export class PiWebApp extends LitElement {
         .workspace=${workspace}
         .panelContext=${panelContext}
         .emptyState=${emptyState}
+        .error=${this.workspaceContentError()}
         .tool=${this.effectiveWorkspaceTool(panels)}
         .panels=${panels}
         .pinnedIds=${this.navigationPreferences.pinnedIds}
@@ -1940,7 +1937,7 @@ export class PiWebApp extends LitElement {
     const navigationSeq = this.navigationSelectionSeq;
     const isCurrent = () => navigationSeq === this.navigationSelectionSeq && shouldComplete();
     if (!isCurrent()) return;
-    if (this.state.mainView !== "chat") this.selectMainView("chat", { invalidateNavigationSelection: false });
+    if (this.effectiveMainView() !== "chat") this.selectMainView("chat", { invalidateNavigationSelection: false });
     await this.updateComplete;
     if (!isCurrent()) return;
     await nextFrame();
@@ -2012,26 +2009,42 @@ export class PiWebApp extends LitElement {
     return panels.find((panel) => panel.id === requested)?.id;
   }
 
-  private effectiveWorkspaceTool(panels = this.visibleWorkspacePanels()): QualifiedContributionId | undefined {
-    const mainView = this.state.mainView;
-    const requestedMainPanel = mainView === "chat" || mainView === "navigation" ? undefined : mainView;
-    return this.availableWorkspacePanelId(requestedMainPanel, panels)
-      ?? this.availableWorkspacePanelId(this.state.workspaceTool, panels)
-      ?? panels[0]?.id;
+  private unavailableRouteTool(panels = this.visibleWorkspacePanels()): string | undefined {
+    const route = readRoute();
+    if (route.tool === undefined) return undefined;
+    const tool = resolveAppRoute(route, (value) => this.plugins.resolveWorkspacePanelRouteId(value, selectedMachineId(this.state))).tool;
+    return this.availableWorkspacePanelId(tool, panels) === undefined ? route.tool : undefined;
   }
 
-  private effectiveMainView(panels = this.visibleWorkspacePanels()): AppState["mainView"] {
-    const mainView = this.state.mainView;
-    if (mainView === "chat" || mainView === "navigation") return mainView;
-    return this.effectiveWorkspaceTool(panels) ?? "chat";
+  private effectiveWorkspaceTool(panels = this.visibleWorkspacePanels()): QualifiedContributionId | undefined {
+    // A requested tool remains authoritative even while its plugin is unavailable.
+    // Never substitute a remembered/default tab for an explicitly invalid tool.
+    const route = readRoute();
+    if (route.tool !== undefined) {
+      return resolveAppRoute(route, (value) => this.plugins.resolveWorkspacePanelRouteId(value, selectedMachineId(this.state))).tool;
+    }
+    return this.state.workspaceTool ?? panels[0]?.id;
+  }
+
+  private unknownRouteView(): string | undefined {
+    const route = readRoute();
+    return route.view !== undefined
+      && parseMainView(route.view) === undefined
+      ? route.view : undefined;
+  }
+
+  private effectiveMainView(): AppState["mainView"] {
+    if (this.unknownRouteView() === undefined) return this.state.mainView;
+    if (this.appShell.isMobileNavigationLayout) return "navigation";
+    const route = readRoute();
+    return route.tool !== undefined && this.unavailableRouteTool() === undefined ? "workspace" : "chat";
   }
 
   private reconcileWorkspacePanelSelection(): boolean {
     const panels = this.visibleWorkspacePanels();
     const workspaceTool = this.effectiveWorkspaceTool(panels);
-    const mainView = this.effectiveMainView(panels);
-    if (workspaceTool === this.state.workspaceTool && mainView === this.state.mainView) return false;
-    this.setState({ workspaceTool, mainView });
+    if (workspaceTool === this.state.workspaceTool) return false;
+    this.setState({ workspaceTool });
     return true;
   }
 
@@ -2072,7 +2085,40 @@ export class PiWebApp extends LitElement {
     };
   }
 
+  private contentLoadOutcome: { destination: string; error: string } | undefined;
+
+  private contentDestination(route: ParsedAppRoute): string {
+    return JSON.stringify([route.machineId ?? "local", route.projectId, route.workspaceId, route.sessionId]);
+  }
+
+  private setContentError(route: ParsedAppRoute, error: string): void {
+    this.contentLoadOutcome = { destination: this.contentDestination(route), error };
+    this.requestUpdate();
+  }
+
+  private contentError(): string {
+    return this.contentLoadOutcome?.destination === this.contentDestination(readRoute()) ? this.contentLoadOutcome.error : "";
+  }
+
+  private readonly pluginLoadErrors = new Map<string, string>();
+
+  private workspaceContentError(): string {
+    if (this.state.selectedWorkspace === undefined) return this.contentError();
+    const route = readRoute();
+    const requested = route.tool;
+    const panel = requested === undefined ? this.effectiveWorkspaceTool()
+      : resolveAppRoute({ ...route, tool: requested }, (value) => this.plugins.resolveWorkspacePanelRouteId(value, selectedMachineId(this.state))).tool;
+    if ((requested !== undefined || panel !== undefined) && this.availableWorkspacePanelId(panel) === undefined) {
+      return this.pluginLoadErrors.get(selectedMachineId(this.state))
+        ?? this.requiredPluginFailureByMachine.get(selectedMachineId(this.state))
+        ?? `Workspace panel unavailable: ${requested ?? panel ?? "unknown"}`;
+    }
+    return "";
+  }
+
   private sessionEmptyMessage(): string {
+    const error = this.contentError();
+    if (error !== "") return error;
     if (this.state.isLoadingProjects) return "Loading projects…";
     if (this.state.selectedWorkspace !== undefined) return "Select or start a session.";
     if (this.state.selectedProject !== undefined) return "Select a workspace to start a session.";
@@ -2391,6 +2437,9 @@ export class PiWebApp extends LitElement {
         this.verifiedPluginModeByMachine.set(machineId, "recovery-disabled");
         this.clearRequiredPluginFailure(machineId);
       }
+      const loadErrors = result.failures.map((failure) => errorMessage(failure.error));
+      this.pluginLoadErrors.delete(machineId);
+      if (loadErrors.length > 0) this.pluginLoadErrors.set(machineId, loadErrors.join("\n"));
       let complete = result.failures.length === 0;
       for (const failure of result.failures) {
         console.warn(`Failed to load PI WEB plugin ${failure.entry.id} (${failure.entry.module})`, failure.error);
@@ -2469,6 +2518,8 @@ export class PiWebApp extends LitElement {
         for (const failure of ordinaryBatch.failures) {
           if (failure.phase === "import") continue;
           complete = false;
+          loadErrors.push(errorMessage(failure.error));
+          this.pluginLoadErrors.set(machineId, loadErrors.join("\n"));
           console.warn(`Failed to register PI WEB plugin ${failure.declaration.id} during ${failure.phase}`, failure.error);
         }
       }
@@ -2490,6 +2541,7 @@ export class PiWebApp extends LitElement {
       return complete;
     } catch (error) {
       console.warn(`Failed to load ${label}`, error);
+      this.pluginLoadErrors.set(machineId, errorMessage(error));
       this.verifiedPluginModeByMachine.delete(machineId);
       this.clearRequiredTerminal(machineId);
       this.reconcilePluginLoadSelection(urlAtLoad);
@@ -3318,7 +3370,7 @@ export class PiWebApp extends LitElement {
         .refreshControl=${this.appShell.shouldShowAppRefreshInContextBar() ? this.renderAppRefresh() : undefined}
         .onOpenSection=${this.handleOpenNavigationSection}
         .onShowNavigation=${this.navigationPreferences.mobileCollapsed ? this.showNavigation : undefined}
-        .hiddenActiveDestination=${this.availableNavigationTabs().some((tab) => tab.id === this.effectiveMainView())}
+        .hiddenActiveDestination=${this.availableNavigationTabs().some((tab) => tab.id === this.selectedNavigationTab())}
         .onShowActions=${this.navigationActions.showActions}
       ></app-context-bar>
     `;
@@ -3329,16 +3381,29 @@ export class PiWebApp extends LitElement {
     const panels = this.visibleWorkspacePanels();
     const availableTabs = this.availableNavigationTabs(panels);
     const pinnedTabs = pinnedNavigationTabs(availableTabs, this.navigationPreferences.pinnedIds);
-    const selectedView = this.effectiveMainView(panels);
+    const selectedTab = this.selectedNavigationTab(panels);
     return html`
       <app-mobile-main-tabs
         .tabs=${pinnedTabs}
-        .hiddenActiveDestination=${availableTabs.some((tab) => tab.id === selectedView) && !pinnedTabs.some((tab) => tab.id === selectedView)}
+        .hiddenActiveDestination=${availableTabs.some((tab) => tab.id === selectedTab) && !pinnedTabs.some((tab) => tab.id === selectedTab)}
         .onShowNavigation=${this.showNavigation}
-        .selectedView=${this.effectiveMainView(panels)}
-        .onSelect=${(view: AppState["mainView"]) => { this.selectMainView(view); }}
+        .selectedTab=${selectedTab}
+        .onSelect=${this.selectNavigationTab}
       ></app-mobile-main-tabs>
     `;
+  }
+
+  private readonly selectNavigationTab = (tab: AppMobileMainTab["id"]): void => {
+    if (tab === "navigation" || tab === "chat") this.selectMainView(tab);
+    else this.openWorkspaceTool(tab);
+  };
+
+  private selectedNavigationTab(panels = this.visibleWorkspacePanels()): AppMobileMainTab["id"] | undefined {
+    const mainView = this.effectiveMainView();
+    if (!this.appShell.isDesktopSideBySideLayout && mainView !== "workspace") return mainView;
+    // An unavailable destination displays an error, not a remembered/default tool.
+    if (this.workspaceContentError() !== "") return undefined;
+    return this.effectiveWorkspaceTool(panels);
   }
 
   private availableNavigationTabs(panels = this.visibleWorkspacePanels()): AppMobileMainTab[] {
@@ -3411,6 +3476,7 @@ export class PiWebApp extends LitElement {
         <main class=${mainViewClass(mainView)}>
           ${this.renderContextBar()}
           ${guard([...this.workspaceSurfaceInputs(), state.sessions, this.unreadSessionIds], () => this.renderMobileMainTabs())}
+          ${this.unknownRouteView() === undefined ? null : html`<div class="error warning" role="alert"><span class="error-text">Unknown view: ${this.unknownRouteView()}</span></div>`}
           ${this.renderServerNoticeBanners()}
           ${errorBanner(this.displayedError(), () => { this.dismissDisplayedError(); })}
           ${this.renderBrowserErrorBanners(state)}
@@ -3431,10 +3497,10 @@ export class PiWebApp extends LitElement {
         ${this.navigationDialogOpen ? html`<navigation-dialog
           .tabs=${this.availableNavigationTabs()}
           .pinUniverse=${this.mobileMainTabs().map((tab) => tab.id)}
-          .selectedView=${this.appShell.isDesktopSideBySideLayout ? this.effectiveWorkspaceTool() : mainView}
+          .selectedTab=${this.selectedNavigationTab()}
           .preferences=${this.navigationPreferences}
           .onPreferencesChange=${this.changeNavigationPreferences}
-          .onSelect=${(view: AppState["mainView"]) => { this.selectMainView(view); }}
+          .onSelect=${this.selectNavigationTab}
           .onClose=${this.closeNavigation}
         ></navigation-dialog>` : null}
         ${state.actionPaletteOpen ? html`<action-palette .actions=${this.getActions()} .onRun=${(action: AppAction) => { this.setState({ actionPaletteOpen: false }); this.runAction(action); }} .onCancel=${() => { this.setState({ actionPaletteOpen: false }); }}></action-palette>` : null}

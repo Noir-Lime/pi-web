@@ -86,7 +86,7 @@ describe("application rendering boundaries", () => {
       expect(app.shadowRoot?.querySelector("navigation-dialog")).toBe(dialog);
     };
     expect(destinations()).toEqual(["render-test:panel"]);
-    expect(dialog.selectedView).toBe("render-test:panel");
+    expect(dialog.selectedTab).toBe("render-test:panel");
     expect(dialog.shadowRoot?.querySelector('.destination-button[aria-pressed="true"]')?.textContent).toBe("Test");
     expect(tabIds()).not.toContain("Chat");
     expect(dialog.pinUniverse).toEqual(["navigation", "chat", "render-test:panel"]);
@@ -99,7 +99,7 @@ describe("application rendering boundaries", () => {
     ] as const) {
       await resize(next);
       expect(destinations()).toEqual(expected);
-      expect(dialog.selectedView).toBe(next > 1180 ? "render-test:panel" : "chat");
+      expect(dialog.selectedTab).toBe(next > 1180 ? "render-test:panel" : "chat");
       const labels: Record<string, string> = { navigation: "Sessions", chat: "Chat", "render-test:panel": "Test" };
       expect(tabIds()).toEqual(expected.map((id) => labels[id]));
       expect(loadNavigationPreferences().pinnedIds).toEqual([]);
@@ -147,6 +147,73 @@ describe("application rendering boundaries", () => {
     expect(menu?.classList.contains("selected")).toBe(selected);
   });
 
+  it.each([
+    { desktop: true, collapsed: false },
+    { desktop: false, collapsed: false },
+    { desktop: false, collapsed: true },
+  ])("does not select or highlight a fallback for unavailable destinations: %j", async ({ desktop, collapsed }) => {
+    saveNavigationPreferences({ pinnedIds: ["chat"], mobileCollapsed: collapsed });
+    const app = await mountApp({ selectedWorkspace: workspace, workspaces: [workspace], mainView: "workspace", workspaceTool: "render-test:panel" }, () => html`<p>Remembered content</p>`);
+    const shell: unknown = Reflect.get(app, "appShell");
+    if (!(shell instanceof AppShellController)) throw new Error("Expected shell controller");
+    shell.isDesktopSideBySideLayout = desktop;
+    shell.isMobileNavigationLayout = !desktop;
+    for (const tool of ["missing:panel", "unknown-alias"]) {
+      window.history.replaceState(null, "", `/?view=workspace&tool=${encodeURIComponent(tool)}`);
+      app.requestUpdate();
+      await settle(app);
+      const panel = app.shadowRoot?.querySelector("workspace-panel");
+      expect(panel?.shadowRoot?.textContent).toContain(`Workspace panel unavailable: ${tool}`);
+      expect(panel?.shadowRoot?.querySelector(".panel-content")).toBeNull();
+      const surface = app.shadowRoot?.querySelector(desktop ? "workspace-panel" : collapsed ? "app-context-bar" : "app-mobile-main-tabs");
+      const menu = surface?.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Navigation"]');
+      expect(menu).not.toBeNull();
+      expect(menu?.classList.contains("selected")).toBe(false);
+      expect(surface?.shadowRoot?.querySelector('button[aria-pressed="true"]')).toBeNull();
+      menu?.click();
+      await settle(app);
+      const dialog = app.shadowRoot?.querySelector<NavigationDialog>("navigation-dialog");
+      expect(dialog?.selectedTab).toBeUndefined();
+      expect(dialog?.shadowRoot?.querySelector('.destination-button[aria-pressed="true"]')).toBeNull();
+      dialog?.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Close"]')?.click();
+      await settle(app);
+      expect(new URLSearchParams(window.location.search).get("tool")).toBe(tool);
+    }
+  });
+
+  it.each(["chat", "workspace"] as const)("collapsed mobile navigation selects the visible destination, not the remembered tool: %s", async (mainView) => {
+    saveNavigationPreferences({ pinnedIds: ["chat"], mobileCollapsed: true });
+    const app = await mountApp({ selectedWorkspace: workspace, workspaces: [workspace], mainView, workspaceTool: "render-test:panel" }, () => html`<p>Tool content</p>`);
+    const shell: unknown = Reflect.get(app, "appShell");
+    if (!(shell instanceof AppShellController)) throw new Error("Expected shell controller");
+    shell.isDesktopSideBySideLayout = false;
+    shell.isMobileNavigationLayout = true;
+    app.requestUpdate();
+    await settle(app);
+    const menu = app.shadowRoot?.querySelector("app-context-bar")?.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Navigation"]');
+    expect(menu?.classList.contains("selected")).toBe(true);
+    menu?.click();
+    await settle(app);
+    const dialog = app.shadowRoot?.querySelector<NavigationDialog>("navigation-dialog");
+    expect(dialog?.selectedTab).toBe(mainView === "workspace" ? "render-test:panel" : "chat");
+    expect(dialog?.shadowRoot?.querySelector('.destination-button[aria-pressed="true"]')?.textContent).toBe(mainView === "workspace" ? "Test" : "Chat");
+  });
+
+  it("selects workspace tools from Navigation without confusing tool IDs with views", async () => {
+    const app = await mountApp({ selectedWorkspace: workspace, workspaces: [workspace], mainView: "chat" }, () => html`<p>Tool content</p>`);
+    await settle(app);
+    app.shadowRoot?.querySelector("workspace-panel")?.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Navigation"]')?.click();
+    await settle(app);
+    const dialog = app.shadowRoot?.querySelector<NavigationDialog>("navigation-dialog");
+    const tool = [...dialog?.shadowRoot?.querySelectorAll<HTMLButtonElement>(".destination-button") ?? []].find((button) => button.textContent === "Test");
+    expect(tool).toBeDefined();
+    tool?.click();
+    await settle(app);
+    expect(Reflect.get(app, "state")).toMatchObject({ mainView: "workspace", workspaceTool: "render-test:panel" });
+    expect(new URLSearchParams(window.location.search).get("tool")).toBe("render-test:panel");
+    expect(app.shadowRoot?.querySelector("navigation-dialog")).toBeNull();
+  });
+
   it("opens Navigation through Actions and restores the pre-palette focus on Escape", async () => {
     const originalFocus = document.createElement("button");
     document.body.append(originalFocus);
@@ -172,7 +239,7 @@ describe("application rendering boundaries", () => {
     expect(deepActiveElement(document)).toBe(originalFocus);
   });
   it("updates both tab surfaces from pin controls without changing selected content, and reloads preferences", async () => {
-    const app = await mountApp({ selectedWorkspace: workspace, workspaces: [workspace], workspaceTool: "render-test:panel", mainView: "render-test:panel" }, () => html`<p>Selected tool content</p>`);
+    const app = await mountApp({ selectedWorkspace: workspace, workspaces: [workspace], workspaceTool: "render-test:panel", mainView: "workspace" }, () => html`<p>Selected tool content</p>`);
     await settle(app);
     const workspacePanel = app.shadowRoot?.querySelector("workspace-panel");
     const open = workspacePanel?.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Navigation"]');
