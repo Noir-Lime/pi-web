@@ -5043,6 +5043,12 @@ function toClientEvent(event: unknown, thinkingLevel?: string): SessionUiEvent {
     const result = getProperty(event, "result");
     return { type: "tool.end", toolName: getString(event, "toolName") ?? "", toolCallId: getString(event, "toolCallId") ?? "", text: stringifyToolResult(result), content: toolResultContent(result), details: toolResultDetails(result), isError: getBoolean(event, "isError") === true };
   }
+  if (eventType === "entry_appended") {
+    // Boundary drafts do not emit message_end. Use the same raw-history
+    // projection as reconnects: context edits must not rewrite the transcript.
+    const [message] = historyMessagesFromEntries([getProperty(event, "entry")]);
+    if (message !== undefined) return { type: "message.append", message };
+  }
   if (eventType === "agent_start") return { type: "agent.start" };
   if (eventType === "agent_end") return { type: "agent.end" };
   if (eventType === "message_end") {
