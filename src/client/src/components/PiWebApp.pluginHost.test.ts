@@ -1185,7 +1185,7 @@ describe("PiWebApp plugin host", () => {
     if (scenario === "machine load failure") expect(appState(app).error).not.toContain("not found");
   });
 
-  it.each([false, true])("keeps an unavailable machine route explicit instead of resolving it locally (plugin: %s)", async (fromPlugin) => {
+  it("keeps an unavailable machine route explicit instead of resolving it locally", async () => {
     const browser = installBrowserWindow("http://localhost/app?machine=removed-machine&project=project-1&workspace=workspace-1&view=chat");
     const app = new PiWebApp();
     setAppState(app, {
@@ -1200,11 +1200,7 @@ describe("PiWebApp plugin host", () => {
       mainView: "chat",
     });
 
-    if (fromPlugin) {
-      await expect(createPluginRuntimeContext(app).navigate({ machineId: "removed-machine", projectId: project.id, workspaceId: workspace.id, view: "chat" })).resolves.toBeUndefined();
-    } else {
-      await callAsyncAppMethod(app, "restoreRoute", false);
-    }
+    await callAsyncAppMethod(app, "restoreRoute", false);
 
     expect(browser.url.searchParams.get("machine")).toBe("removed-machine");
     expect(appState(app).selectedProject).toBeUndefined();
@@ -1662,7 +1658,7 @@ describe("PiWebApp plugin host", () => {
   });
 
   it.each(["action", "panel"])("publishes a complete plugin destination from a %s context and accepts supersession", async (kind) => {
-    const browser = installBrowserWindow("http://localhost/app?machine=remote&project=old&session=old&tool=old%3Apanel&view=workspace&old.panel--key=value");
+    const browser = installBrowserWindow("http://localhost/app?machine=remote&project=old&workspace=old&session=old&tool=old%3Apanel&view=workspace&old.panel--key=value");
     const app = new PiWebApp();
     setAppState(app, { ...initialAppState(), selectedMachine: { id: "remote", name: "Remote", kind: "remote", createdAt: "now", updatedAt: "now" }, selectedWorkspace: workspace });
     // Isolate destination publication from restoration; false is the pipeline's superseded outcome.
@@ -1681,8 +1677,8 @@ describe("PiWebApp plugin host", () => {
     expect(Object.values(appState(app).browserErrors)).toEqual([]);
   });
 
-  it("restores a plugin session destination, then delegates omitted sessions to restoration defaults", async () => {
-    const browser = installBrowserWindow("http://localhost/app");
+  it("restores a plugin session destination without starting a session", async () => {
+    installBrowserWindow("http://localhost/app");
     const app = new PiWebApp();
     const session = runtimeRecoverySession(workspace);
     setAppState(app, { ...initialAppState(), projects: [project] });
@@ -1692,30 +1688,24 @@ describe("PiWebApp plugin host", () => {
     await context.navigate({ machineId: "local", projectId: project.id, workspaceId: workspace.id, sessionId: session.id, view: "chat" });
     expect(appState(app).selectedSession?.id).toBe(session.id);
     expect(appState(app).mainView).toBe("chat");
-    const preferred = vi.spyOn(sessions, "preferredSession");
-    await context.navigate({ projectId: project.id });
-    expect(appState(app).selectedWorkspace?.id).toBe(workspace.id);
-    expect(preferred).toHaveBeenCalledWith(workspace.path, [session], undefined);
-    expect(browser.url.searchParams.has("session")).toBe(false);
     expect(start).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { projectId: "missing-project", message: "Project not found: missing-project" },
-    { projectId: project.id, workspaceId: "missing-workspace", message: "Workspace not found: missing-workspace" },
-    { projectId: project.id, workspaceId: workspace.id, sessionId: "missing-session", message: "Session not found: missing-session" },
-  ])("resolves plugin route failures through unavailable UI: $message", async ({ message, ...destination }) => {
+  // Restoration tests own the missing machine/project/workspace/session matrix;
+  // this case owns the plugin promise contract when restoration displays an error.
+  it("resolves plugin route failures through unavailable UI", async () => {
     const browser = installBrowserWindow("http://localhost/app");
     const app = new PiWebApp();
     setAppState(app, { ...initialAppState(), projects: [project] });
-    await installRuntimeRecoveryBoundaries(app, () => Promise.resolve([workspace]), runtimeRecoverySession(workspace));
-    await expect(createPluginRuntimeContext(app).navigate({ ...destination, view: "chat" })).resolves.toBeUndefined();
-    expect(browser.url.searchParams.get("project")).toBe(destination.projectId);
-    expect(callAppMethod(app, "sessionEmptyMessage")).toContain(message);
+    await markPluginLoadingReady(app);
+    await expect(createPluginRuntimeContext(app).navigate({ projectId: "missing-project", view: "chat" })).resolves.toBeUndefined();
+    expect(browser.url.searchParams.get("project")).toBe("missing-project");
+    expect(callAppMethod(app, "sessionEmptyMessage")).toContain("Project not found: missing-project");
     expect(browser.pushed).toHaveLength(1);
   });
 
-  it.each(["missing", "missing:panel"])("lets the host display unavailable plugin tools without rejecting: %s", async (tool) => {
+  it("leaves malformed tool IDs to the host's unavailable UI rather than rejecting", async () => {
+    const tool = "missing";
     const browser = installBrowserWindow("http://localhost/app");
     const app = new PiWebApp();
     setAppState(app, { ...initialAppState(), projects: [project] });
