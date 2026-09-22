@@ -34,6 +34,7 @@ export interface InstalledNativeServiceDefinitionDependencies {
   readFile: (path: string) => Uint8Array;
   realpath: (path: string) => string;
   capture: (command: string, args: string[]) => InstalledNativeServiceDefinitionCommandResult;
+  warn: (message: string) => void;
 }
 
 const systemdInspectionProperties = [
@@ -55,9 +56,10 @@ type SystemdInspectionProperty = typeof systemdInspectionProperties[number];
 /**
  * Read installed definitions through a strict UTF-8 boundary, parse the
  * manager-relevant environment, and then bind that byte snapshot to the
- * service manager's effective context. Systemd must report the canonical
- * fragment and the same effective values for PI WEB-managed environment
- * keys; unrelated environment inputs are outside this assertion. Legacy
+ * service manager's loaded context. Systemd must report the canonical
+ * fragment and matching Environment values for PI WEB-managed keys.
+ * EnvironmentFile inputs are accepted with a warning, not verified;
+ * unrelated environment values are outside this assertion. Legacy
  * systemctl output is recovered losslessly from the manager's D-Bus property.
  * A loaded LaunchAgent must report the canonical
  * plist and the same PI_WEB_CONFIG. Launchd restart is the exception: its existing
@@ -176,10 +178,9 @@ function inspectEffectiveSystemdDefinition(
     };
   }
   // Drop-ins (including package-owned global ones such as Fedora's
-  // service.d/10-timeout-abort.conf) are tolerated. The Environment property
-  // is the drop-in-merged effective value, and only PI WEB-managed keys are
-  // verified below. EnvironmentFile sources are not inspected separately;
-  // their managed values must still appear in that effective property.
+  // service.d/10-timeout-abort.conf) are tolerated. Environment contains merged
+  // Environment= assignments, NOT EnvironmentFile contents. Those files are
+  // read at execution time and can override even matching managed values.
   let actualFragmentPath: string;
   let expectedFragmentPath: string;
   try {
@@ -213,6 +214,12 @@ function inspectEffectiveSystemdDefinition(
       ok: false,
       message: `Systemd unit ${source.systemdName} has an effective environment that differs from installed definition ${source.path}; run \`systemctl --user daemon-reload\` or reinstall the managed services before probing it.`,
     };
+  }
+  const environmentFiles = parsed.value.properties.get("EnvironmentFiles") ?? [];
+  if (environmentFiles.some((value) => value !== "")) {
+    dependencies.warn(
+      `Systemd unit ${source.systemdName} uses EnvironmentFile. PI WEB cannot verify whether it overrides PI_WEB_CONFIG; checks use the config path from the installed service definition unless explicitly overridden for this command.`,
+    );
   }
   return { ok: true, value: null };
 }

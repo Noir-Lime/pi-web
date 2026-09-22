@@ -135,6 +135,7 @@ function dependencies(
     readFile: vi.fn(() => contents),
     realpath: vi.fn((path: string) => path),
     capture: vi.fn(() => captured),
+    warn: vi.fn(),
   };
 }
 
@@ -291,48 +292,66 @@ describe("installed native-service definition boundary", () => {
     expect(result).toEqual({ ok: true, value: [{ id: "web", contents }] });
   });
 
-  it("accepts a managed value established through an EnvironmentFile", () => {
-    const contents = systemdDefinition("/managed/config.json");
-    const result = inspectInstalledNativeServiceDefinitions(
-      { kind: "systemd", label: "systemd" },
-      [source],
-      dependencies(
-        new TextEncoder().encode(contents),
-        {
-          status: 0,
-          stdout: managerOutput({
-            EnvironmentFiles: "/home/user/.config/pi-web/service.env",
-            Environment: "PI_WEB_CONFIG=/managed/config.json FILE_FLAG=enabled",
-          }),
-          stderr: "",
-        },
-      ),
-      "start",
-    );
+  describe.each(["start", "restart", "doctor"] as const)("%s EnvironmentFile inspection", (purpose) => {
+    it.each([undefined, "/managed/config.json"])("warns without rejecting config %s", (configPath) => {
+      const contents = systemdDefinition(configPath);
+      const deps = dependencies(new TextEncoder().encode(contents), {
+        status: 0,
+        // Real systemd reports only Environment= assignments here. File values
+        // (including a conflicting PI_WEB_CONFIG) are absent from this property.
+        stdout: managerOutput({
+          EnvironmentFiles: "/home/user/.config/pi-web/service.env (ignore_errors=no)",
+          Environment: configPath === undefined ? "PATH=/custom/bin" : `PI_WEB_CONFIG=${configPath}`,
+        }),
+        stderr: "",
+      });
 
-    expect(result).toEqual({ ok: true, value: [{ id: "web", contents }] });
+      const result = inspectInstalledNativeServiceDefinitions(
+        { kind: "systemd", label: "systemd" }, [source], deps, purpose,
+      );
+
+      expect(result).toEqual({ ok: true, value: [{ id: "web", contents }] });
+      expect(deps.warn).toHaveBeenCalledExactlyOnceWith(
+        "Systemd unit pi-web-web.service uses EnvironmentFile. PI WEB cannot verify whether it overrides PI_WEB_CONFIG; checks use the config path from the installed service definition unless explicitly overridden for this command.",
+      );
+      expect(deps.readFile).toHaveBeenCalledExactlyOnceWith(servicePath);
+    });
   });
 
-  it("accepts unrelated effective values when the installed service uses the default config", () => {
-    const contents = systemdDefinition();
+  it.each([undefined, ""])("does not warn when EnvironmentFiles is %s", (environmentFiles) => {
+    const deps = dependencies(new TextEncoder().encode(systemdDefinition()), {
+      status: 0,
+      stdout: managerOutput({
+        ...(environmentFiles === undefined ? {} : { EnvironmentFiles: environmentFiles }),
+        Environment: "USER_FLAG=enabled",
+      }),
+      stderr: "",
+    });
+
+    expect(inspectInstalledNativeServiceDefinitions(
+      { kind: "systemd", label: "systemd" }, [source], deps, "doctor",
+    ).ok).toBe(true);
+    expect(deps.warn).not.toHaveBeenCalled();
+  });
+
+  it("still rejects a directly configured managed mismatch when an EnvironmentFile is present", () => {
+    const deps = dependencies(new TextEncoder().encode(systemdDefinition("/managed/config.json")), {
+      status: 0,
+      stdout: managerOutput({
+        EnvironmentFiles: "/home/user/.config/pi-web/service.env (ignore_errors=yes)",
+        Environment: "PI_WEB_CONFIG=/other/config.json",
+      }),
+      stderr: "",
+    });
+
     const result = inspectInstalledNativeServiceDefinitions(
-      { kind: "systemd", label: "systemd" },
-      [source],
-      dependencies(
-        new TextEncoder().encode(contents),
-        {
-          status: 0,
-          stdout: managerOutput({
-            EnvironmentFiles: "/home/user/.config/pi-web/service.env",
-            Environment: "PATH=/custom/bin FILE_FLAG=enabled",
-          }),
-          stderr: "",
-        },
-      ),
-      "restart",
+      { kind: "systemd", label: "systemd" }, [source], deps, "doctor",
     );
 
-    expect(result).toEqual({ ok: true, value: [{ id: "web", contents }] });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected managed environment mismatch to fail");
+    expect(result.message).toContain("differs");
+    expect(deps.warn).not.toHaveBeenCalled();
   });
 
   it.each([
