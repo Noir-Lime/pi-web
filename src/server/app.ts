@@ -67,23 +67,6 @@ interface LocalProjectRouteOptions {
 function registerLocalProjectRoutes(app: FastifyInstance, projects: ProjectService, workspaces: WorkspaceCatalog, prefix: string, options: LocalProjectRouteOptions = {}): void {
   app.get(`${prefix}/projects`, async () => projects.list());
 
-  app.post<{ Body: { name?: string; path: string; create?: boolean } }>(`${prefix}/projects`, async (request, reply) => {
-    try {
-      return await projects.add(request.body);
-    } catch (error) {
-      return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
-    }
-  });
-
-  app.delete<{ Params: { projectId: string } }>(`${prefix}/projects/:projectId`, async (request, reply) => {
-    try {
-      await projects.close(request.params.projectId);
-      return { closed: true };
-    } catch (error) {
-      return reply.code(404).send({ error: error instanceof Error ? error.message : String(error) });
-    }
-  });
-
   app.get<{ Querystring: { q?: string } }>(`${prefix}/project-directories`, async (request, reply) => {
     try {
       return await listDirectorySuggestions(request.query.q ?? "");

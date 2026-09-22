@@ -48,11 +48,14 @@ export class ProjectStore {
     return (await this.read()).projects;
   }
 
-  async add(input: { name?: string; path: string }): Promise<Project> {
+  async add(input: { name?: string; path: string }, beforeRegister?: (project: Project) => Promise<void>): Promise<Project> {
     const data = await this.read();
     const path = input.path;
     const existing = data.projects.find((p) => p.path === path);
-    if (existing) return existing;
+    if (existing) {
+      await beforeRegister?.(existing);
+      return existing;
+    }
 
     const trimmedName = input.name?.trim();
     const leafName = path.split("/").filter((part) => part !== "").at(-1);
@@ -62,6 +65,7 @@ export class ProjectStore {
       path,
       createdAt: new Date().toISOString(),
     };
+    await beforeRegister?.(project);
     data.projects.push(project);
     await this.write(data);
     return project;

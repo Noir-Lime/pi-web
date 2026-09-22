@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { piWebDataDir } from "../../config.js";
 import {
   SESSION_UNREAD_CATALOG_ID_MAX_LENGTH,
@@ -71,6 +71,7 @@ export class SessionUnreadStore {
   private readonly unreadByIdentity = new Map<string, SessionUnreadSummary>();
   private readonly activeByIdentity = new Map<string, SessionUnreadIdentity>();
   private readonly excludedByIdentity = new Map<string, SessionUnreadIdentity>();
+  private allowedWorkspaceCwds: Set<string> | undefined;
   private catalogId: string;
   private catalogRevision = 0;
   private nextCompletionOrder = 0;
@@ -117,7 +118,8 @@ export class SessionUnreadStore {
     this.requireLoaded();
     const identity = requireIdentity(sessionId, cwd);
     const key = sessionIdentityKey(identity);
-    if (this.excludedByIdentity.has(key)) {
+    if (this.excludedByIdentity.has(key)
+      || (this.allowedWorkspaceCwds !== undefined && !this.allowedWorkspaceCwds.has(resolve(cwd)))) {
       this.activeByIdentity.delete(key);
       return [];
     }
@@ -211,6 +213,47 @@ export class SessionUnreadStore {
     this.unreadByIdentity.delete(key);
     const mutations = [this.mutation(identity, null)];
     this.schedulePersist();
+    return mutations;
+  }
+
+  /** Capture only transient eligibility; already-cleared unread is not resurrected on rollback. */
+  captureWorkspaceEligibility(): () => void {
+    this.requireLoaded();
+    const previous = this.allowedWorkspaceCwds;
+    return () => { this.allowedWorkspaceCwds = previous; };
+  }
+
+  /** Admission is additive and has no durable state to flush. */
+  allowWorkspaces(cwds: Iterable<string>): void {
+    this.requireLoaded();
+    const added = [...cwds].map((cwd) => resolve(requireBoundedNonEmptyString(cwd, "cwd", SESSION_UNREAD_CWD_MAX_LENGTH)));
+    if (this.allowedWorkspaceCwds !== undefined) {
+      this.allowedWorkspaceCwds = new Set([...this.allowedWorkspaceCwds, ...added]);
+    }
+  }
+
+  /** Retain exact canonical workspace members without changing session identity spelling. */
+  reconcileWorkspaces(cwds: Iterable<string>): SessionUnreadMutation[] {
+    this.requireLoaded();
+    const retained = new Set([...cwds].map((cwd) => resolve(
+      requireBoundedNonEmptyString(cwd, "cwd", SESSION_UNREAD_CWD_MAX_LENGTH),
+    )));
+    const removed = [...this.unreadByIdentity.entries()]
+      .filter(([, summary]) => !retained.has(resolve(summary.cwd)));
+    this.assertRevisionCapacity(removed.length);
+
+    this.allowedWorkspaceCwds = retained;
+    for (const [key, identity] of this.activeByIdentity) {
+      if (!retained.has(resolve(identity.cwd))) this.activeByIdentity.delete(key);
+    }
+    // Sub-session exclusions outlive workspace eligibility; only explicit
+    // identity lifecycle cleanup should allow those sessions to track again.
+    const mutations: SessionUnreadMutation[] = [];
+    for (const [key, summary] of removed) {
+      this.unreadByIdentity.delete(key);
+      mutations.push(this.mutation(summary, null));
+    }
+    if (mutations.length > 0) this.schedulePersist();
     return mutations;
   }
 

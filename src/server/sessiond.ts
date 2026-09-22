@@ -23,6 +23,8 @@ import { SessionArchiveStore, defaultSessionArchiveFilePath } from "./sessions/s
 import { FileSessionUnreadPersistence, SessionUnreadStore, defaultSessionUnreadFilePath } from "./sessions/sessionUnreadStore.js";
 import { ProjectScopedSpawnTargetResolver } from "./sessions/spawnTargetResolver.js";
 import { ProjectService } from "./projects/projectService.js";
+import { ProjectLifecycleService } from "./projects/projectLifecycleService.js";
+import { registerProjectMutationRoutes } from "./sessiond/projectMutationRoutes.js";
 import { ProjectStore, projectStorePath } from "./storage/projectStore.js";
 import {
   eligibleWorkspaceProviderContributions,
@@ -246,8 +248,9 @@ async function createSessionDaemonRuntime() {
     const providerContributions = serverPlugins.providerContributions();
     const providerPluginIds = providerContributions.map(({ pluginId }) => pluginId);
     const providerHealth = await serverPlugins.inspectHealth(providerPluginIds);
+    const eligibleProviders = eligibleWorkspaceProviderContributions(providerContributions, providerHealth);
     const workspaceProviders = new WorkspaceProviderRegistry({
-      contributions: eligibleWorkspaceProviderContributions(providerContributions, providerHealth),
+      contributions: eligibleProviders,
       logger: app.log,
     });
     const statusAttribution = new CachedWorkspaceAttribution({
@@ -265,6 +268,30 @@ async function createSessionDaemonRuntime() {
     // Every global subscriber is handed the current projection on connect, so a
     // browser never has to reconcile a snapshot fetch against live frames.
     eventHub.setGlobalJoinFrame(() => ({ type: "machine.status", status: machineStatus.snapshot() }));
+    const projectLifecycle: ProjectLifecycleService = new ProjectLifecycleService({
+      projects,
+      workspaces: workspaceProviders,
+      // Startup filtering can hide providers before per-project resolution has
+      // a chance to produce diagnostics. Never use that view to delete state.
+      workspaceAuthorityAvailable: () => serverPlugins.safeStartLevel() === undefined
+        && eligibleProviders.length === providerContributions.length
+        && serverPlugins.healthRecords().every(({ state }) => state === "active" || state === "disabled"),
+      reconcileUnreadWorkspaces: (cwds): Promise<() => void> => sessions.reconcileUnreadWorkspaces(cwds),
+      allowUnreadWorkspaces: (cwds) => { sessions.allowUnreadWorkspaces(cwds); },
+      onChanged: () => {
+        statusAttribution.invalidate();
+        machineStatus.notifyChanged();
+      },
+    });
+    const refreshProjectUnread = async (): Promise<void> => {
+      try {
+        await projectLifecycle.refresh();
+      } catch (error) {
+        // An unavailable provider is not evidence that its workspaces were
+        // removed. Keep the catalog and retry on the next catalog/topology read.
+        app.log.warn({ err: error }, "project unread state could not be reconciled");
+      }
+    };
     const projectWorkspaceDeps = { projects, workspaces: workspaceProviders };
     const spawnTargets = config.spawnSessions ? new ProjectScopedSpawnTargetResolver(projectWorkspaceDeps) : undefined;
     const sessions = new PiSessionService(eventHub, sessionServiceDependencies({
@@ -297,6 +324,7 @@ async function createSessionDaemonRuntime() {
       notificationStore,
       unreadStore,
       onUnreadChanged: () => { machineStatus.notifyChanged(); },
+      refreshUnreadWorkspaces: () => projectLifecycle.refresh(),
       catalogRefreshStatus: catalogRefresher,
       sessionManager: createPiSessionManagerGateway({
         agentDir: activeAgentProfile.dir,
@@ -330,11 +358,10 @@ async function createSessionDaemonRuntime() {
       serverPlugins.safeStartLevel(),
       serverPlugins.catalogDiagnostics(),
     );
-    // Unread state was loaded from disk above, so the projection is computed
-    // once at startup instead of waiting for the first change. It is not
-    // awaited: resolving it lists workspaces through provider plugins, and
-    // daemon startup must not depend on how long that takes.
-    machineStatus.notifyChanged();
+    // Reconcile legacy persisted orphans before the initial projection. Provider
+    // resolution must not prevent the daemon from starting; failed cleanup is
+    // logged and retried on catalog reads and topology changes.
+    void refreshProjectUnread().then(() => { machineStatus.notifyChanged(); });
     const terminals = serverPlugins.safeStartLevel() === "none"
       ? unavailableRequiredTerminalService()
       : serverPlugins.resolve(REQUIRED_TERMINAL_SERVICE_CAPABILITY);
@@ -358,7 +385,10 @@ async function createSessionDaemonRuntime() {
       await runSessionDaemonShutdown({
         logger: app.log,
         dependencies: {
-          quiesceServer: () => { serverQuiescing = true; },
+          quiesceServer: async () => {
+            serverQuiescing = true;
+            await projectLifecycle.closeAll();
+          },
           serverPlugins,
           catalogRefresher,
           auth,
@@ -376,7 +406,7 @@ async function createSessionDaemonRuntime() {
       // next start discards it.
       await stateOwnership.release();
     };
-    return { eventHub, machineStatus, statusAttribution, auth, sessions, serverNotices, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, projects, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals, shutdown };
+    return { eventHub, machineStatus, statusAttribution, projectLifecycle, refreshProjectUnread, auth, sessions, serverNotices, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, projects, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals, shutdown };
   } catch (error) {
     try {
       await serverPlugins.stop();
@@ -392,7 +422,8 @@ async function createSessionDaemonRuntime() {
   }
 }
 
-function registerSessionDaemonRoutes({ eventHub, machineStatus, statusAttribution, auth, sessions, serverNotices, runtimeComponent, projects, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals }: SessionDaemonRuntime): void {
+function registerSessionDaemonRoutes({ eventHub, machineStatus, statusAttribution, projectLifecycle, refreshProjectUnread, auth, sessions, serverNotices, runtimeComponent, projects, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals }: SessionDaemonRuntime): void {
+  registerProjectMutationRoutes(app, projectLifecycle);
   registerMachineStatusRoutes(app, machineStatus);
   registerServerNoticeRoutes(app, serverNotices);
   registerAuthRoutes(app, auth);
@@ -401,17 +432,24 @@ function registerSessionDaemonRoutes({ eventHub, machineStatus, statusAttributio
     projects,
     workspaces: workspaceProviders,
     providerRuntime: workspaceProviderRuntime,
+    onWorkspacesListed: refreshProjectUnread,
   });
   registerPairedPluginBackendRoutes(app, {
     projects,
     backends: pluginBackends,
-    onWorkspacesMutated: () => { statusAttribution.invalidate(); },
+    onWorkspacesMutated: () => {
+      statusAttribution.invalidate();
+      void refreshProjectUnread();
+    },
   });
   registerPluginBackendChannelRoutes(app, { projects, backends: pluginBackends });
   registerWorkspaceRemovalRoutes(app, {
     projects,
     removals: workspaceRemovals,
-    onWorkspacesMutated: () => { statusAttribution.invalidate(); },
+    onWorkspacesMutated: () => {
+      statusAttribution.invalidate();
+      void refreshProjectUnread();
+    },
   });
 
   app.get("/health", () => ({

@@ -24,6 +24,7 @@ function daemonCollaborators(patch: Partial<SessionServiceDependencyInput> = {})
     notificationStore: new SessionNotificationStore(),
     unreadStore: new SessionUnreadStore(),
     onUnreadChanged: () => { /* no-op */ },
+    refreshUnreadWorkspaces: () => Promise.resolve(),
     catalogRefreshStatus: { isRefreshInFlight: () => false },
     config: { read: () => Promise.reject(new Error("config read not expected in this test")) },
     subsessionsEnabled: false,

@@ -19,6 +19,7 @@ export interface SessionServiceDependencyInput {
   unreadStore: NonNullable<PiSessionServiceDependencies["unreadStore"]>;
   /** Notifies the machine status projection that unread state changed. */
   onUnreadChanged: NonNullable<PiSessionServiceDependencies["onUnreadChanged"]>;
+  refreshUnreadWorkspaces: NonNullable<PiSessionServiceDependencies["refreshUnreadWorkspaces"]>;
   /** Read-only view of the background refresher; see the assembly below. */
   catalogRefreshStatus: NonNullable<PiSessionServiceDependencies["catalogRefreshStatus"]>;
   /** Live global config reader for request-time workspace-effective defaults (e.g. the attachments save folder). */
@@ -62,6 +63,7 @@ export function sessionServiceDependencies(input: SessionServiceDependencyInput)
     notificationStore: input.notificationStore,
     unreadStore: input.unreadStore,
     onUnreadChanged: input.onUnreadChanged,
+    refreshUnreadWorkspaces: input.refreshUnreadWorkspaces,
     // Read-only, so session startup can tell a waiting user that provider
     // model lists are refreshing at the same time.
     catalogRefreshStatus: input.catalogRefreshStatus,

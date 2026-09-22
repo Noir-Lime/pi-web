@@ -49,13 +49,6 @@ describe("MachineStatusService", () => {
     expect(service.snapshot().workspaces["ancestor"]).not.toHaveProperty(UNREAD);
     expect(service.snapshot().projects).not.toHaveProperty("removed");
 
-    // Re-adding the project restores its unread state without altering the catalog.
-    projects.push(removed);
-    attribution.invalidate();
-    await service.refresh();
-    expect(service.snapshot().projects["removed"]?.[UNREAD]).toBe(true);
-    expect(service.snapshot().projects).not.toHaveProperty("ancestor");
-    expect(service.snapshot().unattributed).toEqual({});
   });
 
   it("leaves an orphan-only completion unattributed without emitting empty ancestor nodes", async () => {

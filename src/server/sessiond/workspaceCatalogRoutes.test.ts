@@ -43,10 +43,12 @@ describe("session daemon workspace catalog routes", () => {
       list: () => Promise.resolve(listed),
     });
     const projects = projectReader();
+    const onWorkspacesListed = vi.fn(() => Promise.resolve());
     registerWorkspaceCatalogRoutes(app, {
       projects,
       workspaces: registry,
       providerRuntime: createWorkspaceProviderRuntimeSnapshot([], []),
+      onWorkspacesListed,
     });
     const spawnTargets = new ProjectScopedSpawnTargetResolver({ projects, workspaces: registry });
 
@@ -70,6 +72,7 @@ describe("session daemon workspace catalog routes", () => {
     expect(resolution).toMatchObject({ status: "provider", ownerPluginId: "owner" });
     expect(resolution.workspaces.map(({ path }) => path)).toEqual([hostPath("/repo"), hostPath("/linked")]);
     expect(spawnDecision).toEqual({ allowed: true, cwd: hostPath("/linked") });
+    expect(onWorkspacesListed).toHaveBeenCalledOnce();
 
     const linked = resolution.workspaces.find(({ path }) => path === hostPath("/linked"));
     if (linked === undefined) throw new Error("Expected linked workspace");
