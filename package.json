@@ -1,6 +1,6 @@
 {
   "name": "@jmfederico/pi-web",
-  "version": "1.202608.2",
+  "version": "1.202609.0",
   "description": "Web UI for persistent Pi Coding Agent sessions in real workspaces.",
   "license": "MIT",
   "author": "Federico Jaramillo Martinez",
@@ -10,7 +10,8 @@
       "types": "./dist/plugin-api.d.ts"
     },
     "./server-plugin-api": {
-      "types": "./dist/server-plugin-api.d.ts"
+      "types": "./dist/server-plugin-api.d.ts",
+      "import": "./dist/server-plugin-api.js"
     }
   },
   "typesVersions": {
@@ -36,6 +37,9 @@
     "LICENSE",
     "extensions",
     "examples/workspace-provider-plugin",
+    "examples/session-bridge-plugin",
+    "!examples/**/node_modules",
+    "!examples/**/dist",
     "docs/plugins.md",
     "docs/config.md",
     "docs/assets",
@@ -44,8 +48,8 @@
   ],
   "scripts": {
     "dev": "bash -c 'trap \"kill 0\" EXIT; npm run dev:sessiond & npm run dev:web & npm run dev:client & wait'",
-    "dev:sessiond": "npm run build:plugins && tsx watch src/server/sessiond.ts",
-    "dev:web": "bash -c 'set -e; npm run build:plugins; trap \"kill 0\" EXIT; npm run dev:plugins & tsx watch src/server/index.ts & wait'",
+    "dev:sessiond": "node scripts/dev-sessiond.mjs --watch",
+    "dev:web": "tsc -p tsconfig.plugins.json && node scripts/dev-web.mjs",
     "dev:server": "npm run dev:web",
     "dev:client": "vite --host 0.0.0.0",
     "dev:plugins": "node scripts/build-plugins.mjs --watch",
@@ -61,7 +65,7 @@
     "verify": "npm run typecheck && npm run lint && npm run knip && npm test",
     "verify:staged": "node scripts/verify-staged.mjs",
     "start": "tsx src/server/index.ts",
-    "start:sessiond": "npm run build:plugins && tsx src/server/sessiond.ts",
+    "start:sessiond": "node scripts/dev-sessiond.mjs",
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "prepack": "npm run build",
     "pack:dry": "npm pack --dry-run",
@@ -103,16 +107,18 @@
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.0",
-    "@earendil-works/pi-agent-core": "^0.84.1",
-    "@earendil-works/pi-ai": "^0.84.1",
-    "@earendil-works/pi-coding-agent": "^0.84.1",
+    "@earendil-works/pi-agent-core": "^0.85.1",
+    "@earendil-works/pi-ai": "^0.85.1",
+    "@earendil-works/pi-coding-agent": "^0.85.1",
     "@eslint/js": "^10.0.1",
     "@types/node": "^24.13.3",
     "@types/ws": "^8.18.1",
+    "dompurify": "^3.4.15",
     "eslint": "^10.6.0",
     "globals": "^17.7.0",
     "happy-dom": "^20.11.1",
     "knip": "^6.25.0",
+    "mermaid": "^11.17.2",
     "tsx": "^4.23.0",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.63.0",
@@ -137,7 +143,7 @@
   "peerDependencies": {
     "@earendil-works/pi-agent-core": ">=0.84.0",
     "@earendil-works/pi-ai": ">=0.84.0",
-    "@earendil-works/pi-coding-agent": ">=0.84.0"
+    "@earendil-works/pi-coding-agent": ">=0.84.0 <0.85.0 || >=0.85.1"
   },
   "keywords": [
     "pi-package",
