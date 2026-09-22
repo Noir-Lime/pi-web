@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
@@ -388,7 +389,8 @@ async function mappedSubmoduleStatus(fixture: { top: string; gitlink?: string; i
   }
   if (fixture.inner !== undefined) {
     responses.push({
-      cwd: realpathSync(join(dir, path)),
+      // Match the native canonicalization used by the backend, including Windows 8.3 paths.
+      cwd: await realpath(join(dir, path)),
       args: ["status", "--porcelain=v2", "--untracked-files=all", "-z"],
       stdout: fixture.inner,
     });
