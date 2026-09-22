@@ -35,7 +35,7 @@ export class PanelCollapseController implements ReactiveController {
     this.host.requestUpdate();
   }
 
-  shellClass(mainView: AppState["mainView"] | "workspace"): string {
+  shellClass(mainView: AppState["mainView"]): string {
     return [
       "shell",
       mainViewClass(mainView),
@@ -45,7 +45,7 @@ export class PanelCollapseController implements ReactiveController {
   }
 }
 
-export function mainViewClass(mainView: AppState["mainView"] | "workspace"): "navigation-view" | "chat-view" | "workspace-view" {
+export function mainViewClass(mainView: AppState["mainView"]): "navigation-view" | "chat-view" | "workspace-view" {
   if (mainView === "navigation") return "navigation-view";
   if (mainView === "chat") return "chat-view";
   return "workspace-view";

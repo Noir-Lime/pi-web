@@ -186,7 +186,7 @@ export interface PluginRuntimeState {
   selectedWorkspace?: Workspace;
   selectedSession?: PluginSelectedSession;
   workspaceTool?: string;
-  mainView?: string;
+  mainView?: "navigation" | "chat" | "workspace";
   piWebStatus?: PiWebStatusResponse;
 }
 
@@ -210,7 +210,7 @@ export interface PluginRuntimeContext {
   configureAuth: () => void | Promise<void>;
   logoutAuth: () => void | Promise<void>;
   openThemePicker: () => void;
-  selectMainView: (view: string) => void;
+  selectMainView: (view: "navigation" | "chat" | "workspace") => void;
   selectWorkspaceTool: (tool: QualifiedContributionId) => void;
   openTerminal: (options?: { terminalId?: string | undefined }) => void;
   /** @deprecated Compatibility alias that publishes `workspace.files` invalidation for the selected workspace. */
