@@ -775,7 +775,7 @@ describe("PiWebApp plugin host", () => {
     expect(browser.url.searchParams.get("browser-only.workspace.panel--file")).toBe("new.ts");
   });
 
-  it("normalizes a missing project route while clearing its workspace surface", async () => {
+  it("preserves a missing project route while clearing its workspace surface", async () => {
     const browser = installBrowserWindow("http://localhost/app?project=missing-project&workspace=missing-workspace&view=chat&browser-only.workspace.panel--file=missing.ts");
     const app = new PiWebApp();
     setAppState(app, {
@@ -793,12 +793,16 @@ describe("PiWebApp plugin host", () => {
 
     expect(appState(app).selectedProject).toBeUndefined();
     expect(appState(app).selectedWorkspace).toBeUndefined();
-    expect(browser.url.searchParams.has("project")).toBe(false);
-    expect(browser.url.searchParams.has("workspace")).toBe(false);
-    expect(browser.url.searchParams.has("browser-only.workspace.panel--file")).toBe(false);
+    expect(browser.url.searchParams.get("project")).toBe("missing-project");
+    expect(browser.url.searchParams.get("workspace")).toBe("missing-workspace");
+    expect(browser.url.searchParams.get("browser-only.workspace.panel--file")).toBe("missing.ts");
+    expect(browser.replaced).toEqual([]);
+    expect(callAppMethod(app, "visibleBrowserErrorsForCurrentRoute", appState(app))).toEqual([
+      expect.objectContaining({ message: "Project not found: missing-project" }),
+    ]);
   });
 
-  it("normalizes a missing session route while retaining its workspace", async () => {
+  it("preserves a missing session route while retaining its workspace", async () => {
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&session=deleted-session&view=chat");
     const app = new PiWebApp();
     setAppState(app, {
@@ -827,8 +831,70 @@ describe("PiWebApp plugin host", () => {
 
     expect(browser.url.searchParams.get("project")).toBe(project.id);
     expect(browser.url.searchParams.get("workspace")).toBe(workspace.id);
-    expect(browser.url.searchParams.has("session")).toBe(false);
+    expect(browser.url.searchParams.get("session")).toBe("deleted-session");
+    expect(browser.replaced).toEqual([]);
     expect(appState(app).selectedSession).toBeUndefined();
+  });
+
+  it.each([
+    ["missing workspace", "Workspace not found: workspace-1"],
+    ["missing session", "Session not found: requested-session"],
+    ["workspace load failure", "workspaces offline"],
+    ["session list failure", "sessions offline"],
+  ])("preserves the complete requested URL for %s", async (scenario, message) => {
+    const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&session=requested-session&view=chat&files.workspace.files--file=keep.ts#anchor");
+    const destination = browser.url.href;
+    const app = new PiWebApp();
+    setAppState(app, { ...initialAppState(), projects: [project] });
+    await markPluginLoadingReady(app);
+    const controller: unknown = Reflect.get(app, "workspaces");
+    if (typeof controller !== "object" || controller === null) throw new Error("Missing workspace controller");
+    Reflect.set(controller, "api", {
+      workspaces: scenario === "workspace load failure"
+        ? vi.fn().mockRejectedValue(new Error(message))
+        : vi.fn().mockResolvedValue(scenario === "missing workspace" ? [] : [workspace]),
+      sessions: scenario === "session list failure"
+        ? vi.fn().mockRejectedValue(new Error(message))
+        : vi.fn().mockResolvedValue([]),
+    });
+
+    await callAsyncAppMethod(app, "restoreRoute", false);
+
+    expect(browser.url.href).toBe(destination);
+    expect(browser.pushed).toEqual([]);
+    expect(browser.replaced).toEqual([]);
+    expect(appState(app).selectedSession).toBeUndefined();
+    expect(callAppMethod(app, "visibleBrowserErrorsForCurrentRoute", appState(app))).toEqual([
+      expect.objectContaining({ message: scenario.endsWith("failure") ? `Error: ${message}` : message }),
+    ]);
+  });
+
+  it.each(["missing machine", "machine load failure", "project load failure"])("preserves the bootstrap destination for %s", async (scenario) => {
+    const browser = installBrowserWindow(`http://localhost/app?${scenario === "project load failure" ? "" : "machine=removed-machine&"}project=project-1&workspace=workspace-1&session=requested-session&view=chat&files.workspace.files--file=keep.ts#anchor`);
+    const destination = browser.url.href;
+    const app = new PiWebApp();
+    await markPluginLoadingReady(app);
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.endsWith("api/machines")) {
+        if (scenario === "machine load failure") return Promise.reject(new Error("machines offline"));
+        return Promise.resolve(new Response(JSON.stringify([{ id: "local", name: "Local", kind: "local", createdAt: "now", updatedAt: "now" }]), { headers: { "content-type": "application/json" } }));
+      }
+      return Promise.reject(new Error("backend offline"));
+    }));
+    Reflect.set(app, "withChatScrollTransition", async (action: () => Promise<void>) => { await action(); });
+    Reflect.set(app, "refreshWorkspaceDeletionRuns", () => Promise.resolve());
+
+    await callAsyncAppMethod(app, "loadProjectsAndRestoreRoute");
+
+    expect(browser.url.href).toBe(destination);
+    expect(browser.pushed).toEqual([]);
+    expect(browser.replaced).toEqual([]);
+    expect(appState(app).selectedProject).toBeUndefined();
+    expect(callAppMethod(app, "visibleBrowserErrorsForCurrentRoute", appState(app))).toEqual(expect.arrayContaining([
+      expect.objectContaining({ message: scenario === "project load failure" ? "Error: backend offline" : "Machine not found: removed-machine" }),
+    ]));
+    if (scenario === "machine load failure") expect(appState(app).error).toContain("machines offline");
   });
 
   it("keeps an unavailable machine route explicit instead of resolving it locally", async () => {
@@ -1276,7 +1342,7 @@ describe("PiWebApp plugin host", () => {
     expect(browser.replaced).toEqual([]);
   });
 
-  it("recovers an unresolved creation link to its workspace without starting or joining a session", async () => {
+  it("preserves an unresolved creation link without starting or joining a session", async () => {
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&session=creating:expired&view=chat");
     const app = new PiWebApp();
     setAppState(app, { ...initialAppState(), projects: [project] });
@@ -1286,7 +1352,8 @@ describe("PiWebApp plugin host", () => {
     await callAsyncAppMethod(app, "restoreRoute", false);
     expect(appState(app).selectedWorkspace?.id).toBe(workspace.id);
     expect(appState(app).selectedSession).toBeUndefined();
-    expect(browser.url.searchParams.has("session")).toBe(false);
+    expect(browser.url.searchParams.get("session")).toBe("creating:expired");
+    expect(browser.replaced).toEqual([]);
     expect(browser.pushed).toEqual([]);
     expect(start).not.toHaveBeenCalled();
     expect(select).not.toHaveBeenCalled();
@@ -2136,7 +2203,7 @@ describe("PiWebApp plugin host", () => {
     await callAsyncAppMethod(app, "finishWorkspaceRouteRestore", { contributionQuery: {} }, {
       updateUrl: false,
       urlPublication: "current-url",
-      normalizeUnavailableRoute: false,
+      unavailableToolRoute: false,
       unavailablePanelViewRoute: false,
       requestedTool: "core:workspace.files",
       requestedView: "core:workspace.files",
@@ -2146,8 +2213,12 @@ describe("PiWebApp plugin host", () => {
       workspaceTool: TERMINAL_PANEL_ID,
       mainView: TERMINAL_PANEL_ID,
     });
-    expect(browser.url.searchParams.get("tool")).toBe(TERMINAL_PANEL_ID);
-    expect(browser.url.searchParams.get("view")).toBe(TERMINAL_PANEL_ID);
+    expect(browser.url.searchParams.get("tool")).toBe("core:workspace.files");
+    expect(browser.url.searchParams.get("view")).toBe("core:workspace.files");
+    expect(browser.replaced).toEqual([]);
+    expect(callAppMethod(app, "visibleBrowserErrorsForCurrentRoute", appState(app))).toEqual([
+      expect.objectContaining({ message: "Workspace panel unavailable: core:workspace.files" }),
+    ]);
     expect(mobileTabIds(app)).toEqual(["navigation", "chat", TERMINAL_PANEL_ID]);
 
     setAppState(app, {
@@ -2161,7 +2232,7 @@ describe("PiWebApp plugin host", () => {
     expect(appState(app).mainView).toBe("chat");
   });
 
-  it("replaces an unresolved panel deep link after plugin loading completes", async () => {
+  it("preserves an unresolved panel deep link after plugin loading completes", async () => {
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&tool=missing&view=missing");
     const app = new PiWebApp();
     setAppState(app, {
@@ -2186,12 +2257,15 @@ describe("PiWebApp plugin host", () => {
       workspaceTool: TERMINAL_PANEL_ID,
       mainView: TERMINAL_PANEL_ID,
     });
-    expect(browser.url.searchParams.get("tool")).toBe(TERMINAL_PANEL_ID);
-    expect(browser.url.searchParams.get("view")).toBe(TERMINAL_PANEL_ID);
-    expect(browser.replaced.length).toBeGreaterThan(0);
+    expect(browser.url.searchParams.get("tool")).toBe("missing");
+    expect(browser.url.searchParams.get("view")).toBe("missing");
+    expect(browser.replaced).toEqual([]);
+    expect(callAppMethod(app, "visibleBrowserErrorsForCurrentRoute", appState(app))).toEqual([
+      expect.objectContaining({ message: "Workspace panel unavailable: missing" }),
+    ]);
   });
 
-  it("normalizes an unavailable panel on popstate without replacing the adjacent history entries", async () => {
+  it("preserves an unavailable panel on popstate and the adjacent history entries", async () => {
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&tool=core%3Aworkspace.terminal&view=core%3Aworkspace.terminal&step=origin");
     const app = new PiWebApp();
     setAppState(app, {
@@ -2212,11 +2286,14 @@ describe("PiWebApp plugin host", () => {
     await vi.waitFor(() => { expect(browser.url.searchParams.get("step")).toBe("unavailable"); });
     callAppMethod(app, "onPopState");
     await vi.waitFor(() => {
-      expect(browser.url.searchParams.get("tool")).toBe(TERMINAL_PANEL_ID);
-      expect(browser.url.searchParams.get("view")).toBe(TERMINAL_PANEL_ID);
+      expect(callAppMethod(app, "visibleBrowserErrorsForCurrentRoute", appState(app))).toEqual([
+        expect.objectContaining({ message: "Workspace panel unavailable: missing:workspace.panel" }),
+      ]);
     });
 
-    expect(browser.replaced).toHaveLength(1);
+    expect(browser.url.searchParams.get("tool")).toBe("missing:workspace.panel");
+    expect(browser.url.searchParams.get("view")).toBe("missing:workspace.panel");
+    expect(browser.replaced).toHaveLength(0);
     expect(browser.url.searchParams.get("step")).toBe("unavailable");
     window.history.back();
     await vi.waitFor(() => { expect(browser.url.searchParams.get("step")).toBe("origin"); });
@@ -2259,8 +2336,9 @@ describe("PiWebApp plugin host", () => {
       workspaceTool: TERMINAL_PANEL_ID,
       mainView: TERMINAL_PANEL_ID,
     });
-    expect(browser.url.searchParams.get("tool")).toBe(TERMINAL_PANEL_ID);
-    expect(browser.url.searchParams.get("view")).toBe(TERMINAL_PANEL_ID);
+    expect(browser.url.searchParams.get("tool")).toBe("core:workspace.files");
+    expect(browser.url.searchParams.get("view")).toBe("core:workspace.files");
+    expect(browser.replaced).toEqual([]);
     expect(mobileTabIds(app)).toEqual(["navigation", "chat", TERMINAL_PANEL_ID]);
     expect(workspacePanelContextFromApp(app).files.capabilityVersion).toBe(1);
     expect(warning).toHaveBeenCalledWith(
@@ -2352,8 +2430,7 @@ describe("PiWebApp plugin host", () => {
       expect(displayedError(app)).toContain(machine === undefined ? "module unavailable" : "plugin lifecycle capability");
       if (navigation === "current") {
         expect(appState(app).mainView).toBe("chat");
-        expect(browser.url.searchParams.get("view")).toBe("chat");
-        expect(browser.url.href).not.toBe(destinationUrl);
+        expect(browser.url.href).toBe(destinationUrl);
       } else {
         expect(browser.url.href).toBe(destinationUrl);
         expect(appState(app)).toMatchObject(selectedSurface);

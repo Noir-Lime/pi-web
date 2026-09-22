@@ -108,7 +108,7 @@ type WorkspaceRouteUrlPublication = "current-url" | "deferred";
 interface WorkspaceRouteFinishOptions {
   updateUrl: boolean;
   urlPublication: WorkspaceRouteUrlPublication;
-  normalizeUnavailableRoute: boolean;
+  unavailableToolRoute: boolean;
   unavailablePanelViewRoute: boolean;
   requestedTool: AppRoute["tool"];
   requestedView: AppRoute["view"];
@@ -525,19 +525,18 @@ export class PiWebApp extends LitElement {
       await this.refreshWorkspaceDeletionRuns();
       return;
     }
-    const effectiveRoute = this.routeForSelectedMachine(route);
-    const initialRouteMachineHealth = this.state.machineStatuses[effectiveRoute.machineId ?? "local"];
-    if (effectiveRoute !== route) this.replaceRouteAndClearWorkspaceQuery(effectiveRoute);
-    await this.projects.loadProjects();
+    const initialRouteMachineHealth = this.state.machineStatuses[route.machineId ?? "local"];
+    // An unavailable machine must not turn its requested hierarchy into a local route.
+    if (selectedMachineId(this.state) === (route.machineId ?? "local")) await this.projects.loadProjects();
     // Project loading can outlive the initial URL capture; only hand the fixed
     // route to reconciliation while it is still the current destination.
-    if (!this.routeLocationMatchesUrl(effectiveRoute)) {
+    if (!this.routeLocationMatchesUrl(route)) {
       await this.withChatScrollTransition(async () => { await this.restoreRoute(false); });
       await this.refreshWorkspaceDeletionRuns();
       return;
     }
-    await this.withChatScrollTransition(() => this.restoreRouteFor(effectiveRoute, false));
-    if (this.shouldDeferRemoteRouteRestore(effectiveRoute, initialRouteMachineHealth)) this.deferRemoteRouteRestore(effectiveRoute);
+    await this.withChatScrollTransition(() => this.restoreRouteFor(route, false));
+    if (this.shouldDeferRemoteRouteRestore(route, initialRouteMachineHealth)) this.deferRemoteRouteRestore(route);
     else {
       this.clearPendingRemoteRouteRestore();
       this.rememberCurrentMachineNavigation();
@@ -673,9 +672,8 @@ export class PiWebApp extends LitElement {
 
   /**
    * Reconcile a route that has already been published by an imperative action.
-   * Navigation actions defer route normalization until the resolved selection is
-   * known; their final replace keeps the action's single history entry while
-   * the address bar remains the requested destination during every await.
+   * Reconciliation may display an unavailable destination, but must not turn a
+   * load failure into navigation. Only explicit actions publish another URL.
    */
   private async restoreCommittedNavigation(snapshot: MachineNavigationSnapshot): Promise<boolean> {
     return this.restoreRoute(false, snapshot.view, "deferred");
@@ -721,7 +719,9 @@ export class PiWebApp extends LitElement {
       const machineResolved = await this.restoreRouteMachine(parsedRoute, false);
       if (!machineResolved) {
         if (!selectionNavigation.isCurrent()) return;
+        const error = this.state.error;
         this.workspaces.clearSelection({ updateUrl: false });
+        if (error !== "") this.setState({ error });
         const machineId = parsedRoute.machineId ?? "local";
         this.browserErrors.report(machineBrowserErrorScope(machineId), `Machine not found: ${machineId}`);
         return;
@@ -735,7 +735,7 @@ export class PiWebApp extends LitElement {
       const finishOptions: WorkspaceRouteFinishOptions = {
         updateUrl,
         urlPublication,
-        normalizeUnavailableRoute: unavailableToolRoute || unavailablePanelViewRoute,
+        unavailableToolRoute,
         unavailablePanelViewRoute,
         requestedTool: route.tool,
         requestedView: route.view,
@@ -753,11 +753,10 @@ export class PiWebApp extends LitElement {
         });
       }
       if (route.projectId === undefined || route.projectId === "") {
+        const error = this.state.error;
         this.workspaces.clearSelection({ updateUrl: false });
-        await this.finishWorkspaceRouteRestore(routeSurface, {
-          ...finishOptions,
-          normalizeUnavailableRoute: true,
-        });
+        if (error !== "") this.setState({ error });
+        await this.finishWorkspaceRouteRestore(routeSurface, finishOptions);
         return;
       }
       if (this.routeMatchesCurrentSelection(route)) {
@@ -773,10 +772,10 @@ export class PiWebApp extends LitElement {
         const error = this.state.error;
         this.workspaces.clearSelection({ updateUrl: false });
         if (error !== "") this.setState({ error });
-        await this.finishWorkspaceRouteRestore(routeSurface, {
-          ...finishOptions,
-          normalizeUnavailableRoute: true,
-        });
+        const scope = machineBrowserErrorScope(selectedMachineId(this.state));
+        if (this.state.browserErrors[browserErrorScopeKey(scope)] === undefined) {
+          this.browserErrors.report(scope, `Project not found: ${route.projectId}`);
+        }
         return;
       }
       const loadedWorkspace = urlPublication === "deferred"
@@ -825,28 +824,35 @@ export class PiWebApp extends LitElement {
         || this.state.selectedWorkspace?.id !== options.requestedRoute.workspaceId);
     const requestedSessionUnavailable = options.requestedRoute?.sessionId !== undefined
       && !sessionMatchesRouteTarget(this.state.selectedSession?.id, options.requestedRoute.sessionId);
-    const normalizeUnavailableRoute = options.normalizeUnavailableRoute
-      || requestedToolUnavailable
-      || requestedViewUnavailable
-      || requestedWorkspaceUnavailable
-      || requestedSessionUnavailable;
+    const unavailablePanel = options.unavailableToolRoute || options.unavailablePanelViewRoute
+      || requestedToolUnavailable || requestedViewUnavailable;
+    if (unavailablePanel) {
+      const workspace = this.state.selectedWorkspace;
+      const scope = workspace === undefined
+        ? machineBrowserErrorScope(selectedMachineId(this.state))
+        : workspaceBrowserErrorScope(selectedMachineId(this.state), workspace.projectId, workspace.id);
+      const panel = options.unavailableToolRoute || requestedToolUnavailable
+        ? options.requestedRoute?.tool ?? options.requestedTool
+        : options.requestedRoute?.view ?? options.requestedView;
+      this.browserErrors.report(scope, `Workspace panel unavailable: ${panel ?? "unknown"}`);
+    }
     if (options.unavailablePanelViewRoute || requestedViewUnavailable) {
       const fallback = this.effectiveWorkspaceTool(panels);
       if (fallback !== undefined) this.setState({ mainView: fallback });
     }
-    const selectionChanged = this.reconcileWorkspacePanelSelection();
+    this.reconcileWorkspacePanelSelection();
     const contributionQueryRestore = options.restoredWorkspaceIdentity === undefined
       ? undefined
       : { identity: options.restoredWorkspaceIdentity, query: surface.contributionQuery ?? {} };
     await this.refreshRestoredWorkspaceTool(this.state.workspaceTool, contributionQueryRestore);
     if (options.restoreSeq !== undefined && !this.isCurrentRouteRestore(options.restoreSeq, options.navigation)) return;
     if (options.urlPublication === "current-url"
-      && (options.updateUrl || selectionChanged || normalizeUnavailableRoute)
+      && options.updateUrl && !unavailablePanel && !requestedWorkspaceUnavailable && !requestedSessionUnavailable
       && (options.requestedRoute === undefined
         || (this.routeLocationMatchesUrl(options.requestedRoute)
           && (options.requestedRoute.workspaceId === undefined || this.navigationSurfaceMatchesUrl(surface))))) {
       const contributionQuery = this.restoredContributionQueryForSelectedWorkspace(surface, options.restoredWorkspaceIdentity);
-      this.updateUrl(selectionChanged || normalizeUnavailableRoute ? { replace: true } : undefined, contributionQuery);
+      this.updateUrl(undefined, contributionQuery);
     }
   }
 
@@ -919,19 +925,6 @@ export class PiWebApp extends LitElement {
     return {
       contributionQuery: readContributionQueryRecord(),
     };
-  }
-
-  private routeForSelectedMachine(route: ParsedAppRoute): ParsedAppRoute {
-    const currentMachineId = this.state.selectedMachine?.id ?? "local";
-    if ((route.machineId ?? "local") === currentMachineId) return route;
-    return { machineId: currentMachineId, projectId: undefined, workspaceId: undefined, sessionId: undefined, tool: undefined, view: undefined };
-  }
-
-  private replaceRouteAndClearWorkspaceQuery(route: ParsedAppRoute): void {
-    this.syncNavigationFreshness();
-    writeRoute(route, { replace: true });
-    writeContributionQueryRecord({}, { replace: true });
-    this.syncNavigationFreshness();
   }
 
   private shouldDeferRemoteRouteRestore(route: ParsedAppRoute, routeMachineHealth = this.state.machineStatuses[route.machineId ?? "local"]): boolean {
@@ -2501,8 +2494,9 @@ export class PiWebApp extends LitElement {
     // Check before reconciling: even a fallback's local surface change belongs
     // to the initiating destination, including its contribution query.
     if (currentBrowserUrl() !== urlAtLoad) return;
-    const selectionChanged = this.reconcileWorkspacePanelSelection();
-    if (selectionChanged && !this.routeRestoreInProgress) this.updateUrl({ replace: true });
+    // Plugin availability can change without user navigation. Reconcile the UI,
+    // but keep the requested destination (and its query) available for retry.
+    this.reconcileWorkspacePanelSelection();
   }
 
   private setRequiredPluginFailure(machineId: string, message: string): void {

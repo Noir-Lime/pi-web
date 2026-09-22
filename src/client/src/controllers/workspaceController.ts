@@ -87,6 +87,10 @@ export class WorkspaceController {
         await this.selectWorkspace(workspace, { sessionId: target?.sessionId, updateUrl: target?.updateUrl, navigation });
         return;
       }
+      if (target?.workspaceId !== undefined && target.workspaceId !== "") {
+        this.browserErrors.report(errorScope, `Workspace not found: ${target.workspaceId}`);
+        return;
+      }
       if (target?.updateUrl !== false && this.navigationIsCurrent(navigation)) this.updateUrl();
     } catch (error) {
       if (this.navigationIsCurrent(navigation)
@@ -119,6 +123,7 @@ export class WorkspaceController {
       const session = this.sessions.preferredSession(workspace.path, sessions, target?.sessionId);
       if (!this.navigationIsCurrent(navigation) || !workspaceMutationIsCurrent(target)) return;
       if (session) await this.sessions.selectSession(session, { updateUrl: target?.updateUrl, ...(navigation === undefined ? {} : { navigation }) });
+      else if (target?.sessionId !== undefined && target.sessionId !== "") this.browserErrors.report(errorScope, `Session not found: ${target.sessionId}`);
       else if (target?.updateUrl !== false) this.updateUrl();
     } catch (error) {
       if (target?.signal?.aborted !== true) this.browserErrors.report(errorScope, String(error));
