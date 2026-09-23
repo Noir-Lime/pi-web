@@ -190,7 +190,9 @@ function normalizeContent(content: unknown, message: unknown): ChatPart[] {
     if (type === "image") {
       const data = getString(part, "data");
       const mimeType = getString(part, "mimeType");
+      const url = getString(part, "url");
       if (data !== undefined && data !== "" && mimeType !== undefined && mimeType !== "") return [{ type: "image", mimeType, data }];
+      if (url !== undefined && url !== "" && mimeType !== undefined && mimeType !== "") return [{ type: "image", mimeType, url }];
       return [{ type: "text", text: "[image]" }];
     }
     return objectFallback(part);

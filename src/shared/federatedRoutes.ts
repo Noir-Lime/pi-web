@@ -20,6 +20,7 @@ export const WORKSPACE_FILE_FEDERATION_TIMEOUT_MS = 30_000;
 // Accommodates the bounded 1,000-entry tree and escaped paths/content while
 // keeping every workspace-file JSON hop finite after response headers.
 export const WORKSPACE_FILE_JSON_RESPONSE_BODY_MAX_BYTES = 32 * 1024 * 1024;
+export const SESSION_HISTORY_IMAGE_MAX_BYTES = 64 * 1024 * 1024;
 export const WORKSPACE_FILE_PREVIEW_ROUTE_PATH = "/projects/:projectId/workspaces/:workspaceId/file/preview";
 
 export interface FederatedHttpRouteSpec {
@@ -124,6 +125,7 @@ export const FEDERATED_HTTP_ROUTES = [
   { method: "POST", path: "/sessions/bulk/archive" },
   { method: "POST", path: "/sessions/bulk/delete-archived" },
   { method: "GET", path: "/sessions/:sessionId/messages" },
+  { method: "GET", path: "/sessions/:sessionId/images/:imageId", responseBodyLimit: SESSION_HISTORY_IMAGE_MAX_BYTES },
   { method: "GET", path: "/sessions/:sessionId/notifications" },
   { method: "POST", path: "/sessions/:sessionId/notifications/dismiss" },
   { method: "POST", path: "/sessions/:sessionId/notifications/dismiss-all" },

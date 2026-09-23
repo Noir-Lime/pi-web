@@ -96,7 +96,7 @@ export type ChatImagePart = Extract<ChatPart, { type: "image" }>;
 
 /** Derive the `<img>` source URL and alt text for a rendered image part. */
 export function chatImagePartSource(part: ChatImagePart): { src: string; alt: string } {
-  return { src: `data:${part.mimeType};base64,${part.data}`, alt: "attached image" };
+  return { src: "url" in part ? part.url : `data:${part.mimeType};base64,${part.data}`, alt: "attached image" };
 }
 
 /** The message-header label used when a tool message renders as an image output. */

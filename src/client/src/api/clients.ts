@@ -57,7 +57,7 @@ import {
   parseWorkspaceTrustResponse,
   requireMachineStatusSnapshot,
 } from "./parsers";
-import { messagePath } from "./urls";
+import { messagePath, sessionImageUrl } from "./urls";
 
 const machinePrefix = (machineId = "local") => `api/machines/${encodeURIComponent(machineId)}`;
 
@@ -79,6 +79,21 @@ function sessionQuery(session: SessionRef): string {
 
 function sessionBody(session: SessionRef, fields: Record<string, unknown> = {}): string {
   return JSON.stringify({ cwd: session.cwd, ...fields });
+}
+
+/** Resolve server `imageId` references on history image parts into lazily loaded image URLs. */
+function withHistoryImageUrls(message: unknown, session: SessionRef, machineId: string): unknown {
+  if (typeof message !== "object" || message === null || !("content" in message) || !Array.isArray(message.content)) return message;
+  const content: unknown[] = message.content;
+  if (!content.some(isImageReference)) return message;
+  return {
+    ...message,
+    content: content.map((part) => isImageReference(part) ? { ...part, url: sessionImageUrl(session, part.imageId, machineId) } : part),
+  };
+}
+
+function isImageReference(part: unknown): part is { imageId: string } {
+  return typeof part === "object" && part !== null && "type" in part && part.type === "image" && "imageId" in part && typeof part.imageId === "string";
 }
 
 function sessionBulkMutationBody(sessions: readonly SessionRef[]): string {
@@ -246,7 +261,10 @@ export const sessionsApi = {
   cleanup: (input: SessionCleanupRequest, machineId = "local") => request(`${machinePrefix(machineId)}/sessions/cleanup`, parseSessionCleanupExecuteResponse, { method: "POST", body: JSON.stringify(input) }),
   archiveMany: (sessions: readonly SessionRef[], machineId = "local") => request(`${machinePrefix(machineId)}/sessions/bulk/archive`, parseSessionBulkArchiveResponse, { method: "POST", body: sessionBulkMutationBody(sessions) }),
   deleteArchivedMany: (sessions: readonly SessionRef[], machineId = "local") => request(`${machinePrefix(machineId)}/sessions/bulk/delete-archived`, parseSessionBulkDeleteArchivedResponse, { method: "POST", body: sessionBulkMutationBody(sessions) }),
-  messages: (session: SessionRef, options?: { limit?: number; before?: number }, machineId = "local") => request(messagePath(session, options, machineId), parseMessagePage),
+  messages: async (session: SessionRef, options?: { limit?: number; before?: number }, machineId = "local") => {
+    const page = await request(messagePath(session, options, machineId), parseMessagePage);
+    return { ...page, messages: page.messages.map((message) => withHistoryImageUrls(message, session, machineId)) };
+  },
   status: (session: SessionRef, machineId = "local") => request(sessionQueryPath(session, "status", machineId), parseSessionStatus),
   streamSnapshot: (session: SessionRef, machineId = "local") => request(sessionQueryPath(session, "stream-snapshot", machineId), parseSessionStreamSnapshot),
   clearQueue: (session: SessionRef, machineId = "local") => request(sessionPath(session, "queue/clear", machineId), parseSessionStatus, { method: "POST", body: sessionBody(session) }),
