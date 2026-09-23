@@ -3222,7 +3222,7 @@ export class PiWebApp extends LitElement {
 
   private sendPrompt(text: string, streamingBehavior?: "steer" | "followUp", attachments?: import("../api").PromptAttachment[], delivery?: import("../../../shared/apiTypes").PromptAttachmentDelivery, folder?: string): void {
     const hasAttachments = attachments !== undefined && attachments.length > 0;
-    if (!hasAttachments && streamingBehavior === undefined && this.auth.handleSlashCommand(text)) return;
+    if (!hasAttachments && this.auth.handleSlashCommand(text)) return;
     void this.sessions.send(text, streamingBehavior, attachments, delivery, folder);
   }
 
