@@ -1647,6 +1647,74 @@ describe("PiWebApp plugin host", () => {
     expect(select).not.toHaveBeenCalled();
   });
 
+  it.each([null, [], "project", { projectId: 12 }, { machineId: null }, { workspaceId: false }, { sessionId: {} }, { tool: 1 }, { view: "plugin:panel" }])("rejects malformed plugin destinations without navigation or UI: %j", async (destination) => {
+    const browser = installBrowserWindow("http://localhost/app?project=before");
+    const app = new PiWebApp();
+    const before = appState(app);
+    await expect(Reflect.apply(createPluginRuntimeContext(app).navigate, undefined, [destination])).rejects.toBeInstanceOf(TypeError);
+    expect(appState(app)).toBe(before);
+    expect(browser.pushed).toEqual([]);
+    expect(browser.replaced).toEqual([]);
+  });
+
+  it.each(["action", "panel"])("publishes a complete plugin destination from a %s context and accepts supersession", async (kind) => {
+    const browser = installBrowserWindow("http://localhost/app?machine=remote&project=old&workspace=old&session=old&tool=old%3Apanel&view=workspace&old.panel--key=value");
+    const app = new PiWebApp();
+    setAppState(app, { ...initialAppState(), selectedMachine: { id: "remote", name: "Remote", kind: "remote", createdAt: "now", updatedAt: "now" }, selectedWorkspace: workspace });
+    // Isolate destination publication from restoration; false is the pipeline's superseded outcome.
+    const restored = deferredValue<boolean>();
+    Reflect.set(app, "restoreCommittedNavigation", () => restored.promise);
+    const context = kind === "action" ? createPluginRuntimeContext(app) : workspacePanelContextFromApp(app);
+    let settled = false;
+    const navigating = context.navigate({ projectId: "new project" }).then(() => { settled = true; });
+    expect(browser.url.searchParams.get("machine")).toBe("remote");
+    expect(browser.url.searchParams.get("project")).toBe("new project");
+    for (const key of ["workspace", "session", "tool", "view", "old.panel--key"]) expect(browser.url.searchParams.has(key)).toBe(false);
+    expect(browser.pushed).toHaveLength(1);
+    expect(settled).toBe(false);
+    restored.resolve(false);
+    await expect(navigating).resolves.toBeUndefined();
+    expect(Object.values(appState(app).browserErrors)).toEqual([]);
+  });
+
+  it("restores a plugin session destination without starting a session", async () => {
+    installBrowserWindow("http://localhost/app");
+    const app = new PiWebApp();
+    const session = runtimeRecoverySession(workspace);
+    setAppState(app, { ...initialAppState(), projects: [project] });
+    const sessions = await installRuntimeRecoveryBoundaries(app, () => Promise.resolve([workspace]), session);
+    const start = vi.spyOn(sessions, "startSession");
+    const context = createPluginRuntimeContext(app);
+    await context.navigate({ machineId: "local", projectId: project.id, workspaceId: workspace.id, sessionId: session.id, view: "chat" });
+    expect(appState(app).selectedSession?.id).toBe(session.id);
+    expect(appState(app).mainView).toBe("chat");
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  // Restoration tests own the missing machine/project/workspace/session matrix;
+  // this case owns the plugin promise contract when restoration displays an error.
+  it("resolves plugin route failures through unavailable UI", async () => {
+    const browser = installBrowserWindow("http://localhost/app");
+    const app = new PiWebApp();
+    setAppState(app, { ...initialAppState(), projects: [project] });
+    await markPluginLoadingReady(app);
+    await expect(createPluginRuntimeContext(app).navigate({ projectId: "missing-project", view: "chat" })).resolves.toBeUndefined();
+    expect(browser.url.searchParams.get("project")).toBe("missing-project");
+    expect(callAppMethod(app, "sessionEmptyMessage")).toContain("Project not found: missing-project");
+    expect(browser.pushed).toHaveLength(1);
+  });
+
+  it("leaves malformed tool IDs to the host's unavailable UI rather than rejecting", async () => {
+    const tool = "missing";
+    const browser = installBrowserWindow("http://localhost/app");
+    const app = new PiWebApp();
+    setAppState(app, { ...initialAppState(), projects: [project] });
+    await installRuntimeRecoveryBoundaries(app, () => Promise.resolve([workspace]), runtimeRecoverySession(workspace));
+    await expect(createPluginRuntimeContext(app).navigate({ projectId: project.id, workspaceId: workspace.id, view: "workspace", tool })).resolves.toBeUndefined();
+    expect(browser.url.searchParams.get("tool")).toBe(tool);
+    await expectWorkspaceContentError(app, `Workspace panel unavailable: ${tool}`);
+  });
+
   it("rejects an async navigation whose tool/view origin changed in the URL", async () => {
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&tool=core%3Aworkspace.terminal&view=chat");
     const app = new PiWebApp();
@@ -1942,7 +2010,7 @@ describe("PiWebApp plugin host", () => {
 
     const runtime = new TerminalBrowserRuntime(new InMemoryTerminalSelectionMemory());
     const { machine, workspace: boundWorkspace, files, host, prompt, terminal } = workspacePanelContextFromApp(app);
-    const context: PublicWorkspacePanelContext = { machine, workspace: boundWorkspace, files, host, prompt, terminal, navigation };
+    const context: PublicWorkspacePanelContext = { navigate: workspacePanelContextFromApp(app).navigate, machine, workspace: boundWorkspace, files, host, prompt, terminal, navigation };
     const selectionScope = runtime.selectionScope(context);
 
     expect(runtime.selectTerminal(context, "terminal-current")).toBe(true);
@@ -2082,6 +2150,7 @@ describe("PiWebApp plugin host", () => {
               navigationAliases: ["core:workspace.terminal"],
               onInvalidate: (context) => {
                 const runtimeContext: PublicWorkspacePanelContext = {
+                  navigate: context.navigate,
                   machine: context.machine,
                   workspace: context.workspace,
                   files: context.files,
@@ -3896,6 +3965,7 @@ async function registerFilesRuntimePanel(
             invalidationResources: ["workspace.files"],
             onInvalidate: (context, invalidation) => {
               const runtimeContext: PublicWorkspacePanelContext = {
+                navigate: context.navigate,
                 machine: context.machine,
                 workspace: context.workspace,
                 files,
