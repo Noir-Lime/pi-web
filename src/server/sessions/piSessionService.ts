@@ -4027,6 +4027,15 @@ export class PiSessionService implements SessionRouteService {
       this.events.publish(session.sessionId, toClientEvent(event, session.thinkingLevel));
       this.publishActivityForEvent(session, event);
       const eventType = getString(event, "type");
+      // Queued messages can reach the model after an ask opened, even though
+      // there was no ask to dismiss when the user originally submitted them.
+      if (eventType === "message_start" && isRecord(event) && getString(event["message"], "role") === "user") {
+        void this.voidOpenAskForUserMessage(session).catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          this.publishActivity(session, "error", "error", message);
+          this.events.publish(session.sessionId, { type: "session.error", message });
+        });
+      }
       if (eventType === "agent_end") this.abortRunScopedExtensionDialogs(session.sessionId);
       if (eventType === "compaction_end") this.scheduleCompactionQueueDrain(session.sessionId);
       if (eventType === "agent_start" || eventType === "agent_end") this.scheduleCompactionQueueDrain(session.sessionId);
