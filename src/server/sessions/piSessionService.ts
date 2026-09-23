@@ -1121,7 +1121,7 @@ export interface PiSessionServiceDependencies {
    * Called when unread state changed, so the machine status projection can
    * recompute. The unread catalog itself stays the authority for unread detail.
    */
-  onUnreadChanged?: () => void;
+  onUnreadChanged?: (hasNewCompletion: boolean) => void;
   /**
    * Lets session startup report that provider model lists are refreshing while
    * a session is being constructed. Omit to report the startup phase alone.
@@ -1217,7 +1217,7 @@ export class PiSessionService implements SessionRouteService {
   private readonly catalogRefreshStatus: CatalogRefreshStatus | undefined;
   private readonly config: Pick<PiWebConfigService, "read"> | undefined;
   private readonly unreadPublicationRetryInitialMs: number;
-  private readonly onUnreadChanged: (() => void) | undefined;
+  private readonly onUnreadChanged: ((hasNewCompletion: boolean) => void) | undefined;
   private readonly pendingUnreadMutations: SessionUnreadMutation[] = [];
   private unreadPublication: Promise<void> | undefined;
   private unreadPublicationFailure: unknown;
@@ -1310,6 +1310,10 @@ export class PiSessionService implements SessionRouteService {
 
   notificationCatalog(): SessionNotificationCatalogSnapshot {
     return this.notificationStore.catalogSnapshot();
+  }
+
+  async reconcileUnreadWorkspaces(cwds: Iterable<string>): Promise<void> {
+    await this.publishUnreadMutations(this.unreadStore.reconcileWorkspaces(cwds));
   }
 
   async unreadCatalog(): Promise<SessionUnreadCatalogSnapshot> {
@@ -3914,7 +3918,7 @@ export class PiSessionService implements SessionRouteService {
     // The store applied the mutations already, so the status projection is told
     // now rather than after the durable flush: it reads in-memory unread state
     // and must not lag behind the rows the browser is about to see.
-    if (mutations.length > 0) this.onUnreadChanged?.();
+    if (mutations.length > 0) this.onUnreadChanged?.(mutations.some(({ event }) => event.unread !== null));
     this.enqueueUnreadMutations(mutations);
     this.unreadPublicationFlushRequested = true;
     if (this.unreadPublication === undefined && this.unreadPublicationRetryTimer !== undefined) {
