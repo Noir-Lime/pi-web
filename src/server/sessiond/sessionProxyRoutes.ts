@@ -50,7 +50,31 @@ export function registerSessionProxyRoutes(app: FastifyInstance, daemon: Session
   app.all(`${prefix}/auth`, (request, reply) => proxy(request, reply));
   app.all(`${prefix}/auth/*`, (request, reply) => proxy(request, reply));
   app.all(`${prefix}/sessions`, (request, reply) => proxy(request, reply));
+  // History images: the daemon answers with JSON `{ mimeType, data }`; serve the
+  // decoded bytes so the browser can lazy-load and cache them. The image id
+  // embeds a content hash, so a URL never changes meaning.
+  app.get(`${prefix}/sessions/:sessionId/images/:imageId`, async (request, reply) => {
+    try {
+      const upstream = await daemon.request("GET", stripPrefix(request.url, prefix));
+      const image = upstream.statusCode === 200 ? historyImage(parseJson(upstream.body)) : undefined;
+      if (image === undefined) return await reply.code(upstream.statusCode === 200 ? 502 : upstream.statusCode).send(upstream.body === "" ? undefined : parseJson(upstream.body));
+      return await reply
+        .header("content-type", image.mimeType)
+        .header("cache-control", "private, max-age=31536000, immutable")
+        .header("x-content-type-options", "nosniff")
+        .send(Buffer.from(image.data, "base64"));
+    } catch (error) {
+      requestFailed(reply, error);
+      return undefined;
+    }
+  });
   app.all(`${prefix}/sessions/*`, (request, reply) => proxy(request, reply));
+}
+
+function historyImage(value: unknown): { mimeType: string; data: string } | undefined {
+  if (typeof value !== "object" || value === null || !("mimeType" in value) || !("data" in value)) return undefined;
+  const { mimeType, data } = value;
+  return typeof mimeType === "string" && mimeType.startsWith("image/") && typeof data === "string" ? { mimeType, data } : undefined;
 }
 
 function stripPrefix(url: string, prefix: string): string {

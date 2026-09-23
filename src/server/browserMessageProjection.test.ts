@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { normalizeMessage } from "../client/src/chatMessages.js";
 import type { MessagePage } from "../shared/apiTypes.js";
-import { projectBrowserMessage, projectBrowserMessageResponse, projectBrowserSessionEvent } from "./browserMessageProjection.js";
+import { findHistoryImage, projectBrowserMessage, projectBrowserMessageResponse, projectBrowserSessionEvent } from "./browserMessageProjection.js";
 
 function signedAssistantMessage() {
   return {
@@ -58,4 +58,29 @@ describe("browser message projection", () => {
     expect(projectBrowserSessionEvent(appendEvent)).toBe(appendEvent);
     expect(finalEvent.message).toBe(message);
   });
+
+  it("replaces raster history image data with ids that resolve back to the image", () => {
+    const png = { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" };
+    const svg = { type: "image", mimeType: "image/svg+xml", data: "PHN2Zy8+" };
+    const message = { role: "toolResult", content: [{ type: "text", text: "read" }, png, svg] };
+    const page: MessagePage = { messages: [message], start: 7, total: 8 };
+
+    const projected = projectBrowserMessageResponse(page);
+    const parts = contentParts(projected.messages[0]);
+    const imageId = parts[1] !== null && typeof parts[1] === "object" && "imageId" in parts[1] ? String(parts[1].imageId) : "";
+
+    expect(imageId).toMatch(/^7-1-[0-9a-f]{16}$/);
+    expect(parts[1]).toEqual({ type: "image", mimeType: "image/png", imageId });
+    expect(parts[2]).toBe(svg);
+    expect(message.content[1]).toBe(png);
+    expect(findHistoryImage(page, imageId)).toEqual({ mimeType: "image/png", data: png.data });
+    expect(findHistoryImage(page, "7-1-0000000000000000")).toBeUndefined();
+    expect(findHistoryImage(page, "7-2-0000000000000000")).toBeUndefined();
+  });
 });
+
+function contentParts(message: unknown): unknown[] {
+  if (message === null || typeof message !== "object" || !("content" in message) || !Array.isArray(message.content)) return [];
+  const content: unknown[] = message.content;
+  return content;
+}

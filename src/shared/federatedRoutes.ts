@@ -14,6 +14,7 @@ export type FederatedHttpMethod = "GET" | "POST" | "PUT" | "DELETE";
 export const PI_PACKAGE_MUTATION_PROXY_TIMEOUT_MS = 5 * 60_000;
 export const SESSION_TREE_NAVIGATION_PROXY_TIMEOUT_MS = 5 * 60_000;
 export const SESSION_TREE_FORK_PROXY_TIMEOUT_MS = 5 * 60_000;
+export const SESSION_HISTORY_IMAGE_MAX_BYTES = 64 * 1024 * 1024;
 export const WORKSPACE_FILE_PREVIEW_ROUTE_PATH = "/projects/:projectId/workspaces/:workspaceId/file/preview";
 
 export interface FederatedHttpRouteSpec {
@@ -96,6 +97,7 @@ export const FEDERATED_HTTP_ROUTES = [
   { method: "POST", path: "/sessions/bulk/archive" },
   { method: "POST", path: "/sessions/bulk/delete-archived" },
   { method: "GET", path: "/sessions/:sessionId/messages" },
+  { method: "GET", path: "/sessions/:sessionId/images/:imageId", responseBodyLimit: SESSION_HISTORY_IMAGE_MAX_BYTES },
   { method: "GET", path: "/sessions/:sessionId/notifications" },
   { method: "POST", path: "/sessions/:sessionId/notifications/dismiss" },
   { method: "POST", path: "/sessions/:sessionId/notifications/dismiss-all" },
