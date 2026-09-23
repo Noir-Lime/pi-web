@@ -1121,9 +1121,7 @@ export interface PiSessionServiceDependencies {
    * Called when unread state changed, so the machine status projection can
    * recompute. The unread catalog itself stays the authority for unread detail.
    */
-  onUnreadChanged?: () => void;
-  /** Refresh authoritative workspace eligibility before exposing unread state. */
-  refreshUnreadWorkspaces?: () => Promise<void>;
+  onUnreadChanged?: (hasNewCompletion: boolean) => void;
   /**
    * Lets session startup report that provider model lists are refreshing while
    * a session is being constructed. Omit to report the startup phase alone.
@@ -1219,8 +1217,7 @@ export class PiSessionService implements SessionRouteService {
   private readonly catalogRefreshStatus: CatalogRefreshStatus | undefined;
   private readonly config: Pick<PiWebConfigService, "read"> | undefined;
   private readonly unreadPublicationRetryInitialMs: number;
-  private readonly onUnreadChanged: (() => void) | undefined;
-  private readonly refreshUnreadWorkspaces: (() => Promise<void>) | undefined;
+  private readonly onUnreadChanged: ((hasNewCompletion: boolean) => void) | undefined;
   private readonly pendingUnreadMutations: SessionUnreadMutation[] = [];
   private unreadPublication: Promise<void> | undefined;
   private unreadPublicationFailure: unknown;
@@ -1244,7 +1241,6 @@ export class PiSessionService implements SessionRouteService {
     this.notificationStore = deps.notificationStore ?? new SessionNotificationStore();
     this.unreadStore = deps.unreadStore ?? new SessionUnreadStore();
     this.onUnreadChanged = deps.onUnreadChanged;
-    this.refreshUnreadWorkspaces = deps.refreshUnreadWorkspaces;
     this.pendingAskStore = deps.pendingAskStore ?? new PendingAskStore();
     this.pendingExtensionDialogStore = deps.pendingExtensionDialogStore ?? new PendingExtensionDialogStore();
     this.extensionDialogsTimeoutMs = deps.extensionDialogsTimeoutMs ?? DEFAULT_EXTENSION_DIALOGS_TIMEOUT_MS;
@@ -1316,33 +1312,11 @@ export class PiSessionService implements SessionRouteService {
     return this.notificationStore.catalogSnapshot();
   }
 
-  allowUnreadWorkspaces(cwds: Iterable<string>): void {
-    this.unreadStore.allowWorkspaces(cwds);
-  }
-
-  async reconcileUnreadWorkspaces(cwds: Iterable<string>): Promise<() => void> {
-    const restoreMembership = this.unreadStore.captureWorkspaceEligibility();
-    const restoreEligibility = (): void => {
-      restoreMembership();
-      // A failed close must not mute a still-registered project's current work.
-      // Re-arm from live runtimes, not stale latches for work that ended while
-      // cleanup was flushing. Already-cleared unread stays cleared.
-      for (const active of this.active.values()) {
-        const session = active.runtime.session;
-        if (this.hasActiveWork(session)) this.observeUnreadActivityState(session);
-      }
-    };
-    try {
-      await this.publishUnreadMutations(this.unreadStore.reconcileWorkspaces(cwds));
-    } catch (error) {
-      restoreEligibility();
-      throw error;
-    }
-    return restoreEligibility;
+  async reconcileUnreadWorkspaces(cwds: Iterable<string>): Promise<void> {
+    await this.publishUnreadMutations(this.unreadStore.reconcileWorkspaces(cwds));
   }
 
   async unreadCatalog(): Promise<SessionUnreadCatalogSnapshot> {
-    await this.refreshUnreadWorkspaces?.();
     await this.publishUnreadMutations([]);
     return this.unreadStore.durableCatalogSnapshot();
   }
@@ -3944,7 +3918,7 @@ export class PiSessionService implements SessionRouteService {
     // The store applied the mutations already, so the status projection is told
     // now rather than after the durable flush: it reads in-memory unread state
     // and must not lag behind the rows the browser is about to see.
-    if (mutations.length > 0) this.onUnreadChanged?.();
+    if (mutations.length > 0) this.onUnreadChanged?.(mutations.some(({ event }) => event.unread !== null));
     this.enqueueUnreadMutations(mutations);
     this.unreadPublicationFlushRequested = true;
     if (this.unreadPublication === undefined && this.unreadPublicationRetryTimer !== undefined) {

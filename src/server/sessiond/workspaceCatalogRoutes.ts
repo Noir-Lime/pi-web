@@ -15,8 +15,6 @@ export interface WorkspaceCatalogRouteDependencies {
   projects: WorkspaceCatalogProjectReader;
   workspaces: WorkspaceCatalogResolver;
   providerRuntime: WorkspaceProviderRuntimeSnapshot;
-  /** Refresh daemon state when the UI discovers externally created workspaces. */
-  onWorkspacesListed?: () => Promise<void>;
 }
 
 /** Internal sessiond protocol; browser-facing routes consume it through a typed client. */
@@ -30,9 +28,7 @@ export function registerWorkspaceCatalogRoutes(
   app.get<{ Params: { projectId: string } }>(`${prefix}/projects/:projectId/workspaces`, async (request, reply) => {
     try {
       const project = await dependencies.projects.requireProject(request.params.projectId);
-      const resolution = await dependencies.workspaces.resolve(project);
-      await dependencies.onWorkspacesListed?.();
-      return resolution;
+      return await dependencies.workspaces.resolve(project);
     } catch (error) {
       return catalogRequestFailed(reply, error);
     }

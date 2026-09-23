@@ -1,183 +1,147 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project, WorkspaceProviderAuthorityResolution } from "../../shared/apiTypes.js";
 import { SessionUnreadStore, type SessionUnreadMutation } from "../sessions/sessionUnreadStore.js";
-import { ProjectLifecycleService } from "./projectLifecycleService.js";
 import { MachineStatusService } from "../status/machineStatusService.js";
 import { CachedWorkspaceAttribution } from "../status/workspaceAttribution.js";
+import { ProjectLifecycleService } from "./projectLifecycleService.js";
 
 const root = project("root", "/");
 const removed = project("removed", "/srv/removed");
 const kept = project("kept", "/srv/kept");
+const MINUTE = 60_000;
 
-describe("ProjectLifecycleService", () => {
-  it("prunes legacy orphan completions rather than attributing them to an ancestor", async () => {
+beforeEach(() => { vi.useFakeTimers(); });
+afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
+
+describe("eventual project unread cleanup", () => {
+  it("does no discovery for an empty catalog, including project add/remove", async () => {
+    const fixture = lifecycle([removed]);
+    fixture.service.scheduleCleanup();
+    await fixture.service.close(removed.id);
+    await fixture.service.add({ path: removed.path });
+    await vi.advanceTimersByTimeAsync(10 * MINUTE);
+    expect(fixture.projects.list).not.toHaveBeenCalled();
+    expect(fixture.workspaces.resolve).not.toHaveBeenCalled();
+    expect(fixture.reconcile).not.toHaveBeenCalled();
+  });
+
+  it("coalesces startup/completion signals into one delayed pass and clears ancestor indicators", async () => {
     const fixture = lifecycle([root, kept]);
     complete(fixture.unread, removed.path);
     complete(fixture.unread, kept.path);
-    const logger = { warn: vi.fn() };
+    for (let index = 0; index < 10; index += 1) fixture.service.scheduleCleanup();
+    await vi.advanceTimersByTimeAsync(MINUTE - 1);
+    expect(fixture.workspaces.resolve).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fixture.projects.list).toHaveBeenCalledOnce();
+    expect(fixture.reconcile).toHaveBeenCalledOnce();
+    expect(fixture.unread.catalogSnapshot().sessions.map((entry) => entry.cwd)).toEqual([kept.path]);
+    expect(fixture.mutations[0]?.event).toMatchObject({ cwd: removed.path, unread: null });
+
     const status = new MachineStatusService({
       activity: { snapshot: () => ({ workspaces: [] }) },
       unread: fixture.unread,
       attribution: new CachedWorkspaceAttribution({
         projects: fixture.projects,
         workspaces: { list: async (owner) => [...(await fixture.workspaces.resolve(owner)).workspaces] },
-        logger,
+        logger: fixture.logger,
       }),
       publisher: { publish: vi.fn() },
-      logger,
+      logger: fixture.logger,
     });
-    await fixture.service.refresh();
     await status.refresh();
     expect(status.snapshot().projects).toEqual({ kept: { "core:unread": true } });
     expect(status.snapshot().unattributed).toEqual({});
-    expect(fixture.unread.catalogSnapshot().sessions.map((entry) => entry.cwd)).toEqual([kept.path]);
-    expect(fixture.mutations).toHaveLength(1);
-    expect(fixture.mutations[0]?.event).toMatchObject({ cwd: removed.path, unread: null });
+
+    // Retained unread alone does not cause perpetual periodic discovery.
+    await vi.advanceTimersByTimeAsync(10 * MINUTE);
+    expect(fixture.reconcile).toHaveBeenCalledOnce();
   });
 
-  it("clears removed-project unread and active latches, and re-adds without old state", async () => {
-    const fixture = lifecycle([root, removed]);
-    await fixture.service.refresh();
-    complete(fixture.unread, removed.path);
-    fixture.unread.observeActivityState("busy", removed.path, true);
-
-    await fixture.service.close(removed.id);
-    expect(fixture.unread.catalogSnapshot().sessions).toEqual([]);
-    expect(await fixture.projects.list()).toEqual([root]);
-    complete(fixture.unread, removed.path); // Late runtime events while removed.
-    expect(fixture.unread.catalogSnapshot().sessions).toEqual([]);
-
-    await fixture.service.add({ path: removed.path });
-    fixture.unread.observeActivityState("busy", removed.path, false);
-    expect(fixture.unread.catalogSnapshot().sessions).toEqual([]);
-    complete(fixture.unread, removed.path); // Genuinely new work is tracked.
-    expect(fixture.unread.catalogSnapshot().sessions).toHaveLength(1);
+  it("skips the scheduled pass if the user has read everything meanwhile", async () => {
+    const fixture = lifecycle([kept]);
+    complete(fixture.unread, kept.path);
+    fixture.service.scheduleCleanup();
+    fixture.unread.forgetSession(kept.path, kept.path);
+    await vi.advanceTimersByTimeAsync(MINUTE);
+    expect(fixture.projects.list).not.toHaveBeenCalled();
   });
 
-  it("prunes old state before admitting the cwd of an already removed project", async () => {
-    const fixture = lifecycle([root]);
-    complete(fixture.unread, removed.path);
-    await fixture.service.add({ path: removed.path });
-    expect(fixture.unread.catalogSnapshot().sessions).toEqual([]);
-  });
-
-  it("preserves exact external worktrees and workspace paths shared by another project", async () => {
+  it("removes registration immediately, then collects unread while preserving shared external worktrees", async () => {
     const fixture = lifecycle([removed, kept], new Map([
       [removed.id, [removed.path, "/external/shared"]],
       [kept.id, [kept.path, "/external/shared"]],
     ]));
-    complete(fixture.unread, "/external/shared");
     complete(fixture.unread, removed.path);
+    complete(fixture.unread, "/external/shared");
     await fixture.service.close(removed.id);
+    expect(await fixture.projects.list()).toEqual([kept]);
+    expect(fixture.unread.catalogSnapshot().sessions).toHaveLength(2);
+    expect(fixture.workspaces.resolve).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(MINUTE);
     expect(fixture.unread.catalogSnapshot().sessions.map((entry) => entry.cwd)).toEqual(["/external/shared"]);
   });
 
-  it.each(["degraded", "probe-failed", "throw"])("does not prune on incomplete provider resolution (%s)", async (failure) => {
-    const fixture = lifecycle([kept]);
-    complete(fixture.unread, "/external/worktree");
-    fixture.workspaces.resolve.mockImplementation(() => {
-      if (failure === "throw") return Promise.reject(new Error("provider offline"));
-      return Promise.resolve({
-        ...resolution(kept, [kept.path]),
-        status: failure === "degraded" ? "degraded" : "folder",
-        diagnostics: failure === "probe-failed" ? [{ code: "probe-failed", message: "provider offline", tier: "primary" }] : [],
-      });
-    });
-    await expect(fixture.service.refresh()).rejects.toThrow();
-    expect(fixture.unread.catalogSnapshot().sessions).toHaveLength(1);
-    expect(fixture.reconcile).not.toHaveBeenCalled();
-    await expect(fixture.service.add({ path: removed.path })).rejects.toThrow();
-    expect(fixture.projects.add).not.toHaveBeenCalled();
-  });
-
-  it("admits a new root directly and discovers its extra workspaces through normal refresh", async () => {
-    const paths = new Map<string, string[]>();
-    const fixture = lifecycle([kept], paths);
-    const added = await fixture.service.add({ path: removed.path });
-    expect(fixture.workspaces.resolve.mock.calls.map(([owner]) => owner.id)).toEqual([kept.id]);
-    complete(fixture.unread, added.path);
-    expect(fixture.unread.catalogSnapshot().sessions.map((entry) => entry.cwd)).toEqual([added.path]);
-
-    paths.set(added.id, [added.path, "/external/new"]);
-    await fixture.service.refresh();
-    complete(fixture.unread, "/external/new");
-    expect(fixture.unread.catalogSnapshot().sessions.map((entry) => entry.cwd)).toEqual(["/external/new", added.path]);
-  });
-
-  it("restores tracking eligibility when the registration removal write fails", async () => {
-    const fixture = lifecycle([removed]);
-    await fixture.service.refresh();
-    complete(fixture.unread, removed.path);
-    fixture.projects.close.mockRejectedValueOnce(new Error("projects.json write failed"));
-    await expect(fixture.service.close(removed.id)).rejects.toThrow("projects.json write failed");
-    expect(await fixture.projects.list()).toEqual([removed]);
-    expect(fixture.unread.catalogSnapshot().sessions).toEqual([]);
-    complete(fixture.unread, removed.path);
-    expect(fixture.unread.catalogSnapshot().sessions).toHaveLength(1);
-  });
-
-  it("does not treat an unreadable project catalog as an empty list", async () => {
-    const fixture = lifecycle([kept]);
-    complete(fixture.unread, kept.path);
-    fixture.projects.list.mockRejectedValue(new Error("projects.json unreadable"));
-    await expect(fixture.service.refresh()).rejects.toThrow("projects.json unreadable");
-    expect(fixture.reconcile).not.toHaveBeenCalled();
-    expect(fixture.unread.catalogSnapshot().sessions).toHaveLength(1);
-  });
-
-  it("can remove an unavailable project without resolving the removed provider", async () => {
-    const fixture = lifecycle([removed]);
-    fixture.workspaces.resolve.mockRejectedValue(new Error("removed directory unavailable"));
+  it("cleans before a quick re-add rather than reviving historical unread", async () => {
+    const fixture = lifecycle([root, removed]);
     complete(fixture.unread, removed.path);
     await fixture.service.close(removed.id);
+    await fixture.service.add({ path: removed.path });
     expect(fixture.unread.catalogSnapshot().sessions).toEqual([]);
-    expect(fixture.workspaces.resolve).not.toHaveBeenCalled();
+    expect(fixture.reconcile).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(2 * MINUTE);
+    expect(fixture.reconcile).toHaveBeenCalledOnce();
+
+    complete(fixture.unread, removed.path);
+    fixture.service.scheduleCleanup();
+    await vi.advanceTimersByTimeAsync(MINUTE);
+    expect(fixture.unread.catalogSnapshot().sessions).toHaveLength(1); // New work is retained.
   });
 
-  it("does not remove the project registration if durable cleanup fails, and permits retry", async () => {
-    const fixture = lifecycle([removed]);
+  it("eventually collects another completion from a runtime whose project was removed", async () => {
+    const fixture = lifecycle([root]);
+    for (let index = 0; index < 2; index += 1) {
+      complete(fixture.unread, removed.path);
+      expect(fixture.unread.hasUnread()).toBe(true); // No permanent tracking eligibility state.
+      fixture.service.scheduleCleanup();
+      await vi.advanceTimersByTimeAsync(MINUTE);
+      expect(fixture.unread.hasUnread()).toBe(false);
+    }
+  });
+
+  it.each(["projects", "provider", "degraded"])("logs and retries failed %s lookup without deleting state", async (failure) => {
+    const fixture = lifecycle([root]);
+    complete(fixture.unread, removed.path);
+    if (failure === "projects") fixture.projects.list.mockRejectedValueOnce(new Error("catalog unreadable"));
+    if (failure === "provider") fixture.workspaces.resolve.mockRejectedValueOnce(new Error("lookup failed"));
+    if (failure === "degraded") fixture.workspaces.resolve.mockResolvedValueOnce({ ...resolution(root, [root.path]), status: "degraded" });
+    fixture.service.scheduleCleanup();
+    await vi.advanceTimersByTimeAsync(MINUTE);
+    expect(fixture.unread.hasUnread()).toBe(true);
+    expect(fixture.reconcile).not.toHaveBeenCalled();
+    expect(fixture.logger.warn).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(MINUTE);
+    expect(fixture.unread.hasUnread()).toBe(false);
+  });
+
+  it("does not register a project if pre-add durable cleanup fails", async () => {
+    const fixture = lifecycle([root]);
+    complete(fixture.unread, removed.path);
     fixture.reconcile.mockRejectedValueOnce(new Error("disk full"));
-    await expect(fixture.service.close(removed.id)).rejects.toThrow("disk full");
-    expect(fixture.projects.close).not.toHaveBeenCalled();
-    await fixture.service.close(removed.id);
-    expect(await fixture.projects.list()).toEqual([]);
-  });
-
-  it("serializes re-add behind durable close cleanup and drains admitted work on shutdown", async () => {
-    const fixture = lifecycle([removed]);
-    let finishCleanup = (): void => { throw new Error("cleanup has not started"); };
-    let notifyStarted = (): void => { throw new Error("start signal not initialized"); };
-    const started = new Promise<void>((resolve) => { notifyStarted = resolve; });
-    fixture.reconcile.mockImplementationOnce(() => new Promise<() => void>((resolve) => {
-      finishCleanup = () => { resolve(() => undefined); };
-      notifyStarted();
-    }));
-    const closing = fixture.service.close(removed.id);
-    await started;
-    const adding = fixture.service.add({ path: removed.path });
-    let drained = false;
-    const shutdown = fixture.service.closeAll().then(() => { drained = true; });
-    await expect(fixture.service.add({ path: kept.path })).rejects.toThrow("shutting down");
-    expect(drained).toBe(false);
-    expect(fixture.projects.close).not.toHaveBeenCalled();
+    await expect(fixture.service.add({ path: removed.path })).rejects.toThrow("disk full");
     expect(fixture.projects.add).not.toHaveBeenCalled();
-    finishCleanup();
-    await Promise.all([closing, adding, shutdown]);
-    expect(drained).toBe(true);
-    await expect(fixture.service.refresh()).rejects.toThrow("shutting down");
-    expect(fixture.projects.close).toHaveBeenCalledOnce();
-    expect(fixture.projects.add).toHaveBeenCalledOnce();
-    expect((await fixture.projects.list()).map((entry) => entry.path)).toEqual([removed.path]);
+    await vi.advanceTimersByTimeAsync(MINUTE);
+    expect(fixture.unread.hasUnread()).toBe(false);
   });
 
-  it("refreshes eligibility for externally created workspaces", async () => {
-    const paths = new Map([[kept.id, [kept.path]]]);
-    const fixture = lifecycle([kept], paths);
-    await fixture.service.refresh();
-    paths.set(kept.id, [kept.path, "/external/new"]);
-    await fixture.service.refresh();
-    complete(fixture.unread, "/external/new");
-    expect(fixture.unread.catalogSnapshot().sessions.map((entry) => entry.cwd)).toEqual(["/external/new"]);
+  it("cancels pending cleanup on shutdown", async () => {
+    const fixture = lifecycle([root]);
+    complete(fixture.unread, removed.path);
+    fixture.service.scheduleCleanup();
+    await fixture.service.closeAll();
+    await vi.advanceTimersByTimeAsync(2 * MINUTE);
+    expect(fixture.projects.list).not.toHaveBeenCalled();
+    await expect(fixture.service.add({ path: kept.path })).rejects.toThrow("shutting down");
   });
 });
 
@@ -201,24 +165,20 @@ function lifecycle(initial: Project[], paths = new Map<string, string[]>()) {
   const unread = new SessionUnreadStore();
   const mutations: SessionUnreadMutation[] = [];
   const reconcile = vi.fn(async (cwds: Iterable<string>) => {
-    const restore = unread.captureWorkspaceEligibility();
     mutations.push(...unread.reconcileWorkspaces(cwds));
     await unread.flush();
-    return restore;
   });
-  const onChanged = vi.fn();
+  const logger = { warn: vi.fn() };
   const service = new ProjectLifecycleService({
-    projects, workspaces, reconcileUnreadWorkspaces: reconcile, onChanged,
-    allowUnreadWorkspaces: (cwds) => { unread.allowWorkspaces(cwds); },
+    projects, workspaces, reconcileUnreadWorkspaces: reconcile,
+    hasUnread: () => unread.hasUnread(), onProjectsChanged: vi.fn(), logger,
   });
-  return { service, projects, workspaces, unread, mutations, reconcile, onChanged };
+  return { service, projects, workspaces, unread, mutations, reconcile, logger };
 }
 
 function resolution(owner: Project, paths: string[]): WorkspaceProviderAuthorityResolution {
   return {
-    projectId: owner.id,
-    status: "folder",
-    diagnostics: [],
+    projectId: owner.id, status: "folder", diagnostics: [],
     workspaces: paths.map((path) => ({ id: path, projectId: owner.id, path, isMain: path === owner.path, label: path })),
   };
 }

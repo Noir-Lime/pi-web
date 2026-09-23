@@ -212,6 +212,7 @@ async function createSessionDaemonRuntime() {
     lateHostCapabilities: [PI_WEB_HOST_WORKSPACES_CAPABILITY, PI_WEB_HOST_PI_SESSIONS_CAPABILITY, PI_WEB_HOST_PI_SESSION_EVENTS_CAPABILITY],
   });
   let sessionsForFailedConstruction: PiSessionService | undefined;
+  let projectLifecycleForFailedConstruction: ProjectLifecycleService | undefined;
   try {
     const notificationStore = new SessionNotificationStore();
     const unreadStore = new SessionUnreadStore({
@@ -270,22 +271,15 @@ async function createSessionDaemonRuntime() {
     const projectLifecycle: ProjectLifecycleService = new ProjectLifecycleService({
       projects,
       workspaces: workspaceProviders,
-      reconcileUnreadWorkspaces: (cwds): Promise<() => void> => sessions.reconcileUnreadWorkspaces(cwds),
-      allowUnreadWorkspaces: (cwds) => { sessions.allowUnreadWorkspaces(cwds); },
-      onChanged: () => {
+      hasUnread: () => unreadStore.hasUnread(),
+      reconcileUnreadWorkspaces: (cwds): Promise<void> => sessions.reconcileUnreadWorkspaces(cwds),
+      logger: app.log,
+      onProjectsChanged: () => {
         statusAttribution.invalidate();
         machineStatus.notifyChanged();
       },
     });
-    const refreshProjectUnread = async (): Promise<void> => {
-      try {
-        await projectLifecycle.refresh();
-      } catch (error) {
-        // An unavailable provider is not evidence that its workspaces were
-        // removed. Keep the catalog and retry on the next catalog/topology read.
-        app.log.warn({ err: error }, "project unread state could not be reconciled");
-      }
-    };
+    projectLifecycleForFailedConstruction = projectLifecycle;
     const projectWorkspaceDeps = { projects, workspaces: workspaceProviders };
     const spawnTargets = config.spawnSessions ? new ProjectScopedSpawnTargetResolver(projectWorkspaceDeps) : undefined;
     const sessions = new PiSessionService(eventHub, sessionServiceDependencies({
@@ -317,8 +311,10 @@ async function createSessionDaemonRuntime() {
       extensionDialogsTimeoutMs: config.extensionDialogsTimeoutMs,
       notificationStore,
       unreadStore,
-      onUnreadChanged: () => { machineStatus.notifyChanged(); },
-      refreshUnreadWorkspaces: () => projectLifecycle.refresh(),
+      onUnreadChanged: (hasNewCompletion) => {
+        machineStatus.notifyChanged();
+        if (hasNewCompletion) projectLifecycle.scheduleCleanup();
+      },
       catalogRefreshStatus: catalogRefresher,
       sessionManager: createPiSessionManagerGateway({
         agentDir: activeAgentProfile.dir,
@@ -352,10 +348,8 @@ async function createSessionDaemonRuntime() {
       serverPlugins.safeStartLevel(),
       serverPlugins.catalogDiagnostics(),
     );
-    // Reconcile legacy persisted orphans before the initial projection. Provider
-    // resolution must not prevent the daemon from starting; failed cleanup is
-    // logged and retried on catalog reads and topology changes.
-    void refreshProjectUnread().then(() => { machineStatus.notifyChanged(); });
+    // Render current state immediately; stale unread is collected in the background.
+    machineStatus.notifyChanged();
     const terminals = serverPlugins.safeStartLevel() === "none"
       ? unavailableRequiredTerminalService()
       : serverPlugins.resolve(REQUIRED_TERMINAL_SERVICE_CAPABILITY);
@@ -400,8 +394,10 @@ async function createSessionDaemonRuntime() {
       // next start discards it.
       await stateOwnership.release();
     };
-    return { eventHub, machineStatus, statusAttribution, projectLifecycle, refreshProjectUnread, auth, sessions, serverNotices, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, projects, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals, shutdown };
+    projectLifecycle.scheduleCleanup(); // One delayed pass for existing persisted unread, if any.
+    return { eventHub, machineStatus, statusAttribution, projectLifecycle, auth, sessions, serverNotices, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, projects, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals, shutdown };
   } catch (error) {
+    await projectLifecycleForFailedConstruction?.closeAll();
     try {
       await serverPlugins.stop();
     } catch (disposeError) {
@@ -416,7 +412,7 @@ async function createSessionDaemonRuntime() {
   }
 }
 
-function registerSessionDaemonRoutes({ eventHub, machineStatus, statusAttribution, projectLifecycle, refreshProjectUnread, auth, sessions, serverNotices, runtimeComponent, projects, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals }: SessionDaemonRuntime): void {
+function registerSessionDaemonRoutes({ eventHub, machineStatus, statusAttribution, projectLifecycle, auth, sessions, serverNotices, runtimeComponent, projects, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals }: SessionDaemonRuntime): void {
   registerProjectMutationRoutes(app, projectLifecycle);
   registerMachineStatusRoutes(app, machineStatus);
   registerServerNoticeRoutes(app, serverNotices);
@@ -426,15 +422,11 @@ function registerSessionDaemonRoutes({ eventHub, machineStatus, statusAttributio
     projects,
     workspaces: workspaceProviders,
     providerRuntime: workspaceProviderRuntime,
-    onWorkspacesListed: refreshProjectUnread,
   });
   registerPairedPluginBackendRoutes(app, {
     projects,
     backends: pluginBackends,
-    onWorkspacesMutated: () => {
-      statusAttribution.invalidate();
-      void refreshProjectUnread();
-    },
+    onWorkspacesMutated: () => { statusAttribution.invalidate(); },
   });
   registerPluginBackendChannelRoutes(app, { projects, backends: pluginBackends });
   registerWorkspaceRemovalRoutes(app, {
@@ -442,7 +434,7 @@ function registerSessionDaemonRoutes({ eventHub, machineStatus, statusAttributio
     removals: workspaceRemovals,
     onWorkspacesMutated: () => {
       statusAttribution.invalidate();
-      void refreshProjectUnread();
+      projectLifecycle.scheduleCleanup();
     },
   });
 

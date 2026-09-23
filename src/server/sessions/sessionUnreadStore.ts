@@ -71,7 +71,6 @@ export class SessionUnreadStore {
   private readonly unreadByIdentity = new Map<string, SessionUnreadSummary>();
   private readonly activeByIdentity = new Map<string, SessionUnreadIdentity>();
   private readonly excludedByIdentity = new Map<string, SessionUnreadIdentity>();
-  private allowedWorkspaceCwds: Set<string> | undefined;
   private catalogId: string;
   private catalogRevision = 0;
   private nextCompletionOrder = 0;
@@ -118,8 +117,7 @@ export class SessionUnreadStore {
     this.requireLoaded();
     const identity = requireIdentity(sessionId, cwd);
     const key = sessionIdentityKey(identity);
-    if (this.excludedByIdentity.has(key)
-      || (this.allowedWorkspaceCwds !== undefined && !this.allowedWorkspaceCwds.has(resolve(cwd)))) {
+    if (this.excludedByIdentity.has(key)) {
       this.activeByIdentity.delete(key);
       return [];
     }
@@ -216,20 +214,9 @@ export class SessionUnreadStore {
     return mutations;
   }
 
-  /** Capture only transient eligibility; already-cleared unread is not resurrected on rollback. */
-  captureWorkspaceEligibility(): () => void {
+  hasUnread(): boolean {
     this.requireLoaded();
-    const previous = this.allowedWorkspaceCwds;
-    return () => { this.allowedWorkspaceCwds = previous; };
-  }
-
-  /** Admission is additive and has no durable state to flush. */
-  allowWorkspaces(cwds: Iterable<string>): void {
-    this.requireLoaded();
-    const added = [...cwds].map((cwd) => resolve(requireBoundedNonEmptyString(cwd, "cwd", SESSION_UNREAD_CWD_MAX_LENGTH)));
-    if (this.allowedWorkspaceCwds !== undefined) {
-      this.allowedWorkspaceCwds = new Set([...this.allowedWorkspaceCwds, ...added]);
-    }
+    return this.unreadByIdentity.size > 0;
   }
 
   /** Retain exact canonical workspace members without changing session identity spelling. */
@@ -242,12 +229,10 @@ export class SessionUnreadStore {
       .filter(([, summary]) => !retained.has(resolve(summary.cwd)));
     this.assertRevisionCapacity(removed.length);
 
-    this.allowedWorkspaceCwds = retained;
     for (const [key, identity] of this.activeByIdentity) {
       if (!retained.has(resolve(identity.cwd))) this.activeByIdentity.delete(key);
     }
-    // Sub-session exclusions outlive workspace eligibility; only explicit
-    // identity lifecycle cleanup should allow those sessions to track again.
+    // Sub-session exclusions are separate lifecycle state, not unread garbage.
     const mutations: SessionUnreadMutation[] = [];
     for (const [key, summary] of removed) {
       this.unreadByIdentity.delete(key);

@@ -178,29 +178,20 @@ describe("SessionUnreadStore", () => {
     expect(store.reconcileWorkspaces(["/repo/"])).toEqual([]);
     complete(store, "new", "/repo/./");
     expect(currentOrder(store, "new", "/repo/./")).toBe(5);
-    complete(store, "child", "/repo/child");
-    expect(currentOrder(store, "child", "/repo/child")).toBe(0);
+
   });
 
-  it("clears removed active latches and ignores activity until the workspace is readded", () => {
+  it("clears orphan active latches without maintaining permanent workspace eligibility", () => {
     const store = storeAt("2026-07-20T00:00:00.000Z", "catalog-a");
     store.observeActivityState("removed", "/orphan/./", true);
     store.observeActivityState("valid", "/repo/", true);
     expect(store.reconcileWorkspaces(["/repo"])).toEqual([]);
-    expect(store.observeActivityState("valid", "/repo/", false)).toHaveLength(1);
-    complete(store, "ignored", "/orphan");
-    store.observeActivityState("excluded-active", "/orphan", true);
-
-    store.reconcileWorkspaces(["/repo", "/orphan"]);
     expect(store.observeActivityState("removed", "/orphan/./", false)).toEqual([]);
-    expect(store.observeActivityState("excluded-active", "/orphan", false)).toEqual([]);
-    expect(store.catalogSnapshot().sessions.map((summary) => summary.sessionId)).toEqual(["valid"]);
+    expect(store.observeActivityState("valid", "/repo/", false)).toHaveLength(1);
     complete(store, "removed", "/orphan/./");
     expect(currentOrder(store, "removed", "/orphan/./")).toBe(2);
-
     expect(store.reconcileWorkspaces([])).toHaveLength(2);
-    complete(store, "valid", "/repo");
-    expect(store.catalogSnapshot().sessions).toEqual([]);
+    expect(store.hasUnread()).toBe(false);
   });
 
   it("keeps sub-session exclusions independent of workspace removal and readdition", () => {
@@ -240,15 +231,17 @@ describe("SessionUnreadStore", () => {
     expect(currentOrder(third, "next", "/repo")).toBe(3);
   });
 
-  it("requires loading and validates all workspace inputs before changing eligibility", async () => {
+  it("requires loading and validates all workspace inputs before changing state", async () => {
     const store = persistedStore(new MemoryPersistence(undefined), "catalog-a", "2026-07-20T00:00:00.000Z");
     expect(() => store.reconcileWorkspaces([])).toThrow("must be loaded");
+    expect(() => store.hasUnread()).toThrow("must be loaded");
     await store.load();
+    expect(store.hasUnread()).toBe(false);
     store.reconcileWorkspaces(["/repo"]);
     store.observeActivityState("active", "/repo", true);
     expect(() => store.reconcileWorkspaces(["/other", ""])).toThrow("cwd must be a non-empty string");
     expect(store.observeActivityState("active", "/repo", false)).toHaveLength(1);
-    complete(store, "excluded", "/other");
+    expect(store.hasUnread()).toBe(true);
     expect(store.catalogSnapshot().sessions).toHaveLength(1);
     await store.flush();
   });

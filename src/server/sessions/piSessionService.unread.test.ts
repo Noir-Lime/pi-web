@@ -33,8 +33,8 @@ afterEach(async () => {
 });
 
 describe("PiSessionService daemon-owned unread state", () => {
-  it("publishes workspace cleanup tombstones and does not regenerate unread from removed runtimes", async () => {
-    const unreadStore = new SessionUnreadStore({ createCatalogId: () => "catalog-test" });
+  it("publishes cleanup tombstones without signaling another completion or suppressing later work", async () => {
+    const unreadStore = new SessionUnreadStore();
     const hub = new CapturingSessionEventHub();
     const fake = fakeRuntime("session-1");
     const onUnreadChanged = vi.fn();
@@ -49,89 +49,18 @@ describe("PiSessionService daemon-owned unread state", () => {
       onUnreadChanged,
     });
     try {
-      await service.reconcileUnreadWorkspaces([WORKSPACE_CWD]);
       await service.status(sessionRef("session-1"));
       completeRuntimeWork(fake);
-      await service.unreadCatalog();
-      expect(unreadStore.catalogSnapshot().sessions).toHaveLength(1);
+      expect((await service.unreadCatalog()).sessions).toHaveLength(1);
+      expect((await service.unreadCatalog()).sessions).toHaveLength(1); // Reads do not collect anything.
+      expect(onUnreadChanged).toHaveBeenLastCalledWith(true);
       await service.reconcileUnreadWorkspaces([]);
-      expect(unreadEvents(hub).at(-1)).toMatchObject({ cwd: WORKSPACE_CWD, sessionId: "session-1", unread: null });
-      expect(onUnreadChanged).toHaveBeenCalledTimes(2);
+      expect((await service.unreadCatalog()).sessions).toEqual([]);
+      expect(unreadEvents(hub).at(-1)).toMatchObject({ sessionId: "session-1", cwd: WORKSPACE_CWD, unread: null });
+      expect(onUnreadChanged).toHaveBeenLastCalledWith(false);
       completeRuntimeWork(fake);
-      expect((await service.unreadCatalog()).sessions).toEqual([]);
-      await service.reconcileUnreadWorkspaces([WORKSPACE_CWD]);
-      expect((await service.unreadCatalog()).sessions).toEqual([]);
-    } finally {
-      await service.dispose();
-    }
-  });
-
-  it.each(["flush failure", "registration failure"])("restores live tracking after failed removal (%s)", async (failure) => {
-    let failWrites = false;
-    const unreadStore = new SessionUnreadStore({
-      persistence: {
-        load: () => Promise.resolve(undefined),
-        save: () => failWrites ? Promise.reject(new Error("disk full")) : Promise.resolve(),
-      },
-    });
-    await unreadStore.load();
-    const fake = fakeRuntime("session-1");
-    const service = new PiSessionService(new CapturingSessionEventHub(), {
-      agentDir: TEST_AGENT_DIR,
-      modelRuntime: testModelRuntime,
-      createAgentRuntime: runtimeCreator(fake.runtime),
-      sessionManager: sessionGateway([sessionRecord("session-1")]),
-      archiveStore: emptyArchiveStore(),
-      heartbeatIntervalMs: 60_000,
-      unreadPublicationRetryDelayMs: 60_000,
-      unreadStore,
-    });
-    try {
-      await service.reconcileUnreadWorkspaces([WORKSPACE_CWD]);
-      await service.status(sessionRef("session-1"));
-      completeRuntimeWork(fake);
-      await service.unreadCatalog();
-      fake.session.isStreaming = true;
-      fake.emit({ type: "agent_start" });
-      if (failure === "flush failure") {
-        failWrites = true;
-        await expect(service.reconcileUnreadWorkspaces([])).rejects.toThrow("disk full");
-        failWrites = false;
-      } else {
-        const restoreEligibility = await service.reconcileUnreadWorkspaces([]);
-        restoreEligibility();
-      }
-      // The still-registered runtime's ongoing work remains tracked, without
-      // restoring the historical completion that cleanup already cleared.
-      expect(unreadStore.catalogSnapshot().sessions).toEqual([]);
-      fake.session.isStreaming = false;
-      fake.emit({ type: "turn_end" });
-      expect((await unreadStore.durableCatalogSnapshot()).sessions).toMatchObject([{ sessionId: "session-1", completionOrder: 2 }]);
-    } finally {
-      failWrites = false;
-      await service.dispose();
-    }
-  });
-
-  it("reconciles workspace membership before serving the unread catalog", async () => {
-    const unreadStore = new SessionUnreadStore();
-    unreadStore.observeActivityState("orphan", WORKSPACE_CWD, true);
-    unreadStore.observeActivityState("orphan", WORKSPACE_CWD, false);
-    const refreshUnreadWorkspaces = vi.fn(async () => { await service.reconcileUnreadWorkspaces([]); });
-    const service = new PiSessionService(new CapturingSessionEventHub(), {
-      agentDir: TEST_AGENT_DIR,
-      modelRuntime: testModelRuntime,
-      sessionManager: sessionGateway([]),
-      archiveStore: emptyArchiveStore(),
-      heartbeatIntervalMs: 60_000,
-      unreadStore,
-      refreshUnreadWorkspaces,
-    });
-    try {
-      expect((await service.unreadCatalog()).sessions).toEqual([]);
-      expect(refreshUnreadWorkspaces).toHaveBeenCalledOnce();
-      refreshUnreadWorkspaces.mockRejectedValueOnce(new Error("provider unavailable"));
-      await expect(service.unreadCatalog()).rejects.toThrow("provider unavailable");
+      expect((await service.unreadCatalog()).sessions).toHaveLength(1);
+      expect(onUnreadChanged).toHaveBeenLastCalledWith(true);
     } finally {
       await service.dispose();
     }

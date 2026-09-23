@@ -4,99 +4,93 @@ import type { Project, WorkspaceProviderAuthorityResolution } from "../../shared
 interface ProjectLifecycleDependencies {
   projects: Pick<ProjectService, "list" | "add" | "close">;
   workspaces: { resolve(project: Project): Promise<WorkspaceProviderAuthorityResolution> };
-  /** Returns a rollback for transient eligibility if a subsequent registration write fails. */
-  reconcileUnreadWorkspaces(cwds: Iterable<string>): Promise<() => void>;
-  allowUnreadWorkspaces(cwds: Iterable<string>): void;
-  onChanged(): void;
+  hasUnread(): boolean;
+  reconcileUnreadWorkspaces(cwds: Iterable<string>): Promise<void>;
+  onProjectsChanged(): void;
+  logger: { warn(details: Record<string, unknown>, message: string): void };
 }
 
-/**
- * Sessiond owns project mutations together with unread eligibility. Serializing
- * admission and removal prevents a rapid re-add from recovering old unread state.
- * Project/session files are never removed here.
- */
+const UNREAD_CLEANUP_DELAY_MS = 60_000;
+
+/** Project mutations plus eventual garbage collection of orphan unread entries. */
 export class ProjectLifecycleService {
   private queue: Promise<unknown> = Promise.resolve();
-  private refreshing: Promise<void> | undefined;
+  private cleanupTimer: NodeJS.Timeout | undefined;
   private stopping = false;
 
   constructor(private readonly dependencies: ProjectLifecycleDependencies) {}
 
-  /** Also repairs catalogs written before project removal cleared unread state. */
-  refresh(): Promise<void> {
-    if (this.refreshing !== undefined) return this.refreshing;
-    const refresh = this.serialized(() => this.refreshCurrentWorkspaces());
-    this.refreshing = refresh;
-    void refresh.finally(() => {
-      if (this.refreshing === refresh) this.refreshing = undefined;
-    }).catch(() => undefined);
-    return refresh;
+  /** Called for existing startup unread, new completions, and removals—not reads. */
+  scheduleCleanup(): void {
+    if (this.stopping || this.cleanupTimer !== undefined || !this.dependencies.hasUnread()) return;
+    this.cleanupTimer = setTimeout(() => {
+      this.cleanupTimer = undefined;
+      void this.serialized(() => this.cleanupUnread()).catch((error: unknown) => {
+        this.dependencies.logger.warn({ err: error }, "orphan unread cleanup failed; will retry");
+        this.scheduleCleanup();
+      });
+    }, UNREAD_CLEANUP_DELAY_MS);
+    this.cleanupTimer.unref();
   }
 
   add(input: Parameters<ProjectService["add"]>[0]): Promise<Project> {
     return this.serialized(async () => {
-      // Prune legacy orphan state BEFORE admitting its cwd again.
-      await this.dependencies.reconcileUnreadWorkspaces(await this.currentWorkspaceCwds());
+      // Admission is the one synchronous cleanup boundary: do not make an old
+      // orphan cwd valid again before its historical unread has been removed.
+      this.clearCleanupTimer();
+      try {
+        await this.cleanupUnread();
+      } catch (error) {
+        this.scheduleCleanup();
+        throw error;
+      }
       const project = await this.dependencies.projects.add(input);
-      // The new root is immediately eligible. Additional workspaces are picked
-      // up by the normal workspace-list/catalog refresh, not a second admission
-      // phase that could fail after registration has already succeeded.
-      this.dependencies.allowUnreadWorkspaces([project.path]);
-      this.dependencies.onChanged();
+      this.dependencies.onProjectsChanged();
       return project;
     });
   }
 
   close(id: string): Promise<void> {
     return this.serialized(async () => {
-      const projects = await this.dependencies.projects.list();
-      if (!projects.some((project) => project.id === id)) throw new Error("Project not found");
-      const retainedCwds = await this.workspaceCwds(projects.filter((project) => project.id !== id));
-      // Persist cleanup before removing the registration. On failure the project
-      // remains registered and close can be retried; never report partial cleanup
-      // as a successful close. Shared workspace paths remain eligible.
-      const restoreEligibility = await this.dependencies.reconcileUnreadWorkspaces(retainedCwds);
-      try {
-        await this.dependencies.projects.close(id);
-      } catch (error) {
-        restoreEligibility();
-        throw error;
-      }
-      this.dependencies.onChanged();
+      await this.dependencies.projects.close(id);
+      this.dependencies.onProjectsChanged();
+      this.scheduleCleanup();
     });
   }
 
-  /** Drain admitted mutations before the daemon disposes sessions and flushes unread. */
+  /** Stop the timer and drain admitted work before sessions/persistence shut down. */
   async closeAll(): Promise<void> {
     this.stopping = true;
+    this.clearCleanupTimer();
     await this.queue;
   }
 
-  private async refreshCurrentWorkspaces(): Promise<void> {
-    await this.dependencies.reconcileUnreadWorkspaces(await this.currentWorkspaceCwds());
-    this.dependencies.onChanged();
-  }
-
-  private async currentWorkspaceCwds(): Promise<string[]> {
-    return this.workspaceCwds(await this.dependencies.projects.list());
-  }
-
-  private async workspaceCwds(projects: readonly Project[]): Promise<string[]> {
+  private async cleanupUnread(): Promise<void> {
+    // Re-check at execution time: the user may have read everything while the
+    // timer was pending. Empty catalogs never require workspace discovery.
+    if (!this.dependencies.hasUnread()) return;
+    const projects = await this.dependencies.projects.list();
     const resolutions = await Promise.all(projects.map((project) => this.dependencies.workspaces.resolve(project)));
-    // Attribution's best-effort, cached listings are NOT deletion authority.
-    // Even a fallback folder can hide worktrees after a provider probe failure.
+    // A failed lookup is not an authoritative empty workspace list.
     for (const resolution of resolutions) {
       if (resolution.status === "degraded" || resolution.diagnostics.length > 0) {
-        throw new Error(`Cannot reconcile project unread state: workspace resolution incomplete for ${resolution.projectId}`);
+        throw new Error(`Cannot clean up unread state: workspace resolution incomplete for ${resolution.projectId}`);
       }
     }
-    return resolutions.flatMap((resolution) => resolution.workspaces.map((workspace) => workspace.path));
+    await this.dependencies.reconcileUnreadWorkspaces(
+      resolutions.flatMap((resolution) => resolution.workspaces.map((workspace) => workspace.path)),
+    );
+  }
+
+  private clearCleanupTimer(): void {
+    if (this.cleanupTimer !== undefined) clearTimeout(this.cleanupTimer);
+    this.cleanupTimer = undefined;
   }
 
   private serialized<T>(operation: () => Promise<T>): Promise<T> {
     if (this.stopping) return Promise.reject(new Error("Project lifecycle is shutting down"));
     const result = this.queue.then(operation);
-    // A failed operation is returned to its caller, but must not poison the queue.
+    // Errors reach their caller without poisoning later mutations or retries.
     this.queue = result.catch(() => undefined);
     return result;
   }
