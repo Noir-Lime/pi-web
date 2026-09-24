@@ -1021,6 +1021,30 @@ describe("PiWebApp plugin host", () => {
     expect(browser.url.searchParams.get("browser-only.workspace.panel--file")).toBe("new.ts");
   });
 
+  it("restores routes without a tool while plugins are still loading, but waits for them to resolve a tool", async () => {
+    installBrowserWindow("http://localhost/app?project=missing-project&view=chat");
+    const app = new PiWebApp();
+    setAppState(app, { ...initialAppState(), projects: [project] });
+    let pluginLoads = 0;
+    if (!Reflect.set(app, "loadPluginsForSelectedMachine", () => { pluginLoads += 1; return new Promise<void>(() => undefined); })) {
+      throw new Error("Could not stub plugin loading");
+    }
+
+    await callAsyncAppMethod(app, "restoreRoute", false);
+
+    expect(pluginLoads).toBe(1);
+    expect(callAppMethod(app, "visibleBrowserErrorsForCurrentRoute", appState(app))).toEqual([
+      expect.objectContaining({ message: "Project not found: missing-project" }),
+    ]);
+
+    installBrowserWindow("http://localhost/app?project=missing-project&view=workspace&tool=files");
+    let settled = false;
+    void callAsyncAppMethod(app, "restoreRoute", false).then(() => { settled = true; });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(pluginLoads).toBe(2);
+    expect(settled).toBe(false);
+  });
+
   it("preserves a missing project route while clearing its workspace surface", async () => {
     const browser = installBrowserWindow("http://localhost/app?project=missing-project&workspace=missing-workspace&view=chat&browser-only.workspace.panel--file=missing.ts");
     const app = new PiWebApp();
