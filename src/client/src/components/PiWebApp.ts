@@ -761,7 +761,11 @@ export class PiWebApp extends LitElement {
         }
         return;
       }
-      await this.loadPluginsForSelectedMachine();
+      // Only a `tool` route value needs plugin contributions to resolve. Plain
+      // project/workspace/session routes restore while plugins keep loading, so
+      // opening a session does not wait on every plugin module over slow links.
+      if (parsedRoute.tool === undefined) void this.loadPluginsForSelectedMachine();
+      else await this.loadPluginsForSelectedMachine();
       if (!selectionNavigation.isCurrent()) return;
       const route = resolveAppRoute(parsedRoute, (value) => this.plugins.resolveWorkspacePanelRouteId(value, selectedMachineId(this.state)));
       const unavailableToolRoute = parsedRoute.tool !== undefined && route.tool === undefined;
