@@ -125,7 +125,7 @@ export const FEDERATED_HTTP_ROUTES = [
   { method: "POST", path: "/sessions/bulk/archive" },
   { method: "POST", path: "/sessions/bulk/delete-archived" },
   { method: "GET", path: "/sessions/:sessionId/messages" },
-  { method: "GET", path: "/sessions/:sessionId/images/:imageId", responseBodyLimit: SESSION_HISTORY_IMAGE_MAX_BYTES },
+  { method: "GET", path: "/sessions/:sessionId/media/:mediaId", responseBodyLimit: SESSION_HISTORY_IMAGE_MAX_BYTES },
   { method: "GET", path: "/sessions/:sessionId/notifications" },
   { method: "POST", path: "/sessions/:sessionId/notifications/dismiss" },
   { method: "POST", path: "/sessions/:sessionId/notifications/dismiss-all" },

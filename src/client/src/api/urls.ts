@@ -11,23 +11,34 @@ function sessionCwd(session: SessionLookup): string | undefined {
   return typeof session === "string" ? undefined : session.cwd;
 }
 
+/**
+ * Inline base64 length above which history pages return raster images as media
+ * references instead (see server `projectBrowserMessageResponse`). About 48 KB
+ * of image data: small images stay inline, screenshots load lazily.
+ */
+export const MAX_INLINE_MEDIA_BASE64_LENGTH = 65_536;
+
 export function messagePath(session: SessionLookup, options?: { limit?: number; before?: number }, machineId = "local"): string {
   const params = new URLSearchParams();
   const cwd = sessionCwd(session);
   if (cwd !== undefined && cwd !== "") params.set("cwd", cwd);
   if (options?.limit !== undefined) params.set("limit", String(options.limit));
   if (options?.before !== undefined) params.set("before", String(options.before));
+  params.set("maxInlineMedia", String(MAX_INLINE_MEDIA_BASE64_LENGTH));
   const query = params.toString();
   return `api/machines/${encodeURIComponent(machineId)}/sessions/${encodeURIComponent(sessionId(session))}/messages${query === "" ? "" : `?${query}`}`;
 }
 
-/** Browser-ready URL for a lazily loaded history image (see server `projectBrowserMessageResponse`). */
-export function sessionImageUrl(session: SessionLookup, imageId: string, machineId = "local"): string {
+/**
+ * Browser-ready URL for a lazily loaded history image. `messageIndex` is a
+ * lookup hint only; the content-hash `mediaId` alone identifies the image.
+ */
+export function sessionMediaUrl(session: SessionLookup, mediaId: string, messageIndex: number, machineId = "local"): string {
   const params = new URLSearchParams();
   const cwd = sessionCwd(session);
   if (cwd !== undefined && cwd !== "") params.set("cwd", cwd);
-  const query = params.toString();
-  return resolveAppUrl(`api/machines/${encodeURIComponent(machineId)}/sessions/${encodeURIComponent(sessionId(session))}/images/${encodeURIComponent(imageId)}${query === "" ? "" : `?${query}`}`);
+  params.set("at", String(messageIndex));
+  return resolveAppUrl(`api/machines/${encodeURIComponent(machineId)}/sessions/${encodeURIComponent(sessionId(session))}/media/${encodeURIComponent(mediaId)}?${params.toString()}`);
 }
 
 export function workspaceFileWriteUrl(projectId: string, workspaceId: string, path: string, options?: { createDirs?: boolean; overwrite?: boolean; machineId?: string }): string {

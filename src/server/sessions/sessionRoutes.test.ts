@@ -911,6 +911,52 @@ describe("session routes", () => {
     }
   });
 
+  it("returns oversized history images as media references only when requested and serves them by content hash", async () => {
+    const routeApp = Fastify({ logger: false });
+    await routeApp.register(fastifyWebsocket);
+    const routeService = new CapturingRouteSessionService();
+    const screenshot = { type: "image", mimeType: "image/png", data: "P".repeat(200) };
+    const imageMessage = { role: "toolResult", content: [screenshot] };
+    const fullBranch: MessagePage = { messages: [{ role: "user", content: [{ type: "text", text: "go" }] }, imageMessage], start: 0, total: 2 };
+    routeService.messagesResponse = fullBranch;
+    registerSessionRoutes(routeApp, routeService, new SessionEventHub());
+    const cwd = encodeURIComponent("/repo");
+
+    try {
+      const inline = await routeApp.inject({ method: "GET", url: `/sessions/session-1/messages?cwd=${cwd}&limit=20` });
+      const referenced = await routeApp.inject({ method: "GET", url: `/sessions/session-1/messages?cwd=${cwd}&limit=20&maxInlineMedia=100` });
+      const reference: unknown = referenced.json<MessagePage>().messages[1];
+      const parts: unknown[] = typeof reference === "object" && reference !== null && "content" in reference && Array.isArray(reference.content) ? reference.content : [];
+      const part = parts[0];
+      const mediaId = typeof part === "object" && part !== null && "mediaId" in part ? String(part.mediaId) : "";
+
+      expect(inline.json()).toEqual(fullBranch);
+      expect(part).toEqual({ type: "image", mimeType: "image/png", mediaId, byteSize: 150 });
+
+      routeService.messagePageRequests = [];
+      routeService.messagePageResponses = [{ messages: [imageMessage], start: 1, total: 2 }];
+      const hinted = await routeApp.inject({ method: "GET", url: `/sessions/session-1/media/${mediaId}?cwd=${cwd}&at=1` });
+      expect(hinted.statusCode).toBe(200);
+      expect(hinted.headers["cache-control"]).toBeUndefined();
+      expect(hinted.json()).toEqual({ mimeType: "image/png", data: screenshot.data });
+      expect(routeService.messagePageRequests).toEqual([{ before: 2, limit: 1 }]);
+
+      routeService.messagePageRequests = [];
+      routeService.messagePageResponses = [{ messages: [], start: 0, total: 2 }];
+      const staleHint = await routeApp.inject({ method: "GET", url: `/sessions/session-1/media/${mediaId}?cwd=${cwd}&at=0` });
+      expect(staleHint.statusCode).toBe(200);
+      expect(routeService.messagePageRequests).toEqual([{ before: 1, limit: 1 }, undefined]);
+
+      const missing = await routeApp.inject({ method: "GET", url: `/sessions/session-1/media/${"0".repeat(64)}?cwd=${cwd}` });
+      const malformed = await routeApp.inject({ method: "GET", url: `/sessions/session-1/media/not-a-hash?cwd=${cwd}` });
+      expect(missing.statusCode).toBe(404);
+      expect(malformed.statusCode).toBe(400);
+    } finally {
+      await routeService.dispose();
+      await routeApp.close();
+    }
+  });
+
   it("forwards prompt attachments and supports the save-attachments route", async () => {
     const routeApp = Fastify({ logger: false });
     await routeApp.register(fastifyWebsocket);
@@ -1400,8 +1446,12 @@ class CapturingRouteSessionService implements SessionRouteService {
     });
   }
 
-  messages(): Promise<MessagePage> {
-    return Promise.resolve(this.messagesResponse);
+  messagePageRequests: ({ before?: number; limit?: number } | undefined)[] = [];
+  messagePageResponses: MessagePage[] = [];
+
+  messages(_lookup?: SessionRouteRef, page?: { before?: number; limit?: number }): Promise<MessagePage> {
+    this.messagePageRequests.push(page);
+    return Promise.resolve(this.messagePageResponses.shift() ?? this.messagesResponse);
   }
 
   status(lookup: SessionRouteRef) {

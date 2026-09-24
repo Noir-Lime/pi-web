@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { ASK_USER_ID_MAX_LENGTH, ASK_USER_OPTION_LIMIT, ASK_USER_OTHER_TEXT_MAX_LENGTH, ASK_USER_QUESTION_LIMIT, EXTENSION_DIALOG_ID_MAX_LENGTH, EXTENSION_DIALOG_INPUT_MAX_LENGTH, SESSION_TREE_CUSTOM_INSTRUCTIONS_MAX_LENGTH, SESSION_UNREAD_CATALOG_ID_MAX_LENGTH, SESSION_UNREAD_CWD_MAX_LENGTH, SESSION_UNREAD_SESSION_ID_MAX_LENGTH, type AskUserAnswer, type AskUserSubmission, type ExtensionDialogAnswerRequest, type ExtensionDialogCancelRequest, type SessionBulkMutationRequest, type SessionBulkMutationRef, type SessionCleanupRequest, type SessionModelScopeMode, type SessionTreeForkRequest, type SessionTreeNavigateRequest, type SessionTreeSummaryChoice, type SessionUnreadAcknowledgeRequest } from "../../shared/apiTypes.js";
 import { parseSessionDefaultsUpdate } from "../../shared/sessionDefaults.js";
-import { findHistoryImage, projectBrowserMessageResponse } from "../browserMessageProjection.js";
+import { findMediaInMessages, isMediaId, projectBrowserMessageResponse } from "../browserMessageProjection.js";
 import { normalizeRequestCwd } from "../workingDirectory.js";
 import type { SessionEventHub } from "../realtime/sessionEventHub.js";
 import type { SessionRouteRef, SessionRouteService } from "./sessionService.js";
@@ -14,6 +14,13 @@ interface SessionQuery {
 interface MessageQuery extends SessionQuery {
   before?: string;
   limit?: string;
+  /** Opt-in: inline base64 length above which raster images become media references. Absent = inline everything. */
+  maxInlineMedia?: string;
+}
+
+interface MediaQuery extends SessionQuery {
+  /** Optional hint: transcript index of the message holding the image, checked before a full scan. */
+  at?: string;
 }
 
 interface PromptRequestBody {
@@ -166,21 +173,30 @@ export function registerSessionRoutes(app: FastifyInstance, sessions: SessionRou
     if (ref === undefined) return reply;
     try {
       const page = { ...optionalField("before", optionalNumber(request.query.before)), ...optionalField("limit", optionalNumber(request.query.limit)) };
+      const maxInlineMedia = optionalNumber(request.query.maxInlineMedia);
+      const media = maxInlineMedia !== undefined && maxInlineMedia >= 0 ? { inlineLimit: maxInlineMedia } : undefined;
       const messages = await sessions.messages(ref, page);
-      return projectBrowserMessageResponse(messages);
+      return projectBrowserMessageResponse(messages, media);
     } catch (error) {
       return reply.code(404).send({ error: errorMessage(error) });
     }
   });
 
-  app.get<{ Params: { sessionId: string; imageId: string }; Querystring: SessionQuery }>(`${prefix}/sessions/:sessionId/images/:imageId`, async (request, reply) => {
+  // Serves one image referenced by content hash as JSON `{ mimeType, data }`;
+  // the web server's proxy turns it into cacheable raw bytes for <img>.
+  app.get<{ Params: { sessionId: string; mediaId: string }; Querystring: MediaQuery }>(`${prefix}/sessions/:sessionId/media/:mediaId`, async (request, reply) => {
     const ref = sessionRefFromQueryOr400(request.params.sessionId, request.query, reply);
     if (ref === undefined) return reply;
+    const { mediaId } = request.params;
+    if (!isMediaId(mediaId)) return await reply.code(400).send({ error: "mediaId must be a sha-256 hex digest" });
     try {
-      const messageIndex = Number(request.params.imageId.split("-", 1)[0]);
-      const page = Number.isSafeInteger(messageIndex) ? await sessions.messages(ref, { before: messageIndex + 1, limit: 1 }) : undefined;
-      const image = page === undefined ? undefined : findHistoryImage(page, request.params.imageId);
-      return image ?? await reply.code(404).send({ error: "Image not found" });
+      const at = optionalNumber(request.query.at);
+      const hinted = at !== undefined && Number.isSafeInteger(at) && at >= 0
+        ? findMediaInMessages((await sessions.messages(ref, { before: at + 1, limit: 1 })).messages, mediaId)
+        : undefined;
+      // A stale or missing hint (for example after /tree navigation) falls back to scanning the branch.
+      const media = hinted ?? findMediaInMessages((await sessions.messages(ref)).messages, mediaId);
+      return media ?? await reply.code(404).send({ error: "Media not found" });
     } catch (error) {
       return reply.code(404).send({ error: errorMessage(error) });
     }

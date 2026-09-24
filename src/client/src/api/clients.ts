@@ -57,7 +57,7 @@ import {
   parseWorkspaceTrustResponse,
   requireMachineStatusSnapshot,
 } from "./parsers";
-import { messagePath, sessionImageUrl } from "./urls";
+import { messagePath, sessionMediaUrl } from "./urls";
 
 const machinePrefix = (machineId = "local") => `api/machines/${encodeURIComponent(machineId)}`;
 
@@ -81,19 +81,19 @@ function sessionBody(session: SessionRef, fields: Record<string, unknown> = {}):
   return JSON.stringify({ cwd: session.cwd, ...fields });
 }
 
-/** Resolve server `imageId` references on history image parts into lazily loaded image URLs. */
-function withHistoryImageUrls(message: unknown, session: SessionRef, machineId: string): unknown {
+/** Resolve server `mediaId` references on history image parts into lazily loaded image URLs. */
+function withHistoryMediaUrls(message: unknown, messageIndex: number, session: SessionRef, machineId: string): unknown {
   if (typeof message !== "object" || message === null || !("content" in message) || !Array.isArray(message.content)) return message;
   const content: unknown[] = message.content;
-  if (!content.some(isImageReference)) return message;
+  if (!content.some(isMediaReference)) return message;
   return {
     ...message,
-    content: content.map((part) => isImageReference(part) ? { ...part, url: sessionImageUrl(session, part.imageId, machineId) } : part),
+    content: content.map((part) => isMediaReference(part) ? { ...part, url: sessionMediaUrl(session, part.mediaId, messageIndex, machineId) } : part),
   };
 }
 
-function isImageReference(part: unknown): part is { imageId: string } {
-  return typeof part === "object" && part !== null && "type" in part && part.type === "image" && "imageId" in part && typeof part.imageId === "string";
+function isMediaReference(part: unknown): part is { mediaId: string } {
+  return typeof part === "object" && part !== null && "type" in part && part.type === "image" && "mediaId" in part && typeof part.mediaId === "string";
 }
 
 function sessionBulkMutationBody(sessions: readonly SessionRef[]): string {
@@ -263,7 +263,7 @@ export const sessionsApi = {
   deleteArchivedMany: (sessions: readonly SessionRef[], machineId = "local") => request(`${machinePrefix(machineId)}/sessions/bulk/delete-archived`, parseSessionBulkDeleteArchivedResponse, { method: "POST", body: sessionBulkMutationBody(sessions) }),
   messages: async (session: SessionRef, options?: { limit?: number; before?: number }, machineId = "local") => {
     const page = await request(messagePath(session, options, machineId), parseMessagePage);
-    return { ...page, messages: page.messages.map((message) => withHistoryImageUrls(message, session, machineId)) };
+    return { ...page, messages: page.messages.map((message, index) => withHistoryMediaUrls(message, page.start + index, session, machineId)) };
   },
   status: (session: SessionRef, machineId = "local") => request(sessionQueryPath(session, "status", machineId), parseSessionStatus),
   streamSnapshot: (session: SessionRef, machineId = "local") => request(sessionQueryPath(session, "stream-snapshot", machineId), parseSessionStreamSnapshot),

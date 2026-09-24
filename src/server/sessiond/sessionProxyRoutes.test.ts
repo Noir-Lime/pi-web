@@ -163,25 +163,25 @@ describe("machine-scoped session proxy routes", () => {
     expect(daemon.requests).toEqual([{ method: "DELETE", path: "/sessions/session-1", body: undefined }]);
   });
 
-  it("serves history images as cacheable decoded bytes", async () => {
+  it("serves history media as cacheable decoded bytes", async () => {
     daemon.respondWith({ statusCode: 200, headers: { "content-type": "application/json" }, body: JSON.stringify({ mimeType: "image/png", data: Buffer.from("png-bytes").toString("base64") }) });
 
-    const response = await app.inject({ method: "GET", url: "/api/machines/local/sessions/session-1/images/3-1-0123456789abcdef?cwd=%2Frepo" });
+    const response = await app.inject({ method: "GET", url: "/api/machines/local/sessions/session-1/media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?cwd=%2Frepo" });
 
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toBe("image/png");
     expect(response.headers["cache-control"]).toBe("private, max-age=31536000, immutable");
     expect(response.rawPayload.toString()).toBe("png-bytes");
-    expect(daemon.requests).toEqual([{ method: "GET", path: "/sessions/session-1/images/3-1-0123456789abcdef?cwd=%2Frepo", body: undefined }]);
+    expect(daemon.requests).toEqual([{ method: "GET", path: "/sessions/session-1/media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?cwd=%2Frepo", body: undefined }]);
   });
 
-  it("forwards missing history images as JSON errors", async () => {
-    daemon.respondWith({ statusCode: 404, headers: { "content-type": "application/json" }, body: JSON.stringify({ error: "Image not found" }) });
+  it("forwards missing history media as JSON errors", async () => {
+    daemon.respondWith({ statusCode: 404, headers: { "content-type": "application/json" }, body: JSON.stringify({ error: "Media not found" }) });
 
-    const response = await app.inject({ method: "GET", url: "/api/machines/local/sessions/session-1/images/3-1-0123456789abcdef?cwd=%2Frepo" });
+    const response = await app.inject({ method: "GET", url: "/api/machines/local/sessions/session-1/media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?cwd=%2Frepo" });
 
     expect(response.statusCode).toBe(404);
-    expect(response.json()).toEqual({ error: "Image not found" });
+    expect(response.json()).toEqual({ error: "Media not found" });
   });
 
   it("returns a 502 response when the daemon request fails", async () => {

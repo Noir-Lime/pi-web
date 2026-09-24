@@ -53,10 +53,10 @@ export function registerSessionProxyRoutes(app: FastifyInstance, daemon: Session
   app.all(`${prefix}/auth`, (request, reply) => proxy(request, reply));
   app.all(`${prefix}/auth/*`, (request, reply) => proxy(request, reply));
   app.all(`${prefix}/sessions`, (request, reply) => proxy(request, reply));
-  // History images: the daemon answers with JSON `{ mimeType, data }`; serve the
+  // History media: the daemon answers with JSON `{ mimeType, data }`; serve the
   // decoded bytes so the browser can lazy-load and cache them. The image id
   // embeds a content hash, so a URL never changes meaning.
-  app.get(`${prefix}/sessions/:sessionId/images/:imageId`, async (request, reply) => {
+  app.get(`${prefix}/sessions/:sessionId/media/:mediaId`, async (request, reply) => {
     try {
       const upstream = await daemon.request("GET", stripPrefix(request.url, prefix));
       const image = upstream.statusCode === 200 ? historyImage(parseJson(upstream.body)) : undefined;

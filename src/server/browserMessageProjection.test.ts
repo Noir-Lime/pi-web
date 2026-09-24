@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { normalizeMessage } from "../client/src/chatMessages.js";
 import type { MessagePage } from "../shared/apiTypes.js";
-import { findHistoryImage, projectBrowserMessage, projectBrowserMessageResponse, projectBrowserSessionEvent } from "./browserMessageProjection.js";
+import { findMediaInMessages, isMediaId, projectBrowserMessage, projectBrowserMessageResponse, projectBrowserSessionEvent } from "./browserMessageProjection.js";
 
 function signedAssistantMessage() {
   return {
@@ -59,23 +59,40 @@ describe("browser message projection", () => {
     expect(finalEvent.message).toBe(message);
   });
 
-  it("replaces raster history image data with ids that resolve back to the image", () => {
-    const png = { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" };
-    const svg = { type: "image", mimeType: "image/svg+xml", data: "PHN2Zy8+" };
-    const message = { role: "toolResult", content: [{ type: "text", text: "read" }, png, svg] };
+  it("leaves images inline unless media references are requested", () => {
+    const page: MessagePage = { messages: [{ role: "toolResult", content: [{ type: "image", mimeType: "image/png", data: "A".repeat(100) }] }], start: 0, total: 1 };
+
+    expect(projectBrowserMessageResponse(page)).toBe(page);
+  });
+
+  it("replaces only oversized raster images with content-hash references that resolve back", () => {
+    const big = { type: "image", mimeType: "image/png", data: "B".repeat(100) };
+    const small = { type: "image", mimeType: "image/jpeg", data: "C".repeat(10) };
+    const svg = { type: "image", mimeType: "image/svg+xml", data: "D".repeat(100) };
+    const message = { role: "toolResult", content: [{ type: "text", text: "read" }, big, small, svg] };
     const page: MessagePage = { messages: [message], start: 7, total: 8 };
 
-    const projected = projectBrowserMessageResponse(page);
+    const projected = projectBrowserMessageResponse(page, { inlineLimit: 50 });
     const parts = contentParts(projected.messages[0]);
-    const imageId = parts[1] !== null && typeof parts[1] === "object" && "imageId" in parts[1] ? String(parts[1].imageId) : "";
+    const mediaId = parts[1] !== null && typeof parts[1] === "object" && "mediaId" in parts[1] ? String(parts[1].mediaId) : "";
 
-    expect(imageId).toMatch(/^7-1-[0-9a-f]{16}$/);
-    expect(parts[1]).toEqual({ type: "image", mimeType: "image/png", imageId });
-    expect(parts[2]).toBe(svg);
-    expect(message.content[1]).toBe(png);
-    expect(findHistoryImage(page, imageId)).toEqual({ mimeType: "image/png", data: png.data });
-    expect(findHistoryImage(page, "7-1-0000000000000000")).toBeUndefined();
-    expect(findHistoryImage(page, "7-2-0000000000000000")).toBeUndefined();
+    expect(isMediaId(mediaId)).toBe(true);
+    expect(parts[1]).toEqual({ type: "image", mimeType: "image/png", mediaId, byteSize: 75 });
+    expect(parts[2]).toBe(small);
+    expect(parts[3]).toBe(svg);
+    expect(message.content[1]).toBe(big);
+    expect(findMediaInMessages(page.messages, mediaId)).toEqual({ mimeType: "image/png", data: big.data });
+    expect(findMediaInMessages(page.messages, "0".repeat(64))).toBeUndefined();
+  });
+
+  it("never resolves SVG images even when their content hash is known", () => {
+    const svg = { type: "image", mimeType: "image/svg+xml", data: "PHN2Zy8+" };
+    const page: MessagePage = { messages: [{ role: "user", content: [svg] }], start: 0, total: 1 };
+    const pngWithSameData = { messages: [{ role: "user", content: [{ ...svg, mimeType: "image/png" }] }], start: 0, total: 1 };
+    const id = contentParts(projectBrowserMessageResponse(pngWithSameData, { inlineLimit: 0 }).messages[0])[0];
+    const mediaId = id !== null && typeof id === "object" && "mediaId" in id ? String(id.mediaId) : "";
+
+    expect(findMediaInMessages(page.messages, mediaId)).toBeUndefined();
   });
 });
 

@@ -1,9 +1,19 @@
 import { createHash } from "node:crypto";
 import type { MessagePage, SessionUiEvent } from "../shared/apiTypes.js";
 
-/** Raster formats safe to serve from the history image route; SVG is excluded because it can carry script. */
+/** Raster formats safe to serve as raw bytes from the media route; SVG stays inline because it can carry script. */
 const LAZY_IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const MEDIA_ID_PATTERN = /^[0-9a-f]{64}$/u;
 const imageHashes = new WeakMap<object, string>();
+
+/**
+ * Request-level opt-in for media references: image parts whose inline base64 is
+ * longer than `inlineLimit` are replaced by a content-hash `mediaId`. Without it
+ * responses are unchanged, so clients that do not ask keep full inline images.
+ */
+export interface BrowserMediaProjection {
+  inlineLimit: number;
+}
 
 /**
  * Remove provider-only thinking data at the browser transport boundary. The
@@ -26,41 +36,42 @@ export function projectBrowserMessage(message: unknown): unknown {
 }
 
 /**
- * History pages replace inline image data with an `imageId` the browser loads
- * lazily from the session image route, so page size stays independent of how
- * many screenshots the recent turns contain.
+ * Project a history page for the browser. With a media projection, oversized
+ * raster images become `{ type, mimeType, mediaId, byteSize }` references the
+ * browser loads lazily from the session media route, so page size stays
+ * independent of how many screenshots the recent turns contain.
  */
-export function projectBrowserMessageResponse(response: MessagePage): MessagePage {
-  let index = 0;
+export function projectBrowserMessageResponse(response: MessagePage, media?: BrowserMediaProjection): MessagePage {
   const messages = mapChanged(response.messages, (message) => {
-    const messageIndex = response.start + index;
-    index += 1;
-    return withLazyImages(projectBrowserMessage(message), messageIndex);
+    const projected = projectBrowserMessage(message);
+    return media === undefined ? projected : withMediaReferences(projected, media);
   });
   return messages === response.messages ? response : { ...response, messages };
 }
 
-/** Resolve an `imageId` from {@link projectBrowserMessageResponse} against a history page containing its message. */
-export function findHistoryImage(page: MessagePage, imageId: string): { mimeType: string; data: string } | undefined {
-  const match = /^(\d+)-(\d+)-([0-9a-f]{16})$/.exec(imageId);
-  if (match === null) return undefined;
-  const message = page.messages[Number(match[1]) - page.start];
-  const content = isRecord(message) ? message["content"] : undefined;
-  const part = isUnknownArray(content) ? content[Number(match[2])] : undefined;
-  if (!isLazyImagePart(part) || imageHash(part) !== match[3]) return undefined;
-  return { mimeType: part.mimeType, data: part.data };
+export function isMediaId(value: string): boolean {
+  return MEDIA_ID_PATTERN.test(value);
 }
 
-function withLazyImages(message: unknown, messageIndex: number): unknown {
+/** Find a servable raster image by content hash among a page's messages. */
+export function findMediaInMessages(messages: readonly unknown[], mediaId: string): { mimeType: string; data: string } | undefined {
+  for (const message of messages) {
+    const content = isRecord(message) ? message["content"] : undefined;
+    if (!isUnknownArray(content)) continue;
+    for (const part of content) {
+      if (isLazyImagePart(part) && imageHash(part) === mediaId) return { mimeType: part.mimeType, data: part.data };
+    }
+  }
+  return undefined;
+}
+
+function withMediaReferences(message: unknown, media: BrowserMediaProjection): unknown {
   if (!isRecord(message)) return message;
   const originalContent = message["content"];
   if (!isUnknownArray(originalContent)) return message;
-  let partIndex = 0;
   const content = mapChanged(originalContent, (part) => {
-    const current = partIndex;
-    partIndex += 1;
-    if (!isLazyImagePart(part)) return part;
-    const projected: Record<string, unknown> = { ...part, imageId: `${String(messageIndex)}-${String(current)}-${imageHash(part)}` };
+    if (!isLazyImagePart(part) || part.data.length <= media.inlineLimit) return part;
+    const projected: Record<string, unknown> = { ...part, mediaId: imageHash(part), byteSize: Math.floor((part.data.length * 3) / 4) };
     delete projected["data"];
     return projected;
   });
@@ -79,7 +90,7 @@ function isLazyImagePart(part: unknown): part is Record<string, unknown> & { mim
 function imageHash(part: Record<string, unknown> & { data: string }): string {
   const cached = imageHashes.get(part);
   if (cached !== undefined) return cached;
-  const hash = createHash("sha256").update(part.data).digest("hex").slice(0, 16);
+  const hash = createHash("sha256").update(part.data).digest("hex");
   imageHashes.set(part, hash);
   return hash;
 }
