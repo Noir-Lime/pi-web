@@ -70,24 +70,27 @@ export class SessionDirResolver {
 export interface PiSessionManagerGatewayOptions extends SessionDirResolverOptions {
   /** Test override for the largest transcript eligible for duplicate idle snapshots. */
   maxTranscriptSnapshotBytes?: number;
+  /** Directory for persisted session summary indexes; unset keeps summaries in memory only. */
+  summaryIndexDir?: string;
 }
 
 export function createPiSessionManagerGateway(options: PiSessionManagerGatewayOptions): PiSessionManagerGateway {
   return new SettingsAwarePiSessionManagerGateway(
     new SessionDirResolver(options),
     options.maxTranscriptSnapshotBytes ?? DEFAULT_TRANSCRIPT_BRANCH_CACHE_MAX_BYTES,
+    options.summaryIndexDir,
   );
 }
 
 class SettingsAwarePiSessionManagerGateway implements PiSessionManagerGateway {
   /**
-   * One memoized scanner per gateway: its per-file summary memo lives as long
-   * as the daemon, so repeated listings answer unchanged files from one stat
-   * and re-scan changed ones whole. Invalidation is automatic (file identity +
-   * size; see SessionSummaryScanner), with `invalidateSessionFile` for the
-   * in-place rewrites those checks cannot see.
+   * One scanner per gateway: per-file summaries live as long as the daemon and,
+   * with a summary index directory, across restarts. Unchanged files are
+   * answered from one stat, grown files fold only their appended bytes, and
+   * rewritten files are re-read whole (see SessionSummaryScanner), with
+   * `invalidateSessionFile` for in-place rewrites those checks cannot see.
    */
-  private readonly summaryScanner = new SessionSummaryScanner();
+  private readonly summaryScanner: SessionSummaryScanner;
   // Idle-session transcript snapshots, memoized by file signature and bounded
   // (LRU) so daemon-lifetime polling cannot retain every session ever read.
   // Snapshots keep their parsed entries so a file that grew by append only is
@@ -101,7 +104,9 @@ class SettingsAwarePiSessionManagerGateway implements PiSessionManagerGateway {
   constructor(
     private readonly resolver: SessionDirResolver,
     private readonly maxTranscriptSnapshotBytes: number,
+    summaryIndexDir?: string,
   ) {
+    this.summaryScanner = new SessionSummaryScanner(summaryIndexDir === undefined ? {} : { indexDir: summaryIndexDir });
     this.transcriptBranches = new TranscriptBranchCache({ maxBytes: maxTranscriptSnapshotBytes });
   }
 
@@ -125,8 +130,9 @@ class SettingsAwarePiSessionManagerGateway implements PiSessionManagerGateway {
 
   invalidateSessionFile(sessionFile: string): void {
     // Detach is the only flow that rewrites a session file in place (keeping
-    // the inode), and the summary memo cannot detect such rewrites from
-    // identity + size alone. Drop the entry so the next listing re-reads it.
+    // the inode). The scanner usually notices through the mtime, but not on
+    // filesystems with coarse timestamps: drop the entry so the next listing
+    // re-reads it.
     this.summaryScanner.invalidate(sessionFile);
   }
 

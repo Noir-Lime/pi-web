@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { mkdir, rm } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import Fastify from "fastify";
 import fastifyWebsocket from "@fastify/websocket";
 import { WorkspaceActivityService } from "./activity/workspaceActivityService.js";
@@ -319,6 +319,7 @@ async function createSessionDaemonRuntime() {
       sessionManager: createPiSessionManagerGateway({
         agentDir: activeAgentProfile.dir,
         env: daemonEnvironment,
+        summaryIndexDir: join(piWebDataDir(daemonEnvironment), "session-summaries"),
       }),
     }));
     sessionsForFailedConstruction = sessions;

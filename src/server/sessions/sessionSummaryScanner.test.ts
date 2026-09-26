@@ -452,9 +452,9 @@ describe("session summary scanner memo", () => {
     expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "fixed" }]);
   });
 
-  it("clear() drops the memo and recovers from an undetectable in-place rewrite", async () => {
-    // Same inode, same size, different bytes: invisible to the identity+size
-    // key by design. clear() is the documented escape hatch for it.
+  it("detects a same-size in-place rewrite from its new mtime", async () => {
+    // Same inode, same size, different bytes: the checkpoint's mtime check
+    // turns it into a rebuild without any caller help.
     const version = (sessionId: string, text: string) => [
       `{"type":"session","version":3,"id":"${sessionId}","timestamp":"2026-01-01T00:00:00.000Z","cwd":"${WORKSPACE}"}`,
       `{"type":"message","id":"m1","parentId":"root","timestamp":"2026-01-01T00:01:00.000Z","message":{"role":"user","content":[{"type":"text","text":"${text}"}]}}`,
@@ -464,18 +464,17 @@ describe("session summary scanner memo", () => {
     expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "before", firstMessage: "old text" }]);
 
     await writeFile(path, `${version("afters", "new text").join("\n")}\n`, "utf8");
-    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "before", firstMessage: "old text" }]);
-
-    scanner.clear();
+    await bumpMtime(path);
     expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "afters", firstMessage: "new text" }]);
   });
 
-  it("invalidate() drops one memo entry so a same-size in-place rewrite is re-read", async () => {
+  it("clear() and invalidate() force a rebuild after an in-place rewrite", async () => {
     // Detach clears the parent link by rewriting the header in place (same
-    // inode) — the rewrite the identity+size key cannot detect whenever the
-    // file's size happens to be unchanged. invalidate() is the targeted
-    // escape hatch; without it the stat-only fast path serves the pre-detach
-    // summary forever.
+    // inode, padded to the same size). If the mtime also ends up unchanged
+    // (coarse filesystem timestamps, or an explicit restore), entries already
+    // validated in this process are served from memory without rereading:
+    // invalidate() and clear() are the escape hatches. Whether a given
+    // filesystem exposes the rewrite through the mtime is not asserted.
     const parentPath = join(tempDir, "parents", "parent.jsonl");
     const path = await writeSession("detached.jsonl", [
       headerLine({ id: "detached", cwd: WORKSPACE, parentSession: parentPath }),
@@ -485,19 +484,19 @@ describe("session summary scanner memo", () => {
     const scanner = new SessionSummaryScanner();
     expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "detached", messageCount: 2, parentSessionPath: parentPath }]);
 
-    // Rewrite the header without the parent link the way clearParentSession
-    // does (truncate + write, same inode), padding the file back to its
-    // original size so identity and size both look unchanged.
+    const before = await stat(path);
     await rewriteHeaderWithoutParentSession(path);
-
-    // No invalidation yet: the memo still serves the old parent link.
-    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "detached", parentSessionPath: parentPath }]);
+    await utimes(path, before.atime, before.mtime);
 
     scanner.invalidate(path);
     const warm = await scanner.scanSessionSummariesInDir(sessionDir);
-    expect(warm).toMatchObject([{ id: "detached", messageCount: 2 }]);
     expect(warm[0]).not.toHaveProperty("parentSessionPath");
     expect(warm).toEqual(await coldListing(sessionDir));
+
+    await rewriteHeaderWithParent(path, parentPath);
+    await utimes(path, before.atime, before.mtime);
+    scanner.clear();
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "detached", parentSessionPath: parentPath }]);
   });
 
   it("reads identity and metadata from the opened file, not a stale pathname stat", async () => {
@@ -651,6 +650,122 @@ describe("session summary scanner multi-chunk folding with a small chunk seam", 
     expect(await scanner.scanSessionSummariesInDir(sessionDir)).toEqual(await coldListing(sessionDir));
   });
 
+  it("folds only appended bytes when a session grows, including renames and a line written in halves", async () => {
+    const filler = messageLine({ role: "assistant", content: textContent("x".repeat(2000)) });
+    const lines = [headerLine({ id: "growing", cwd: WORKSPACE }), messageLine({ role: "user", content: textContent("first") })];
+    for (let index = 0; index < 200; index += 1) lines.push(filler);
+    const path = await writeSession("growing.jsonl", lines);
+    const scanner = new SessionSummaryScanner();
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ messageCount: 201 }]);
+    const fileSize = (await stat(path)).size;
+
+    const reads = trackBytesRead();
+    try {
+      await appendFile(path, `${messageLine({ role: "user", content: textContent("more") })}\n${sessionInfoLine("Renamed late")}\n`, "utf8");
+      expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ messageCount: 202, name: "Renamed late" }]);
+      expect(await reads.total()).toBeLessThan(fileSize / 10);
+
+      const half = messageLine({ role: "user", content: textContent("half") });
+      await appendFile(path, half.slice(0, 20), "utf8");
+      expect(await scanner.scanSessionSummariesInDir(sessionDir)).toEqual(await coldListing(sessionDir));
+      await appendFile(path, `${half.slice(20)}\n`, "utf8");
+      const completed = await scanner.scanSessionSummariesInDir(sessionDir);
+      expect(completed).toMatchObject([{ messageCount: 203 }]);
+      expect(completed).toEqual(await coldListing(sessionDir));
+    } finally {
+      reads.restore();
+    }
+  });
+
+  it("rebuilds instead of resuming when checkpointed bytes change", async () => {
+    const path = await writeSession("edited.jsonl", [
+      headerLine({ id: "edited", cwd: WORKSPACE }),
+      messageLine({ role: "user", content: textContent("original") }),
+      messageLine({ role: "assistant", content: textContent("reply") }),
+    ]);
+    const scanner = new SessionSummaryScanner();
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ firstMessage: "original", messageCount: 2 }]);
+
+    // Rewrite a checkpointed line in place and append: the tail hash no longer matches.
+    const content = await fsPromises.readFile(path, "utf8");
+    await writeFile(path, content.replace("original", "replaced"), "utf8");
+    await appendFile(path, `${messageLine({ role: "user", content: textContent("after") })}\n`, "utf8");
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toEqual(await coldListing(sessionDir));
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ firstMessage: "replaced", messageCount: 3 }]);
+
+    // Truncation below the checkpoint rebuilds too.
+    await writeFile(path, `${headerLine({ id: "edited", cwd: WORKSPACE })}\n`, "utf8");
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ messageCount: 0, firstMessage: "(no messages)" }]);
+  });
+
+  it("persists summaries across scanner instances and revalidates them before use", async () => {
+    const indexDir = join(tempDir, "index");
+    const filler = messageLine({ role: "assistant", content: textContent("y".repeat(2000)) });
+    const lines = [headerLine({ id: "persisted", cwd: WORKSPACE }), messageLine({ role: "user", content: textContent("hello") }), sessionInfoLine("Kept name")];
+    for (let index = 0; index < 200; index += 1) lines.push(filler);
+    const path = await writeSession("persisted.jsonl", lines);
+    const cold = await new SessionSummaryScanner({ indexDir }).scanSessionSummariesInDir(sessionDir);
+    expect(cold).toMatchObject([{ id: "persisted", name: "Kept name", messageCount: 201 }]);
+
+    // A new instance (a restarted daemon) answers from the index with bounded reads.
+    const reads = trackBytesRead();
+    try {
+      expect(await new SessionSummaryScanner({ indexDir }).scanSessionSummariesInDir(sessionDir)).toEqual(cold);
+      expect(await reads.total()).toBeLessThanOrEqual(8192);
+    } finally {
+      reads.restore();
+    }
+
+    // A persisted entry is never trusted over its file: a rewrite that keeps
+    // the size and the exact mtime is caught by the checkpoint hashes.
+    const before = await stat(path);
+    const content = await fsPromises.readFile(path, "utf8");
+    await writeFile(path, content.replace("Kept name", "Kept nami"), "utf8");
+    await utimes(path, before.atime, before.mtime);
+    const restarted = new SessionSummaryScanner({ indexDir });
+    expect(await restarted.scanSessionSummariesInDir(sessionDir)).toEqual(await coldListing(sessionDir));
+  });
+
+  it("rebuilds from transcripts when the persisted index is missing, corrupt, or foreign", async () => {
+    const indexDir = join(tempDir, "index");
+    await writeSession("a.jsonl", [headerLine({ id: "a", cwd: WORKSPACE }), messageLine({ role: "user", content: textContent("a") })]);
+    const expected = await coldListing(sessionDir);
+    expect(await new SessionSummaryScanner({ indexDir }).scanSessionSummariesInDir(sessionDir)).toEqual(expected);
+    const [indexFile] = await fsPromises.readdir(indexDir);
+    if (indexFile === undefined) throw new Error("index was not written");
+
+    await writeFile(join(indexDir, indexFile), "{ not json", "utf8");
+    expect(await new SessionSummaryScanner({ indexDir }).scanSessionSummariesInDir(sessionDir)).toEqual(expected);
+
+    await writeFile(join(indexDir, indexFile), JSON.stringify({ version: 999, sessionDir, files: {} }), "utf8");
+    expect(await new SessionSummaryScanner({ indexDir }).scanSessionSummariesInDir(sessionDir)).toEqual(expected);
+
+    const valid: unknown = JSON.parse(await fsPromises.readFile(join(indexDir, indexFile), "utf8"));
+    expect(valid).toMatchObject({ version: 1, sessionDir });
+    expect((await fsPromises.readdir(indexDir)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it("drops persisted entries for deleted sessions and skips rewriting an unchanged index", async () => {
+    const indexDir = join(tempDir, "index");
+    const kept = await writeSession("kept.jsonl", [headerLine({ id: "kept", cwd: WORKSPACE })]);
+    const gone = await writeSession("gone.jsonl", [headerLine({ id: "gone", cwd: WORKSPACE })]);
+    const scanner = new SessionSummaryScanner({ indexDir });
+    expect((await scanner.scanSessionSummariesInDir(sessionDir)).map((s) => s.id).sort()).toEqual(["gone", "kept"]);
+    const [indexFile] = await fsPromises.readdir(indexDir);
+    if (indexFile === undefined) throw new Error("index was not written");
+    const indexPath = join(indexDir, indexFile);
+
+    const firstWrite = (await stat(indexPath)).mtimeMs;
+    await scanner.scanSessionSummariesInDir(sessionDir);
+    expect((await stat(indexPath)).mtimeMs).toBe(firstWrite);
+
+    await rm(gone);
+    expect((await new SessionSummaryScanner({ indexDir }).scanSessionSummariesInDir(sessionDir)).map((s) => s.id)).toEqual(["kept"]);
+    const persisted: unknown = JSON.parse(await fsPromises.readFile(indexPath, "utf8"));
+    expect(persisted).toHaveProperty(["files", kept.slice(sessionDir.length + 1)]);
+    expect(JSON.stringify(persisted)).not.toContain("gone.jsonl");
+  });
+
   it("allocates no read buffers for a fully warm listing", async () => {
     await writeSession("2026-01-01T00-00-00-000Z_warm-a.jsonl", [
       headerLine({ id: "warm-a", cwd: WORKSPACE }),
@@ -762,6 +877,43 @@ describe("session summary scanner deliberate SDK divergences", () => {
 });
 
 /** A listing from a scanner with an empty memo: every file is read from disk. */
+/** Count bytes read through every file handle opened while tracking. */
+function trackBytesRead(): { total: () => Promise<number>; restore: () => void } {
+  const readSpies: { mock: { results: { value: unknown }[] } }[] = [];
+  const realOpen = fsPromises.open;
+  const openSpy = vi.spyOn(fsPromises, "open").mockImplementation(async (...args: Parameters<typeof fsPromises.open>) => {
+    const handle = await realOpen(...args);
+    readSpies.push(vi.spyOn(handle, "read"));
+    return handle;
+  });
+  return {
+    total: async () => {
+      let bytes = 0;
+      for (const spy of readSpies) {
+        for (const result of spy.mock.results) {
+          const settled: unknown = await result.value;
+          if (typeof settled === "object" && settled !== null && "bytesRead" in settled && typeof settled.bytesRead === "number") bytes += settled.bytesRead;
+        }
+      }
+      return bytes;
+    },
+    restore: () => { openSpy.mockRestore(); },
+  };
+}
+
+async function bumpMtime(path: string): Promise<void> {
+  const current = await stat(path);
+  await utimes(path, current.atime, new Date(current.mtimeMs + 5000));
+}
+
+async function rewriteHeaderWithParent(path: string, parentPath: string): Promise<void> {
+  const content = await fsPromises.readFile(path, "utf8");
+  const [header, ...rest] = content.split("\n");
+  const parsed: unknown = JSON.parse(header ?? "{}");
+  const restored = JSON.stringify({ ...(typeof parsed === "object" && parsed !== null ? parsed : {}), parentSession: parentPath });
+  await writeFile(path, [restored, ...rest].join("\n"), "utf8");
+}
+
 async function coldListing(dir: string): Promise<PiSessionListEntry[]> {
   return new SessionSummaryScanner().scanSessionSummariesInDir(dir);
 }
