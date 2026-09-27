@@ -68,6 +68,7 @@ export class AppNavigationPanel extends LitElement {
   @property({ attribute: false }) onMarkSessionRead?: (session: SessionInfo) => void | Promise<void>;
   @property({ attribute: false }) onMarkSessionsRead?: (sessions: SessionInfo[]) => void | Promise<void>;
   @property({ attribute: false }) onReloadSession?: (session: SessionInfo) => void | Promise<void>;
+  @property({ attribute: false }) onRenameSession?: (session: SessionInfo, name: string) => void | Promise<void>;
   @property({ attribute: false }) onCleanupSessions?: () => void | Promise<void>;
   @property({ attribute: false }) onArchivedCollapsed?: () => void | Promise<void>;
   @property({ attribute: false }) onSelectMachine?: (machine: Machine) => void | Promise<void>;
@@ -114,6 +115,7 @@ export class AppNavigationPanel extends LitElement {
     markSessionRead: (session: SessionInfo) => this.onMarkSessionRead?.(session),
     markSessionsRead: (sessions: SessionInfo[]) => this.onMarkSessionsRead?.(sessions),
     reloadSession: (session: SessionInfo) => this.onReloadSession?.(session),
+    renameSession: (session: SessionInfo, name: string) => this.onRenameSession?.(session, name),
     cleanupSessions: () => this.onCleanupSessions?.(),
     previousFromProjects: () => { this.focusPreviousFrom("projects"); },
     nextFromProjects: () => { this.focusNextFrom("projects"); },
@@ -214,6 +216,7 @@ export class AppNavigationPanel extends LitElement {
         .onMarkRead=${this.childCallbacks.markSessionRead}
         .onMarkReadMany=${this.childCallbacks.markSessionsRead}
         .onReload=${this.childCallbacks.reloadSession}
+        .onRename=${this.childCallbacks.renameSession}
         .onCleanup=${this.childCallbacks.cleanupSessions}
         .onFocusPreviousSection=${this.childCallbacks.previousFromSessions}
         .onFocusNextSection=${this.childCallbacks.nextFromSessions}

@@ -971,6 +971,32 @@ export class SessionController {
     }
   }
 
+  /**
+   * Renames a current persisted session through the existing `/name` command
+   * route (which lazily opens idle sessions). Archived sessions must be
+   * restored first. The list updates from the command result; the server's
+   * session.name event converges any other open views.
+   */
+  async renameSession(session: SessionInfo, name: string): Promise<boolean> {
+    const trimmed = name.trim();
+    if (trimmed === "" || !isArchivableSessionInfo(session, this.statusForSession(session))) return false;
+    const machineId = selectedMachineId(this.getState());
+    const errorOwner = this.captureSessionErrorOwner(session);
+    try {
+      const result = await this.api.runCommand(session, `/name ${trimmed}`, machineId);
+      if (result.type !== "done") {
+        const message = result.type === "unsupported" ? result.message : "Rename needs input; run /name in the session instead.";
+        this.reportSessionError(session, machineId, `Rename failed: ${message}`, errorOwner);
+        return false;
+      }
+      if (selectedMachineId(this.getState()) === machineId) this.applySessionName(session.id, result.session?.name ?? trimmed);
+      return true;
+    } catch (error) {
+      this.reportSessionError(session, machineId, `Rename failed: ${errorMessage(error)}`, errorOwner);
+      return false;
+    }
+  }
+
   async detachParent(session = this.getState().selectedSession) {
     if (session?.parentSessionPath === undefined) return;
     const machineId = selectedMachineId(this.getState());

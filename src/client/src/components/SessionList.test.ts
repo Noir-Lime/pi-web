@@ -102,6 +102,57 @@ describe("session action eligibility", () => {
   });
 });
 
+describe("rename action", () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it("prompts with the current name and forwards a trimmed rename for a non-selected current session", async () => {
+    const target = session("target", { persisted: true, name: "Old name" });
+    const selected = session("selected", { persisted: true });
+    const list = sessionList([selected, target], new Set());
+    list.selected = selected;
+    const promptSpy = vi.fn(() => "  New name  ");
+    vi.stubGlobal("prompt", promptSpy);
+    const onRename = vi.fn<(session: SessionInfo, name: string) => void>();
+    list.onRename = onRename;
+
+    await openSessionMenu(list, target.id);
+    const rename = list.shadowRoot?.querySelector<HTMLButtonElement>('button[title="Rename session"]');
+    expect(rename?.textContent).toBe("Rename");
+    rename?.click();
+
+    expect(promptSpy).toHaveBeenCalledWith("Rename session", "Old name");
+    expect(onRename).toHaveBeenCalledWith(target, "New name");
+    expect(componentState(list, "openMenuSessionId")).toBeUndefined();
+  });
+
+  it("does not rename when the prompt is cancelled, blank, or unchanged", async () => {
+    const target = session("target", { persisted: true, name: "Same" });
+    const list = sessionList([target], new Set());
+    const onRename = vi.fn<(session: SessionInfo, name: string) => void>();
+    list.onRename = onRename;
+    for (const answer of [null, "   ", "Same"]) {
+      vi.stubGlobal("prompt", () => answer);
+      await openSessionMenu(list, target.id);
+      list.shadowRoot?.querySelector<HTMLButtonElement>('button[title="Rename session"]')?.click();
+    }
+    expect(onRename).not.toHaveBeenCalled();
+  });
+
+  it("hides Rename for transient and archived sessions", async () => {
+    const cached = markCachedNewSessionInfo(session("cached"));
+    const archived = { ...session("archived", { persisted: true }), archived: true, archivedAt: "2026-06-09T00:00:00.000Z" };
+    const list = sessionList([cached, archived], new Set());
+
+    await openSessionMenu(list, cached.id);
+    expect(list.shadowRoot?.querySelector('button[title="Rename session"]')).toBeNull();
+
+    list.shadowRoot?.querySelector<HTMLButtonElement>(".subheading .section-toggle")?.click();
+    await list.updateComplete;
+    await openSessionMenu(list, archived.id);
+    expect(list.shadowRoot?.querySelector('button[title="Rename session"]')).toBeNull();
+  });
+});
+
 describe("mark-as-read actions", () => {
   it("offers Mark as read in the menu of an unread current session and forwards it", async () => {
     const unread = session("unread");

@@ -133,6 +133,21 @@ describe("stable list inputs", () => {
     expect(focus).toHaveBeenCalledWith("machines");
   });
 
+  it("forwards session list renames to the panel rename callback", async () => {
+    const panel = await mountPanel({}, machine("local"));
+    const currentSession = session("session-1");
+    panel.sessions = [currentSession];
+    const rename = vi.fn();
+    panel.onRenameSession = rename;
+    const sessions = section(panel, "session-list", SessionList);
+    await panel.updateComplete;
+    await sessions.updateComplete;
+
+    void sessions.onRename?.(currentSession, "New name");
+
+    expect(rename).toHaveBeenCalledWith(currentSession, "New name");
+  });
+
   it("still renders changed list data and workspace label providers", async () => {
     const panel = await mountPanel({}, machine("local"));
     const projects = section(panel, "project-list", ProjectList);
