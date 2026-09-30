@@ -1120,7 +1120,6 @@ export class PiWebApp extends LitElement {
   }
 
   private async withChatScrollTransition(action: () => Promise<void>, shouldComplete: () => boolean = () => true) {
-    this.chatView?.saveScrollPosition();
     await action();
     if (!shouldComplete()) return;
     await this.updateComplete;
@@ -1129,7 +1128,7 @@ export class PiWebApp extends LitElement {
     if (!shouldComplete()) return;
     await nextFrame();
     if (!shouldComplete()) return;
-    this.chatView?.restoreScrollPosition();
+    this.chatView?.scrollToLatest();
     if (this.shouldAutoFocusPrompt()) this.promptEditor?.focusInput();
   }
 
