@@ -1,6 +1,6 @@
 import { parseSessionDefaults } from "../../../shared/sessionDefaults";
 import type { SessionDefaultsUpdate } from "../../../shared/apiTypes";
-import type { AskUserSubmission, DeleteWorkspaceFileResponse, ExtensionDialogAnswer, FileSuggestion, MoveWorkspaceFileOptions, PiPackageInstallRequest, PiPackageRemoveRequest, PiPackageScope, PiPackageUpdateRequest, PiWebConfigValues, PromptAttachment, ServerNoticeDismissRequest, SessionBulkMutationRef, SessionCleanupRequest, SessionModelScopeMode, SessionNotificationDismissThrough, SessionRef, SessionTreeForkRequest, SessionTreeForkResult, SessionTreeNavigateRequest, SessionUnreadAcknowledgeRequest, WorkspaceRemovalRequest, WriteWorkspaceFileOptions } from "../../../shared/apiTypes";
+import type { AskUserSubmission, DeleteWorkspaceFileResponse, ExtensionDialogAnswer, FileSuggestion, MoveWorkspaceFileOptions, PiPackageInstallRequest, PiPackageRemoveRequest, PiPackageScope, PiPackageUpdateRequest, PiWebConfigValues, PiWebRestartRequest, PromptAttachment, ServerNoticeDismissRequest, SessionBulkMutationRef, SessionCleanupRequest, SessionModelScopeMode, SessionNotificationDismissThrough, SessionRef, SessionTreeForkRequest, SessionTreeForkResult, SessionTreeNavigateRequest, SessionUnreadAcknowledgeRequest, WorkspaceRemovalRequest, WriteWorkspaceFileOptions } from "../../../shared/apiTypes";
 import { resolveAppUrl } from "../appUrl";
 import { request } from "./http";
 import {
@@ -31,6 +31,8 @@ import {
   parsePiPackagesResponse,
   parsePiWebConfigResponse,
   parsePiWebPluginsResponse,
+  parsePiWebRestartAvailability,
+  parsePiWebRestartScheduled,
   parsePiWebRuntimeResponse,
   parsePiWebStatusResponse,
   parseProject,
@@ -111,7 +113,11 @@ function piWebStatusPath(machineId: string): string {
 export const piWebApi = {
   piWebStatus: (machineId = "local") => request(piWebStatusPath(machineId), parsePiWebStatusResponse),
   checkForUpdates: (machineId = "local") => request(`${piWebStatusPath(machineId)}?refresh=1`, parsePiWebStatusResponse, { cache: "no-store" }),
-  piWebRuntime: () => request("api/pi-web/runtime", parsePiWebRuntimeResponse),
+  piWebRuntime: (signal?: AbortSignal) => request("api/pi-web/runtime", parsePiWebRuntimeResponse, signal === undefined ? undefined : { signal }),
+  /** Restart support of the PI WEB instance serving this page (never a selected remote machine). */
+  restartAvailability: (signal?: AbortSignal) => request("api/pi-web/restart", parsePiWebRestartAvailability, { cache: "no-store", ...(signal === undefined ? {} : { signal }) }),
+  /** Schedule a restart of the serving instance; callers must never retry this automatically. */
+  restart: (token: string) => request("api/pi-web/restart", parsePiWebRestartScheduled, { method: "POST", body: JSON.stringify({ confirmed: true, token } satisfies PiWebRestartRequest) }),
 };
 
 export const machinesApi = {

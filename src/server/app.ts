@@ -1,3 +1,4 @@
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,7 +24,8 @@ import { PiWebPluginManifestRuntimeError, PiWebPluginService } from "./piWebPlug
 import { createActiveProfilePiPackageService, type PiPackageService } from "./piPackageService.js";
 import { registerPiPackageRoutes } from "./piPackageRoutes.js";
 import { createPiWebStatusCache, type PiWebStatusCache } from "./piWebStatusCache.js";
-import { detectPiWebInstallation, getPiWebRuntime, getPiWebStatus, getPiWebVersionStatus } from "./piWebStatus.js";
+import { createSystemdPiWebRestartBackend, detectPiWebInstallation, getPiWebRuntime, getPiWebStatus, getPiWebVersionStatus, PI_WEB_RESTART_DELAY_SECONDS, type PiWebRestartBackend } from "./piWebStatus.js";
+import type { PiWebRestartAvailability, PiWebRestartScheduled } from "../shared/apiTypes.js";
 import { createDeploymentFlavorResolver } from "./deploymentIdentity.js";
 import { registerDeploymentIdentityAssetRoutes } from "./deploymentIdentityRoutes.js";
 import type { PiWebDeploymentFlavor } from "./deploymentIdentity.js";
@@ -52,6 +54,8 @@ export interface AppDependencies {
   piPackages?: PiPackageService;
   piWebStatusCache?: PiWebStatusCache;
   config?: PiWebConfigService;
+  /** Restarts this instance's own services; tests inject a recording fake. */
+  piWebRestart?: PiWebRestartBackend;
   clientDist?: string | false;
   /** Overrides deployment-flavor detection (dev/stable asset identity) in tests. */
   deploymentFlavor?: () => Promise<PiWebDeploymentFlavor>;
@@ -137,6 +141,61 @@ function invalidatePiWebStatusOnWrite(config: PiWebConfigService, statusCache: P
   };
 }
 
+function registerPiWebRestartRoutes(app: FastifyInstance, restart: PiWebRestartBackend): void {
+  // Restart-only nonce: PI WEB is a private same-origin app without login, so
+  // this guards the restart against browser CSRF, not against local users.
+  const token = randomBytes(32).toString("base64url");
+  let scheduled = false;
+  const tokenMatches = (candidate: unknown): boolean => {
+    if (typeof candidate !== "string") return false;
+    const expected = Buffer.from(token);
+    const actual = Buffer.from(candidate);
+    return actual.length === expected.length && timingSafeEqual(actual, expected);
+  };
+
+  app.get("/api/pi-web/restart", async (_request, reply): Promise<PiWebRestartAvailability> => {
+    reply.header("cache-control", "no-store");
+    const result = await restart.availability();
+    return result.available ? { available: true, token } : { available: false, reason: result.reason };
+  });
+
+  app.post("/api/pi-web/restart", async (request, reply) => {
+    reply.header("cache-control", "no-store");
+    const fetchSite = request.headers["sec-fetch-site"];
+    if (fetchSite !== undefined && fetchSite !== "same-origin" && fetchSite !== "none") {
+      return reply.code(403).send({ error: "Cross-site restart requests are not allowed" });
+    }
+    if (!(request.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
+      return reply.code(415).send({ error: "Restart requests must be JSON" });
+    }
+    const body = request.body;
+    const token = typeof body === "object" && body !== null && "token" in body ? body.token : undefined;
+    const confirmed = typeof body === "object" && body !== null && "confirmed" in body ? body.confirmed : undefined;
+    if (!tokenMatches(token)) return reply.code(403).send({ error: "Invalid restart token" });
+    if (confirmed !== true) return reply.code(400).send({ error: "Restart must be confirmed" });
+    // One restart per process: set before any await, cleared only on failure,
+    // because a successful schedule ends this process within seconds.
+    if (scheduled) return reply.code(409).send({ error: "Restart is already scheduled" });
+    scheduled = true;
+    let unavailableReason: string | undefined;
+    try {
+      const availability = await restart.availability();
+      if (availability.available) await restart.schedule();
+      else unavailableReason = availability.reason;
+    } catch (error) {
+      scheduled = false;
+      request.log.error({ err: error }, "failed to schedule PI WEB restart");
+      return reply.code(500).send({ error: `Could not schedule restart: ${error instanceof Error ? error.message : String(error)}` });
+    }
+    if (unavailableReason !== undefined) {
+      scheduled = false;
+      return reply.code(409).send({ error: unavailableReason });
+    }
+    const receipt: PiWebRestartScheduled = { scheduled: true, delaySeconds: PI_WEB_RESTART_DELAY_SECONDS };
+    return reply.code(202).send(receipt);
+  });
+}
+
 async function withProfileDependency<T>(reply: FastifyReply, operation: () => Promise<T>): Promise<T | FastifyReply> {
   try {
     return await operation();
@@ -220,6 +279,7 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
   // only after the web-owned initial build and API startup have completed.
   app.get("/api/pi-web/health", () => Promise.resolve({ ok: true }));
   app.get("/api/pi-web/runtime", async () => getPiWebRuntime(sessionDaemon));
+  registerPiWebRestartRoutes(app, deps.piWebRestart ?? createSystemdPiWebRestartBackend());
   app.get("/api/plugins", async (_request, reply) => withProfileDependency(reply, () => piWebPlugins.plugins()));
   app.get("/api/machines/local/plugins", async (_request, reply) => withProfileDependency(reply, () => piWebPlugins.plugins()));
   registerPiPackageRoutes(app, piPackages);

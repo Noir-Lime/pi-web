@@ -66,6 +66,27 @@ export type {
 
 export type MachineStatus = "unknown" | "online" | "offline" | "error";
 
+/** GET /api/pi-web/restart: whether this instance can restart its own services. */
+export interface PiWebRestartAvailability {
+  available: boolean;
+  /** Why restart is unavailable; present when `available` is false. */
+  reason?: string;
+  /** Restart-only process nonce to echo in the POST body; present when available. */
+  token?: string;
+}
+
+/** POST /api/pi-web/restart JSON body. */
+export interface PiWebRestartRequest {
+  confirmed: true;
+  token: string;
+}
+
+/** POST /api/pi-web/restart 202 receipt: the restart was handed to the service manager. */
+export interface PiWebRestartScheduled {
+  scheduled: true;
+  delaySeconds: number;
+}
+
 /**
  * Registry of feature-gating capabilities. Add an entry here (plus the
  * runtime/requirements entries in `capabilities.ts`) when a feature needs

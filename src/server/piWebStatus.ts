@@ -691,3 +691,78 @@ function formatVersion(version: string | undefined): string {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+export const PI_WEB_RESTART_DELAY_SECONDS = 3;
+const RESTART_COMMAND_TIMEOUT_MS = 10_000;
+
+export type PiWebRestartAvailabilityResult = { available: true } | { available: false; reason: string };
+
+/** Restarts the system-managed services hosting this process. Injected in tests. */
+export interface PiWebRestartBackend {
+  availability(): Promise<PiWebRestartAvailabilityResult>;
+  /** Resolves only after the service manager accepted the scheduled restart. */
+  schedule(): Promise<void>;
+}
+
+export type PiWebRestartCommandRunner = (command: string, args: readonly string[]) => Promise<string>;
+
+export interface SystemdPiWebRestartOptions {
+  platform?: NodeJS.Platform;
+  pid?: number;
+  uid?: number;
+  run?: PiWebRestartCommandRunner;
+  unitSuffix?: () => string;
+}
+
+/**
+ * Restart for the Linux system-service install (`pi-web.service` and
+ * `pi-web-sessiond.service`). Every argv is fixed here; nothing comes from the
+ * browser. The restart is offered only when this process is the web unit's
+ * MainPID, so a second instance or dev server cannot restart the hosting one.
+ * The restart runs in a transient system unit after a short timer, detached
+ * from this process, restarting web before sessiond.
+ */
+export function createSystemdPiWebRestartBackend(options: SystemdPiWebRestartOptions = {}): PiWebRestartBackend {
+  const platform = options.platform ?? process.platform;
+  const pid = options.pid ?? process.pid;
+  const uid = options.uid ?? process.getuid?.() ?? -1;
+  const run = options.run ?? runRestartCommand;
+  const unitSuffix = options.unitSuffix ?? (() => `${String(Date.now())}-${String(process.pid)}`);
+  const web = serviceRefs.web.systemdName;
+  const sessiond = serviceRefs.sessiond.systemdName;
+  const privileged = (command: string, args: string[]): [string, string[]] => uid === 0 ? [command, args] : ["sudo", ["-n", command, ...args]];
+
+  async function availability(): Promise<PiWebRestartAvailabilityResult> {
+    if (platform !== "linux") return { available: false, reason: `Restart is only supported for systemd services on Linux (platform ${platform}).` };
+    try {
+      const mainPid = (await run("systemctl", ["show", web, "--property=MainPID", "--value"])).trim();
+      if (mainPid !== String(pid)) return { available: false, reason: `This process is not the ${web} main process.` };
+      const loadState = (await run("systemctl", ["show", sessiond, "--property=LoadState", "--value"])).trim();
+      if (loadState !== "loaded") return { available: false, reason: `${sessiond} is not installed.` };
+      if (uid !== 0) await run("sudo", ["-n", "-l", "systemd-run"]);
+    } catch (error) {
+      return { available: false, reason: `Restart is unavailable: ${error instanceof Error ? error.message : String(error)}` };
+    }
+    return { available: true };
+  }
+
+  async function schedule(): Promise<void> {
+    const [command, args] = privileged("systemd-run", [
+      `--on-active=${String(PI_WEB_RESTART_DELAY_SECONDS)}s`,
+      "--collect",
+      `--unit=pi-web-restart-${unitSuffix()}`,
+      "--",
+      "/bin/sh",
+      "-c",
+      `systemctl restart ${web} && systemctl restart ${sessiond}`,
+    ]);
+    await run(command, args);
+  }
+
+  return { availability, schedule };
+}
+
+async function runRestartCommand(command: string, args: readonly string[]): Promise<string> {
+  const { stdout } = await execFileAsync(command, [...args], { encoding: "utf8", timeout: RESTART_COMMAND_TIMEOUT_MS });
+  return stdout;
+}
