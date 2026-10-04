@@ -133,6 +133,7 @@ describe("PiSessionService", () => {
       const initialModels: PiAgentSession["model"][] = [];
       const initialThinkingLevels: unknown[] = [];
       const delegationCapabilities: boolean[] = [];
+      const trackedChildFlags: (boolean | undefined)[] = [];
       const runtimes = [parent.runtime, child.runtime];
       let index = 0;
       const createAgentRuntime: RuntimeCreator = async (_createRuntime, options) => {
@@ -140,6 +141,7 @@ describe("PiSessionService", () => {
         initialModels.push(options.initialModel);
         initialThinkingLevels.push(options.initialThinkingLevel);
         delegationCapabilities.push(options.delegationToolsEnabled);
+        trackedChildFlags.push(options.trackedChild);
         const runtime = runtimes[index] ?? child.runtime;
         index += 1;
         return runtime;
@@ -160,6 +162,8 @@ describe("PiSessionService", () => {
       expect(initialModels).toEqual([undefined, model]);
       expect(initialThinkingLevels).toEqual([undefined, "max"]);
       expect(delegationCapabilities).toEqual([true, false]);
+      // The child is offered send_parent_message without regaining delegation.
+      expect(trackedChildFlags).toEqual([false, true]);
       await service.dispose();
     });
 
@@ -1058,15 +1062,15 @@ describe("PiSessionService", () => {
 
     it("notifies the parent once when the tracked child stops working", async () => {
       const { parent, child, service } = subsessionService({ allowed: true, cwd: "/workspace" });
-      child.session.sessionManager.getBranch = () => [
-        { type: "message", message: { role: "assistant", content: "all done" } },
-      ];
+      const branch: unknown[] = [];
+      child.session.sessionManager.getBranch = () => branch;
       await service.start("/workspace");
       await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "go" });
       parent.calls.prompt.length = 0; // ignore the spawn prompt to the child; focus on the parent notification
 
       child.session.isStreaming = true;
       child.emit({ type: "agent_start" }); // arm the notification
+      branch.push({ type: "message", message: { role: "assistant", content: "all done" } });
       child.session.isStreaming = false;
       child.emit({ type: "agent_end" }); // fire once
       child.emit({ type: "turn_end" }); // must not re-notify
@@ -1076,19 +1080,38 @@ describe("PiSessionService", () => {
         expect(parent.calls.sendCustomMessage).toHaveLength(1);
       });
       expect(parent.calls.sendCustomMessage[0]?.message.content).toContain("Subsession child-1 stopped working");
-      expect(parent.calls.sendCustomMessage[0]?.message.content).toContain("--- SUBSESSION OUTPUT: child-1 ---\nall done");
+      const content = String(parent.calls.sendCustomMessage[0]?.message.content);
+      expect(content).toMatch(/^Subsession child-1 stopped working: the run started \S+Z ended idle at \S+Z\. That was its status at completion, not necessarily now\.\n/);
+      expect(content).toContain("--- SUBSESSION OUTPUT (this run): child-1 ---\nall done");
+      expect(content).toMatch(/Current status of subsession child-1 when this notice was sent: idle\.$/);
       expect(parent.calls.sendCustomMessage[0]?.message.customType).toBe("subsession.completion");
       expect(parent.calls.sendCustomMessage[0]?.options).toEqual({ triggerTurn: true, deliverAs: "followUp" });
       expect(parent.calls.prompt).toHaveLength(0); // not a user-authored message
       await service.dispose();
     });
 
-    it("omits oversized output from the completion notice while keeping it available for inspection", async () => {
+    it("does not reuse an earlier run's output for a run without assistant text", async () => {
       const { parent, child, service } = subsessionService({ allowed: true, cwd: "/workspace" });
-      const longOutput = `BEGIN_LONG_OUTPUT\n${"x".repeat(2100)}\nEND_LONG_OUTPUT`;
-      child.session.sessionManager.getBranch = () => [
-        { type: "message", message: { role: "assistant", content: longOutput } },
-      ];
+      const branch: unknown[] = [{ type: "message", message: { role: "assistant", content: "earlier run conclusion" } }];
+      child.session.sessionManager.getBranch = () => branch;
+      await service.start("/workspace");
+      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "go" });
+
+      child.session.isStreaming = true;
+      child.emit({ type: "agent_start" });
+      branch.push({ type: "message", message: { role: "user", content: "continue" } });
+      child.session.isStreaming = false;
+      child.emit({ type: "agent_end" });
+      await vi.waitFor(() => { expect(parent.calls.sendCustomMessage).toHaveLength(1); });
+
+      const content = String(parent.calls.sendCustomMessage[0]?.message.content);
+      expect(content).toContain("--- SUBSESSION OUTPUT (this run): child-1 ---\n(no assistant text in this run)");
+      expect(content).not.toContain("earlier run conclusion");
+      await service.dispose();
+    });
+
+    it("reports the child's status when the notice is sent, not only at completion", async () => {
+      const { parent, child, service } = subsessionService({ allowed: true, cwd: "/workspace" });
       await service.start("/workspace");
       await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "go" });
 
@@ -1096,15 +1119,43 @@ describe("PiSessionService", () => {
       child.emit({ type: "agent_start" });
       child.session.isStreaming = false;
       child.emit({ type: "agent_end" });
+      // The child resumes before the asynchronous (or deferred) delivery runs.
+      child.session.isStreaming = true;
+      await vi.waitFor(() => { expect(parent.calls.sendCustomMessage).toHaveLength(1); });
+
+      const content = String(parent.calls.sendCustomMessage[0]?.message.content);
+      expect(content).toContain("ended idle at");
+      expect(content).toContain("not necessarily now");
+      expect(content).toMatch(/Current status of subsession child-1 when this notice was sent: working\.$/);
+      child.session.isStreaming = false;
+      await service.dispose();
+    });
+
+    it("bounds oversized output to an excerpt while keeping the full output available for inspection", async () => {
+      const { parent, child, service } = subsessionService({ allowed: true, cwd: "/workspace" });
+      const longOutput = `BEGIN_LONG_OUTPUT\n${"x".repeat(2100)}\nEND_LONG_OUTPUT`;
+      const branch: unknown[] = [];
+      child.session.sessionManager.getBranch = () => branch;
+      await service.start("/workspace");
+      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "go" });
+
+      child.session.isStreaming = true;
+      child.emit({ type: "agent_start" });
+      branch.push({ type: "message", message: { role: "assistant", content: longOutput } });
+      child.session.isStreaming = false;
+      child.emit({ type: "agent_end" });
       // Wait for the completion notice to be delivered via the async path.
       await vi.waitFor(() => {
         expect(parent.calls.sendCustomMessage).toHaveLength(1);
       });
 
-      expect(parent.calls.sendCustomMessage[0]?.message.content).toBe(
-        "Subsession child-1 stopped working (idle).\nNo other tracked subsessions are working.\n\nOutput from subsession child-1 was too long for this completion notice and was omitted. Call check_subsession with sessionId \"child-1\" to retrieve the final output.",
-      );
-      expect(parent.calls.sendCustomMessage[0]?.message.content).not.toContain("BEGIN_LONG_OUTPUT");
+      const content = String(parent.calls.sendCustomMessage[0]?.message.content);
+      expect(content).toContain("At completion, no other tracked subsessions were working.");
+      expect(content).toContain("--- SUBSESSION OUTPUT EXCERPT (this run): child-1 ---\nBEGIN_LONG_OUTPUT");
+      expect(content).toContain("END_LONG_OUTPUT\n--- END EXCERPT ---");
+      expect(content).toContain("characters omitted");
+      expect(content).toContain(`Output was ${String(longOutput.length)} characters. Call check_subsession with sessionId "child-1" to retrieve the full final output.`);
+      expect(content.length).toBeLessThan(2600);
       await expect(service.checkSubsession("parent-1", "child-1", "/tmp/parent-1.jsonl")).resolves.toMatchObject({ finalText: longOutput });
       await service.dispose();
     });
@@ -1133,8 +1184,8 @@ describe("PiSessionService", () => {
         expect(parent.calls.sendCustomMessage).toHaveLength(1);
       });
 
-      expect(parent.calls.sendCustomMessage[0]?.message.content).toBe(
-        "Subsession child-1 stopped working (idle).\nStill working: child-2. Continue working, or call yield_to_subsessions alone and last at the next join point. Further completion notices arrive automatically; do not poll.\n\n--- SUBSESSION OUTPUT: child-1 ---\n(no output)",
+      expect(parent.calls.sendCustomMessage[0]?.message.content).toContain(
+        "\nAt completion, still working: child-2. Continue working, or call yield_to_subsessions alone and last at the next join point. Further completion notices arrive automatically; do not poll.\n\n--- SUBSESSION OUTPUT (this run): child-1 ---\n(no assistant text in this run)",
       );
 
       second.session.isStreaming = false;
@@ -1144,8 +1195,8 @@ describe("PiSessionService", () => {
         expect(parent.calls.sendCustomMessage).toHaveLength(2);
       });
 
-      expect(parent.calls.sendCustomMessage[1]?.message.content).toBe(
-        "Subsession child-2 stopped working (idle).\nNo other tracked subsessions are working.\n\n--- SUBSESSION OUTPUT: child-2 ---\n(no output)",
+      expect(parent.calls.sendCustomMessage[1]?.message.content).toContain(
+        "\nAt completion, no other tracked subsessions were working.\n\n--- SUBSESSION OUTPUT (this run): child-2 ---\n(no assistant text in this run)",
       );
       await service.dispose();
     });

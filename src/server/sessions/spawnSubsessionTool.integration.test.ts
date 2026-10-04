@@ -162,4 +162,54 @@ describe("yield_to_subsessions Pi agent-loop integration", () => {
     expect(result.streamFn).toHaveBeenCalledTimes(2);
     expect(result.messages.at(-1)).toMatchObject({ role: "assistant" });
   });
+
+  it("runs a same-batch spawn to completion before yield lists children, then still ends the run", async () => {
+    const order: string[] = [];
+    let spawned = false;
+    const deps: SubsessionToolDeps = {
+      sendParent: () => Promise.resolve(),
+      stop: () => Promise.resolve(),
+      send: () => Promise.resolve(),
+      spawn: async () => {
+        order.push("spawn:start");
+        await new Promise<void>((resolve) => setTimeout(resolve, 10));
+        spawned = true;
+        order.push("spawn:end");
+        return { sessionId: "child-1", cwd: "/workspace" };
+      },
+      list: () => {
+        order.push("yield:list");
+        return Promise.resolve(spawned ? [{ sessionId: "child-1", cwd: "/workspace", status: "working" as const }] : []);
+      },
+      check: () => Promise.resolve({ sessionId: "child-1", cwd: "/workspace", status: "idle" as const, finalText: "", messageCount: 0 }),
+      read: () => Promise.resolve({ sessionId: "child-1", cwd: "/workspace", status: "idle" as const, entries: [], total: 0, matched: 0, start: 0, hasMore: false }),
+    };
+    const ctx = extensionContext();
+    const tools = createSubsessionToolDefinitions("/workspace", deps)
+      .filter(({ name }) => name === "spawn_subsession" || name === "yield_to_subsessions")
+      .map((definition) => wrapDefinition(definition, ctx));
+    const streamFn = streamSequence([
+      message("toolUse", [
+        { type: "toolCall", id: "spawn-call", name: "spawn_subsession", arguments: { prompt: "work" } },
+        { type: "toolCall", id: "yield-call", name: "yield_to_subsessions", arguments: {} },
+      ]),
+      message("stop", [{ type: "text", text: "follow-up after the spawn result" }]),
+    ]);
+
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "spawn and join", timestamp: 0 }],
+      { messages: [], tools },
+      { model, convertToLlm: (agentMessages) => agentMessages.filter(isLlmMessage) },
+      () => undefined,
+      undefined,
+      streamFn,
+    );
+
+    expect(order).toEqual(["spawn:start", "spawn:end", "yield:list"]);
+    expect(messages.find((entry) => entry.role === "toolResult" && entry.toolName === "yield_to_subsessions")).toMatchObject({
+      content: [{ type: "text", text: "Working: child-1. Ending this run; completion notices will wake you." }],
+    });
+    // spawn_subsession does not terminate, so the mixed batch continues.
+    expect(streamFn).toHaveBeenCalledTimes(2);
+  });
 });

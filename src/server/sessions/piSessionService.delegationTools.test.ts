@@ -67,7 +67,6 @@ describe("delegation tool capability boundary", () => {
       "read_subsession",
       "send_subsession_message",
       "stop_subsession",
-      "send_parent_message",
       "yield_to_subsessions",
     ]);
   });
@@ -83,6 +82,12 @@ describe("delegation tool capability boundary", () => {
     const { spawn, subsessions } = delegationDeps();
 
     expect(toolNames(createPiWebCustomToolDefinitions("/workspace", false, spawn, subsessions))).toEqual(["edit"]);
+  });
+
+  it("offers tracked children only send_parent_message without delegation", () => {
+    const { spawn, subsessions } = delegationDeps();
+
+    expect(toolNames(createPiWebCustomToolDefinitions("/workspace", false, spawn, subsessions, undefined, true))).toEqual(["edit", "send_parent_message"]);
   });
 
   it("wires the dispatching session identity, inherited model, and model spec into spawn_session", async () => {

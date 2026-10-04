@@ -299,6 +299,9 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
       "After calling spawn_subsession, you can continue with other work. At the join point, call yield_to_subsessions alone and last; completion notices wake you, so do not poll.",
     ],
     parameters: YieldToSubsessionsParams,
+    // Run the whole batch sequentially so a same-batch spawn or steer finishes
+    // before yield lists working children.
+    executionMode: "sequential",
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
       const parentSessionId = ctx.sessionManager.getSessionId();
       const parentSessionFile = ctx.sessionManager.getSessionFile() ?? undefined;
@@ -347,7 +350,15 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
     },
   });
 
-  const sendParentTool = defineTool<typeof SendParentMessageParams, { sent: boolean }>({
+  return [spawnTool, listTool, checkTool, readTool, sendTool, stopTool, yieldTool];
+}
+
+/**
+ * The child-side tool for messaging a verified parent. Offered only to tracked
+ * children, independently of the delegation tools they are denied.
+ */
+export function createSendParentMessageToolDefinition(deps: Pick<SubsessionToolDeps, "sendParent">) {
+  return defineTool<typeof SendParentMessageParams, { sent: boolean }>({
     name: "send_parent_message",
     label: "Message parent",
     description: "Send a steering message to your verified parent without ending your run or waiting for a reply. The parent is selected automatically and woken if idle; active work is redirected at the next steering boundary. Only usable by tracked children. Continue working after this tool returns.",
@@ -360,6 +371,5 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
       };
     },
   });
-
-  return [spawnTool, listTool, checkTool, readTool, sendTool, stopTool, sendParentTool, yieldTool];
 }
+

@@ -1,7 +1,7 @@
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
-import { createSubsessionToolDefinitions, type SubsessionToolDeps } from "./spawnSubsessionTool.js";
+import { createSendParentMessageToolDefinition, createSubsessionToolDefinitions, type SubsessionToolDeps } from "./spawnSubsessionTool.js";
 
 const dispatchModel = { provider: "anthropic", id: "claude-sonnet" };
 
@@ -22,7 +22,7 @@ function tools(deps: Partial<SubsessionToolDeps>) {
     check: deps.check ?? vi.fn(() => Promise.resolve({ sessionId: "x", cwd: "/repos/a", status: "idle" as const, finalText: "", messageCount: 0 })),
     read: deps.read ?? vi.fn(() => Promise.resolve({ sessionId: "x", cwd: "/repos/a", status: "idle" as const, entries: [], total: 0, matched: 0, start: 0, hasMore: false })),
   };
-  const definitions = createSubsessionToolDefinitions("/repos/a", full);
+  const definitions = [...createSubsessionToolDefinitions("/repos/a", full), createSendParentMessageToolDefinition(full)];
   const find = (name: string) => {
     const tool = definitions.find((definition) => definition.name === name);
     if (tool === undefined) throw new Error(`missing tool ${name}`);

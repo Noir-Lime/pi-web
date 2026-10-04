@@ -88,7 +88,7 @@ import { PendingExtensionDialogStore, type ExtensionDialogCancelReason } from ".
 import { ExtensionDialogWaiters, effectiveExtensionDialogTimeoutMs, extensionDialogCancelValue } from "./extensionDialogWaiters.js";
 import { DEFAULT_EXTENSION_DIALOGS_TIMEOUT_MS } from "../../config.js";
 import { createSpawnSessionToolDefinition, type SpawnSessionInvocation, type SpawnSessionResult } from "./spawnSessionTool.js";
-import { createSubsessionToolDefinitions, type SpawnSubsessionInvocation, type SpawnSubsessionResult, type SubsessionCheckResult, type SubsessionReadQuery, type SubsessionReadResult, type SubsessionStatus, type SubsessionSummary, type SubsessionToolDeps } from "./spawnSubsessionTool.js";
+import { createSendParentMessageToolDefinition, createSubsessionToolDefinitions, type SpawnSubsessionInvocation, type SpawnSubsessionResult, type SubsessionCheckResult, type SubsessionReadQuery, type SubsessionReadResult, type SubsessionStatus, type SubsessionSummary, type SubsessionToolDeps } from "./spawnSubsessionTool.js";
 import { buildTranscriptView } from "./subsessionTranscript.js";
 import { annotateAssistantThinkingLevel, historyMessagesFromEntries } from "./transcriptMessages.js";
 import { planSessionCleanup, summarizeSessionCleanupExecution, type NormalizedSessionCleanupRequest, type SessionCleanupPlan } from "./sessionCleanup.js";
@@ -206,6 +206,12 @@ interface QueuedPrompt {
   text: string;
   images?: ImageContent[];
   echoUserMessage?: boolean;
+}
+
+interface SubsessionRunMark {
+  startedAt: string;
+  /** Child branch length at agent_start; later entries belong to this run. */
+  startEntryCount: number;
 }
 
 interface DeferredSubsessionNotification {
@@ -713,12 +719,14 @@ interface CreateAgentRuntimeOptions {
   agentDir: string;
   sessionManager: PiSessionManager;
   delegationToolsEnabled: boolean;
+  trackedChild?: boolean;
   initialModel?: AgentModel;
   initialThinkingLevel?: ClientThinkingLevel;
 }
 
 type PiWebRuntimeFactoryOptions = Parameters<CreateAgentSessionRuntimeFactory>[0] & {
   delegationToolsEnabled?: boolean;
+  trackedChild?: boolean;
   initialModel?: AgentModel;
   initialThinkingLevel?: ClientThinkingLevel;
 };
@@ -731,7 +739,7 @@ type CreateAgentRuntime = (createRuntime: PiWebCreateAgentSessionRuntimeFactory,
 
 function defaultCreateAgentRuntime(createRuntime: PiWebCreateAgentSessionRuntimeFactory, options: CreateAgentRuntimeOptions): Promise<PiSessionRuntime> {
   if (!(options.sessionManager instanceof SessionManager)) throw new Error("Default runtime creation requires an SDK SessionManager");
-  const runtimeFactory = createRuntimeWithOneShotSessionOptions(createRuntime, options.initialModel, options.initialThinkingLevel, options.delegationToolsEnabled);
+  const runtimeFactory = createRuntimeWithOneShotSessionOptions(createRuntime, options.initialModel, options.initialThinkingLevel, options.delegationToolsEnabled, options.trackedChild);
   return createAgentSessionRuntime(runtimeFactory, {
     cwd: options.cwd,
     agentDir: options.agentDir,
@@ -744,6 +752,7 @@ function createRuntimeWithOneShotSessionOptions(
   initialModel: AgentModel | undefined,
   initialThinkingLevel: ClientThinkingLevel | undefined,
   delegationToolsEnabled: boolean,
+  trackedChild?: boolean,
 ): CreateAgentSessionRuntimeFactory {
   // These inputs belong only to the session being opened. A later runtime
   // replacement resolves its own model and delegation capability, and restores
@@ -751,18 +760,22 @@ function createRuntimeWithOneShotSessionOptions(
   let pendingInitialModel = initialModel;
   let pendingInitialThinkingLevel = initialThinkingLevel;
   let pendingDelegationToolsEnabled: boolean | undefined = delegationToolsEnabled;
+  let pendingTrackedChild = trackedChild;
   return async (options) => {
     const model = pendingInitialModel;
     const thinkingLevel = pendingInitialThinkingLevel;
     const toolsEnabled = pendingDelegationToolsEnabled;
+    const child = pendingTrackedChild;
     pendingInitialModel = undefined;
     pendingInitialThinkingLevel = undefined;
     pendingDelegationToolsEnabled = undefined;
+    pendingTrackedChild = undefined;
     return createRuntime({
       ...options,
       ...(model === undefined ? {} : { initialModel: model }),
       ...(thinkingLevel === undefined ? {} : { initialThinkingLevel: thinkingLevel }),
       ...(toolsEnabled === undefined ? {} : { delegationToolsEnabled: toolsEnabled }),
+      ...(child === undefined ? {} : { trackedChild: child }),
     });
   };
 }
@@ -775,11 +788,15 @@ export function createPiWebCustomToolDefinitions(
   spawn?: SpawnSessionFn,
   subsessions?: SubsessionToolDeps,
   askUser?: AskUserToolDeps,
+  trackedChild = false,
 ) {
   return [
     createPiWebEditToolDefinition(cwd),
     ...(delegationEnabled && spawn !== undefined ? [createSpawnSessionToolDefinition(cwd, { spawn })] : []),
     ...(delegationEnabled && subsessions !== undefined ? createSubsessionToolDefinitions(cwd, subsessions) : []),
+    // Messaging the parent is not delegation: only tracked children, which are
+    // denied the delegation tools, can use it.
+    ...(trackedChild && subsessions !== undefined ? [createSendParentMessageToolDefinition(subsessions)] : []),
     // Asking the user is not delegation: the questions land in the session the
     // user is already watching, so tracked children may ask too.
     ...(askUser === undefined ? [] : [createAskUserToolDefinition(askUser)]),
@@ -983,7 +1000,7 @@ function createDefaultRuntimeFactory(
   appendSystemPromptSections: readonly string[] = [],
 ): PiWebCreateAgentSessionRuntimeFactory {
   const resourceLoaderOptions = piWebResourceLoaderOptions(appendSystemPromptSections);
-  return async ({ cwd, agentDir, sessionManager, sessionStartEvent, initialModel, initialThinkingLevel, delegationToolsEnabled }) => {
+  return async ({ cwd, agentDir, sessionManager, sessionStartEvent, initialModel, initialThinkingLevel, delegationToolsEnabled, trackedChild }) => {
     // PI WEB always honors pi's project-trust model. When the workspace ships
     // trust-requiring resources, trust is resolved exactly once, mirroring the
     // SDK's flow: the resource loader first loads the pre-trust extension set
@@ -1031,7 +1048,10 @@ function createDefaultRuntimeFactory(
     services.diagnostics.push(...modelOptions.diagnostics);
     const resolvedDelegationToolsEnabled = delegationToolsEnabled
       ?? await sessionAllowsDelegationTools(sessionManager, sessionManagers);
-    const customTools = createPiWebCustomToolDefinitions(cwd, resolvedDelegationToolsEnabled, spawn, subsessions, askUser);
+    // Delegation is also denied to host-owned sessions; only tracked children
+    // get the parent-messaging tool.
+    const resolvedTrackedChild = trackedChild ?? (delegationToolsEnabled === undefined && !resolvedDelegationToolsEnabled);
+    const customTools = createPiWebCustomToolDefinitions(cwd, resolvedDelegationToolsEnabled, spawn, subsessions, askUser, resolvedTrackedChild);
     const result = await createAgentSessionFromServices({
       services,
       sessionManager,
@@ -1197,11 +1217,12 @@ export class PiSessionService implements SessionRouteService {
   /** Parent id/file identities whose persisted links have already been loaded. */
   private readonly subsessionHydratedParents = new Set<string>();
   /**
-   * Tracked subsession id -> whether a completion notification is armed.
+   * Tracked subsession id -> the armed run's start mark, or false when unarmed.
    * Armed when the child's agent starts a run (not for commands or compaction);
-   * firing on completion disarms it for the next run.
+   * firing on completion disarms it for the next run. The mark scopes the
+   * completion notice to that run's own output.
    */
-  private readonly subsessionNotifyArmed = new Map<string, boolean>();
+  private readonly subsessionNotifyArmed = new Map<string, SubsessionRunMark | false>();
   private readonly archiveStore: SessionArchiveRepository;
   private readonly agentDir: string;
   private readonly sessionManager: PiSessionManagerGateway;
@@ -2341,21 +2362,28 @@ export class PiSessionService implements SessionRouteService {
     const link = this.subsessionLinkForActiveChild(session);
     if (link === undefined) return;
     const childId = link.childSessionId;
+    const armed = this.subsessionNotifyArmed.get(childId);
     if (agentStarted) {
-      this.subsessionNotifyArmed.set(childId, true);
+      // A run already armed but not yet reported keeps its original start.
+      if (armed === undefined || armed === false) {
+        this.subsessionNotifyArmed.set(childId, { startedAt: new Date().toISOString(), startEntryCount: session.sessionManager.getBranch().length });
+      }
       return;
     }
     if (this.hasActiveWork(session)) return;
-    if (this.subsessionNotifyArmed.get(childId) !== true) return;
+    if (armed === undefined || armed === false) return;
     this.subsessionNotifyArmed.set(childId, false);
     const status: SubsessionStatus = this.activities.get(childId)?.phase === "error" ? "error" : "idle";
-    const finalText = finalAssistantText(historyMessages(session));
+    const branch = session.sessionManager.getBranch();
+    // Only this run's entries: never fall back to an earlier run's output.
+    const runEntries = branch.length >= armed.startEntryCount ? branch.slice(armed.startEntryCount) : [];
+    const finalText = finalAssistantText(historyMessagesFromEntries(runEntries));
     const outputSection = formatSubsessionNotificationOutput(childId, finalText);
     const workingIds = this.workingSubsessionIds(link.parentSessionId);
     const next = workingIds.length === 0
-      ? "No other tracked subsessions are working."
-      : `Still working: ${workingIds.join(", ")}. Continue working, or call yield_to_subsessions alone and last at the next join point. Further completion notices arrive automatically; do not poll.`;
-    const text = `Subsession ${childId} stopped working (${status}).\n${next}\n\n${outputSection}`;
+      ? "At completion, no other tracked subsessions were working."
+      : `At completion, still working: ${workingIds.join(", ")}. Continue working, or call yield_to_subsessions alone and last at the next join point. Further completion notices arrive automatically; do not poll.`;
+    const text = `Subsession ${childId} stopped working: the run started ${armed.startedAt} ended ${status} at ${new Date().toISOString()}. That was its status at completion, not necessarily now.\n${next}\n\n${outputSection}`;
     void this.notifyParentOfSubsession(link.parentSessionId, childId, text);
   }
 
@@ -2398,8 +2426,12 @@ export class PiSessionService implements SessionRouteService {
   }
 
   private async deliverSubsessionNotification(session: PiAgentSession, notification: DeferredSubsessionNotification): Promise<void> {
+    // Read the child's status at send time so a deferred notice cannot present
+    // a child that has since resumed as idle.
+    const { status: currentStatus } = await this.subsessionSummaryFields(notification.childId);
+    const content = `${notification.text}\n\nCurrent status of subsession ${notification.childId} when this notice was sent: ${currentStatus}.`;
     await this.runSessionEntryMutation(session, "deliver a subsession notification", () => session.sendCustomMessage(
-      { customType: SUBSESSION_NOTIFICATION_CUSTOM_TYPE, content: notification.text, display: true, details: { sessionId: notification.childId } },
+      { customType: SUBSESSION_NOTIFICATION_CUSTOM_TYPE, content, display: true, details: { sessionId: notification.childId } },
       { triggerTurn: true, deliverAs: "followUp" },
     ));
     this.publishStatus(session);
@@ -3740,13 +3772,17 @@ export class PiSessionService implements SessionRouteService {
     startup: SessionStartupProgressReporter,
   ): Promise<ActiveSession<PiSessionRuntime>> {
     startup.report(STARTUP_PHASE_RUNTIME);
-    const delegationToolsEnabled = options.creationProvenance === undefined
-      && await sessionAllowsDelegationTools(sessionManager, this.sessionManager);
+    // A just-spawned child's provenance is not persisted yet, so trust the
+    // creation intent; reopened sessions are verified from persisted records.
+    const trackedChild = options.creationProvenance === "tracked-subsession"
+      || (options.creationProvenance === undefined && !(await sessionAllowsDelegationTools(sessionManager, this.sessionManager)));
+    const delegationToolsEnabled = options.creationProvenance === undefined && !trackedChild;
     const runtime = await this.createAgentRuntime(this.createRuntime, {
       cwd,
       agentDir: this.agentDir,
       sessionManager,
       delegationToolsEnabled,
+      trackedChild,
       ...(options.initialModel === undefined ? {} : { initialModel: options.initialModel }),
       ...(options.initialThinkingLevel === undefined ? {} : { initialThinkingLevel: options.initialThinkingLevel }),
     });
@@ -5091,13 +5127,17 @@ const SUBSESSION_CHILD_LINK_CUSTOM_TYPE = "pi-web.subsession.spawned";
 const SUBSESSION_NOTIFICATION_CUSTOM_TYPE = "subsession.completion";
 
 const SUBSESSION_NOTIFICATION_MAX_OUTPUT_CHARS = 2000;
+const SUBSESSION_NOTIFICATION_EXCERPT_HEAD_CHARS = 600;
+const SUBSESSION_NOTIFICATION_EXCERPT_TAIL_CHARS = 1200;
 
-/** Avoid duplicating a partial result in context when deliberate inspection can return the full output. */
+/** Bound long output to a head/tail excerpt; deliberate inspection returns the full text. */
 function formatSubsessionNotificationOutput(childSessionId: string, text: string): string {
   if (text.length > SUBSESSION_NOTIFICATION_MAX_OUTPUT_CHARS) {
-    return `Output from subsession ${childSessionId} was too long for this completion notice and was omitted. Call check_subsession with sessionId "${childSessionId}" to retrieve the final output.`;
+    const omitted = text.length - SUBSESSION_NOTIFICATION_EXCERPT_HEAD_CHARS - SUBSESSION_NOTIFICATION_EXCERPT_TAIL_CHARS;
+    const excerpt = `${text.slice(0, SUBSESSION_NOTIFICATION_EXCERPT_HEAD_CHARS)}\n[… ${String(omitted)} characters omitted …]\n${text.slice(-SUBSESSION_NOTIFICATION_EXCERPT_TAIL_CHARS)}`;
+    return `--- SUBSESSION OUTPUT EXCERPT (this run): ${childSessionId} ---\n${excerpt}\n--- END EXCERPT ---\nOutput was ${String(text.length)} characters. Call check_subsession with sessionId "${childSessionId}" to retrieve the full final output.`;
   }
-  return `--- SUBSESSION OUTPUT: ${childSessionId} ---\n${text === "" ? "(no output)" : text}`;
+  return `--- SUBSESSION OUTPUT (this run): ${childSessionId} ---\n${text === "" ? "(no assistant text in this run)" : text}`;
 }
 
 /** Most recent assistant text from a history message list, or "" if none. */
