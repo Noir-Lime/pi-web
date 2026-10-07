@@ -526,6 +526,82 @@ describe("Terminal panel lifecycle", () => {
     panel.disconnectedCallback();
   });
 
+  it("reloads a missing requested terminal once instead of on every update", async () => {
+    vi.useFakeTimers();
+    const panel = createTerminalPanel();
+    const memory = new InMemoryTerminalSelectionMemory();
+    const runtime = new TerminalBrowserRuntime(memory);
+    const request = vi.fn((operation: string): Promise<JsonValue> =>
+      Promise.resolve(operation === "terminal.list" ? [terminalInfo("terminal-live")] : []));
+    // The host rejects the fallback selection write, so the requested terminal stays
+    // absent from the list and the reload reason never clears on its own.
+    const context = terminalContext({
+      peer: terminalPeer(request),
+      navigation: { ...terminalNavigation("terminal-gone"), set: vi.fn(() => false) },
+    });
+    Reflect.set(panel, "context", context);
+    Reflect.set(panel, "runtime", runtime);
+    Reflect.set(panel, "visible", true);
+    callPanelMethod(panel, "willUpdate");
+    await callAsyncPanelMethod(panel, "loadTerminals");
+
+    // A settled list writes terminals/commandRuns, which schedules another updated().
+    for (let cycle = 0; cycle < 6; cycle += 1) {
+      callPanelMethod(panel, "updated");
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+
+    expect(request.mock.calls.map(([operation]) => operation)).toEqual([
+      "terminal.list", "terminal.list-runs",
+      "terminal.list", "terminal.list-runs",
+    ]);
+    panel.disconnectedCallback();
+  });
+
+  it("reloads once for a newly requested terminal and then applies its selection", async () => {
+    vi.useFakeTimers();
+    const panel = createTerminalPanel();
+    const runtime = new TerminalBrowserRuntime(new InMemoryTerminalSelectionMemory());
+    let listings = 0;
+    const request = vi.fn((operation: string): Promise<JsonValue> => {
+      if (operation !== "terminal.list") return Promise.resolve([]);
+      listings += 1;
+      // The terminal appears only after the panel refetches.
+      return Promise.resolve(listings === 1 ? [] : [terminalInfo("terminal-live")]);
+    });
+    const setNavigation = vi.fn();
+    const loadedContext = terminalContext({
+      peer: terminalPeer(request),
+      navigation: { ...terminalNavigation(), set: setNavigation },
+    });
+    Reflect.set(panel, "context", loadedContext);
+    Reflect.set(panel, "runtime", runtime);
+    Reflect.set(panel, "visible", true);
+    callPanelMethod(panel, "willUpdate");
+    await callAsyncPanelMethod(panel, "loadTerminals");
+    callPanelMethod(panel, "updated");
+    expect(request).toHaveBeenCalledTimes(2);
+
+    // A navigation to a terminal the panel has not listed yet refetches exactly once.
+    const routedContext = terminalContext({
+      peer: terminalPeer(request),
+      navigation: { ...terminalNavigation("terminal-live"), set: setNavigation },
+    });
+    Reflect.set(panel, "context", routedContext);
+    callPanelMethod(panel, "willUpdate");
+    for (let cycle = 0; cycle < 4; cycle += 1) {
+      callPanelMethod(panel, "updated");
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+
+    expect(request.mock.calls.map(([operation]) => operation)).toEqual([
+      "terminal.list", "terminal.list-runs",
+      "terminal.list", "terminal.list-runs",
+    ]);
+    expect(Reflect.get(panel, "selectedId")).toBe("terminal-live");
+    panel.disconnectedCallback();
+  });
+
   it("does not rearm command polling when an in-flight refresh resolves after disconnect", async () => {
     vi.useFakeTimers();
     const panel = createTerminalPanel();
