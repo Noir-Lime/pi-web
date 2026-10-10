@@ -1,24 +1,24 @@
 // @vitest-environment happy-dom
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { controlledChatViewport, manualChatFrames } from "./chatScroll.testSupport";
 import type { AskUserOutcome } from "../../../shared/apiTypes";
 import { AskUserCard } from "./AskUserCard";
 import { ChatView } from "./ChatView";
 
 afterEach(() => {
-  document.body.replaceChildren();
+  document.body.replaceChildren(); localStorage.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals();
 });
 
 describe("ChatView open ask_user form", () => {
   it("scrolls a newly opened form to its start and gives it a stable chat-scroll anchor", async () => {
+    const flush = manualChatFrames();
     const view = new ChatView();
     view.sessionId = "session-1";
     document.body.append(view);
     await view.updateComplete;
-    let askStartScrolls = 0;
-    let bottomScrolls = 0;
-    if (!Reflect.set(view, "scrollToOpenAsk", () => { askStartScrolls += 1; })) throw new Error("Could not observe ChatView.scrollToOpenAsk");
-    if (!Reflect.set(view, "scrollToBottom", () => { bottomScrolls += 1; })) throw new Error("Could not observe ChatView.scrollToBottom");
+    const { metrics, write } = controlledChatViewport(view);
+    flush(); write.mockClear(); metrics.height = 2600;
 
     view.pendingAsk = {
       askId: "ask-open",
@@ -27,9 +27,11 @@ describe("ChatView open ask_user form", () => {
     };
     await view.updateComplete;
 
-    expect(askStartScrolls).toBe(1);
-    expect(bottomScrolls).toBe(0);
-    expect(view.shadowRoot?.querySelector("ask-user-card")?.getAttribute("data-scroll-anchor-id")).toBe("ask:ask-open");
+    const form = requiredElement(view.shadowRoot?.querySelector("ask-user-card"), "open form");
+    vi.spyOn(form, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 400, 600, 800));
+    flush();
+    expect(write).toHaveBeenCalledExactlyOnceWith(2000);
+    expect(form.getAttribute("data-scroll-anchor-id")).toBe("ask:ask-open");
   });
 });
 

@@ -4,7 +4,6 @@ import type { SessionRef } from "../../../shared/apiTypes";
 import { isSessionMediaId } from "../../../shared/sessionMedia";
 import { sessionMediaUrl } from "../api/urls";
 import type { ChatImagePart } from "./shared";
-import { NearViewportImageController } from "./NearViewportImageController";
 import "./ImagePresentation";
 
 export function transcriptImageSource(part: ChatImagePart, session?: SessionRef, machineId = "local"): { src: string; alt: string } | undefined {
@@ -20,19 +19,14 @@ export class TranscriptImage extends LitElement {
   @property({ attribute: false }) imagePart: ChatImagePart | undefined;
   @property({ attribute: false }) session: SessionRef | undefined;
   @property() machineId = "local";
-  private readonly viewport = new NearViewportImageController(this);
-  private source: string | undefined;
-
-  override willUpdate(): void {
-    this.source = this.imagePart === undefined ? undefined : transcriptImageSource(this.imagePart, this.session, this.machineId)?.src;
-    this.viewport.configure(this.source ?? "", true);
-  }
+  @property({ type: Boolean }) loadingDisabled = false;
 
   override render() {
+    const source = this.loadingDisabled || this.imagePart === undefined ? undefined : transcriptImageSource(this.imagePart, this.session, this.machineId)?.src;
     return html`<pi-web-image-presentation
-      .source=${this.viewport.ready ? this.source : undefined}
+      .source=${source} .requestDisabled=${true}
+      .pendingLabel=${this.loadingDisabled ? "Image loading disabled" : "Image unavailable"}
       description="attached image" label="attached image"
-      @image-request=${() => { this.viewport.load(); }}
     ></pi-web-image-presentation>`;
   }
 

@@ -31,6 +31,8 @@ export class ContentRendererHost extends LitElement {
   @state() private copyStatus = "Copy source";
   private controller: AbortController | undefined;
   private preview: TemplateResult | undefined;
+  private ancestorDetails: HTMLDetailsElement[] = [];
+  private readonly onAncestorDetailsToggle = (): void => { this.requestUpdate(); };
 
   protected override willUpdate(changes: PropertyValues<this>): void {
     const identityChanged = this.restoreIntent || changes.has("intentKey") || changes.has("text");
@@ -58,6 +60,7 @@ export class ContentRendererHost extends LitElement {
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
+    this.removeAncestorDetailsListeners();
     this.restoreIntent = true;
     this.manuallyActivated = false;
     this.cancelPreview();
@@ -65,8 +68,22 @@ export class ContentRendererHost extends LitElement {
 
   override connectedCallback(): void {
     this.restoreIntent = true;
+    this.removeAncestorDetailsListeners();
+    // Disclosure bodies stay mounted; only renderer work follows their open state.
+    // Walk through shadow hosts because native toggle events do not cross them.
+    for (let ancestor: Node | null = this.parentNode; ancestor !== null; ancestor = ancestor instanceof ShadowRoot ? ancestor.host : ancestor.parentNode) {
+      if (ancestor instanceof HTMLDetailsElement) {
+        this.ancestorDetails.push(ancestor);
+        ancestor.addEventListener("toggle", this.onAncestorDetailsToggle);
+      }
+    }
     super.connectedCallback();
     this.requestUpdate();
+  }
+
+  private removeAncestorDetailsListeners(): void {
+    for (const details of this.ancestorDetails) details.removeEventListener("toggle", this.onAncestorDetailsToggle);
+    this.ancestorDetails = [];
   }
 
   private cancelPreview(): void {
@@ -126,7 +143,8 @@ export class ContentRendererHost extends LitElement {
   }
 
   override render() {
-    const active = this.isConnected && (this.renderer?.renderMode === "automatic" || this.allowManualPreview || this.manuallyActivated);
+    const active = this.isConnected && this.ancestorDetails.every((details) => details.open)
+      && (this.renderer?.renderMode === "automatic" || this.allowManualPreview || this.manuallyActivated);
     if (!active) this.cancelPreview();
     const preview = !this.raw && active ? this.renderPreview() : undefined;
     const diagnostic = this.failure;

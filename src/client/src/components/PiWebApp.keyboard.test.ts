@@ -199,10 +199,6 @@ async function openImageZoom(app: PiWebApp): Promise<HTMLElement> {
   expect(view.sessionCwd).toBe(selectedSession.cwd);
   const transcript = requiredElement(view.renderRoot.querySelector<TranscriptImage>("pi-web-transcript-image"), "transcript image");
   const presentation = await settleImage(transcript);
-  presentation.renderRoot.querySelector<HTMLButtonElement>(".placeholder")?.click();
-  await settleImage(transcript);
-  requiredElement(presentation.renderRoot.querySelector("img"), "native image").dispatchEvent(new Event("load"));
-  await presentation.updateComplete;
   const image = requiredElement(presentation.renderRoot.querySelector<HTMLButtonElement>(".image-button"), "image trigger");
   image.focus();
   image.click();

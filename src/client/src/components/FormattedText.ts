@@ -11,6 +11,7 @@ import { formattedTextStyles } from "./shared";
 export class FormattedText extends LitElement {
   @property() text = "";
   @property() intentKey: string | undefined;
+  @property({ type: Boolean }) imagesEnabled = true;
   @property({ attribute: false }) contentRendering: ChatContentRendering | undefined;
   @property() machineId = "local";
   @property({ attribute: false }) workspaceContext: MarkdownWorkspaceContext | undefined;
@@ -19,8 +20,8 @@ export class FormattedText extends LitElement {
     const content = this.contentRendering?.renderMarkdown({
       text: this.text,
       machineId: this.workspaceContext?.machineId ?? this.machineId,
-      toSafeHtml: (text) => toSafeMarkdownHtml(text, this.workspaceContext, this.intentKey),
-    }, this.intentKey) ?? unsafeHTML(toSafeMarkdownHtml(this.text, this.workspaceContext, this.intentKey));
+      toSafeHtml: (text) => toSafeMarkdownHtml(text, this.workspaceContext, this.intentKey, this.imagesEnabled),
+    }, this.intentKey) ?? unsafeHTML(toSafeMarkdownHtml(this.text, this.workspaceContext, this.intentKey, this.imagesEnabled));
     return html`<div class="formatted" dir="auto" @click=${this.onFormattedClick}>${content}</div>`;
   }
 

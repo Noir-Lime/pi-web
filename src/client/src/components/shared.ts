@@ -374,8 +374,14 @@ export const chatStyles = css`
     .notification-header { gap: 4px; padding-inline: 8px; }
     .notification-list { padding-inline: 8px; }
   }
-  .chat { --pi-chat-sticky-top: -26px; flex: 1 1 auto; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; overflow-anchor: none; padding: 26px 16px 16px; box-sizing: border-box; }
-  .scroll-marker { display: block; height: 0; overflow: hidden; pointer-events: none; }
+  .chat { --pi-chat-sticky-top: -26px; flex: 1 1 auto; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 26px 16px 16px; box-sizing: border-box; }
+  .chat-jumps { position: absolute; right: 8px; bottom: 6px; z-index: 21; display: flex; gap: 3px; }
+  .chat-jumps button { display: inline-grid; place-items: center; width: 24px; height: 22px; padding: 0; border: 1px solid var(--pi-border); border-radius: 4px; background: var(--pi-bg); color: var(--pi-muted); font: 16px/1 system-ui, sans-serif; cursor: pointer; }
+  .chat-jumps button:hover, .chat-jumps button:focus-visible { color: var(--pi-text-bright); border-color: var(--pi-accent); }
+  .chat-jumps button:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 2px; }
+  .chat-wrap.plain .msg-header, .chat-wrap.plain .event-group > summary { position: static; top: auto; }
+  .chat-wrap.plain *, .chat-wrap.plain *::before, .chat-wrap.plain *::after { transition: none !important; animation: none !important; box-shadow: none !important; text-shadow: none !important; filter: none !important; backdrop-filter: none !important; transform: none !important; border-radius: 0 !important; }
+  .chat-wrap.plain .chat-image { --pi-image-radius: 0; }
   .activity-dock { position: absolute; left: 50%; bottom: 0; transform: translateX(-50%); z-index: 20; display: flex; align-items: center; gap: 6px; width: 240px; max-width: calc(100% - 32px); min-width: 0; box-sizing: border-box; border: 1px solid var(--pi-border); border-bottom: 0; border-radius: 8px 8px 0 0; background: var(--pi-bg-overlay); color: var(--pi-muted); padding: 3px 10px; font-size: 11px; line-height: 16px; pointer-events: none; backdrop-filter: blur(6px); }
   .activity-dock.active { border-color: var(--pi-success-border); color: var(--pi-success); background: var(--pi-success-bg-overlay); }
   .activity-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -18,6 +18,8 @@ npm run verify
 
 This runs typechecking, lint, unused-code analysis, and the ordinary test suite. Use the [testing guide](../.agents/skills/testing-guide/SKILL.md#decide-whether-a-test-adds-protection) to decide which behaviors merit automation and choose their smallest sufficient boundary.
 
+For incremental chat UX changes, see [composing chat behavior](chat-behaviors.md) for capability ownership and internal configuration.
+
 ## Before delivery
 
 ```sh

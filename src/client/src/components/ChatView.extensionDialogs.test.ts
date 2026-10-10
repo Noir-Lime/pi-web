@@ -4,10 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PendingExtensionDialog } from "../api";
 import type { ClosedExtensionDialog } from "../appState";
 import { ChatView } from "./ChatView";
+import { controlledChatViewport, manualChatFrames } from "./chatScroll.testSupport";
 import { ExtensionDialogCard } from "./ExtensionDialogCard";
 
 afterEach(() => {
-  document.body.replaceChildren();
+  document.body.replaceChildren(); localStorage.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals();
 });
 
 describe("ChatView open extension dialogs", () => {
@@ -34,17 +35,37 @@ describe("ChatView open extension dialogs", () => {
   });
 
   it("scrolls a newly opened dialog to its start", async () => {
+    const flush = manualChatFrames();
     const view = await mountView();
-    let dialogStartScrolls = 0;
-    let bottomScrolls = 0;
-    if (!Reflect.set(view, "scrollToOpenDialog", () => { dialogStartScrolls += 1; })) throw new Error("Could not observe ChatView.scrollToOpenDialog");
-    if (!Reflect.set(view, "scrollToBottom", () => { bottomScrolls += 1; })) throw new Error("Could not observe ChatView.scrollToBottom");
+    const { metrics, write } = controlledChatViewport(view);
+    flush(); write.mockClear(); metrics.height = 2600;
 
     view.pendingDialogs = [openDialog("dlg-1", "Allow file writes?")];
     await view.updateComplete;
 
-    expect(dialogStartScrolls).toBe(1);
-    expect(bottomScrolls).toBe(0);
+    const form = requiredElement(view.shadowRoot?.querySelector(".chat > extension-dialog-card.open-dialog-card"), "open dialog");
+    vi.spyOn(form, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 400, 600, 800));
+    flush();
+    expect(write).toHaveBeenCalledExactlyOnceWith(2000);
+  });
+
+  it("targets a newly opened dialog rather than an existing ask form", async () => {
+    const flush = manualChatFrames();
+    const view = await mountView();
+    const { metrics, write } = controlledChatViewport(view);
+    flush();
+    view.pendingAsk = { askId: "ask", askedAt: "2026-07-20T10:00:00.000Z", questions: [{ id: "q", question: "Question?", options: [], multiple: false }] };
+    await view.updateComplete; flush();
+    view.renderRoot.querySelector<HTMLButtonElement>('[aria-label="Jump to end"]')?.click();
+    write.mockClear(); metrics.height = 3200;
+    view.pendingDialogs = [openDialog("new-dialog", "Confirm?")];
+    await view.updateComplete;
+    const ask = requiredElement(view.renderRoot.querySelector(".chat > ask-user-card"), "existing ask");
+    const dialog = requiredElement(view.renderRoot.querySelector(".open-dialog-card"), "new dialog");
+    vi.spyOn(ask, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 330, 600, 100));
+    vi.spyOn(dialog, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 700, 600, 600));
+    flush();
+    expect(write).toHaveBeenCalledExactlyOnceWith(2300);
   });
 
   it("forwards the answer and cancel callbacks to the open dialog card", async () => {
