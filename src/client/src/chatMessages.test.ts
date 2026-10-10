@@ -128,7 +128,7 @@ describe("chat message normalization", () => {
     expect(groupChatMessages(normalized).map((group) => group.kind)).toEqual(["group", "message"]);
   });
 
-  it.each([[], "Questions posted", [{ type: "text", text: "Questions posted" }]])("keeps the successful question at its durable result position (%j)", (content) => {
+  it.each([{ content: [] }, { content: "Questions posted" }, { content: [{ type: "text", text: "Questions posted" }] }])("keeps the successful question at its durable result position (%j)", ({ content }) => {
     const messages = normalizeMessages([
       { role: "assistant", content: [{ type: "toolCall", id: "ask-call", name: "ask_user", arguments: { questions: askUserRequest.questions } }] },
       { role: "user", content: "Intervening conversation" },
@@ -149,6 +149,15 @@ describe("chat message normalization", () => {
     expect(messages.at(-1)).toMatchObject({ entryId: "later", parts: [{ type: "toolResultBoundary", toolCallId: "other" }] });
     expect(openTranscriptQuestion(messages, { historyReady: true, writable: true, messageEnd: 3, messageTotal: 3 })).toBeUndefined();
     expect(groupChatMessages(messages).at(-1)?.kind).toBe("message");
+  });
+
+  it("keeps a cached invisible entry's identity, role and metadata after a question", () => {
+    const question: ChatLine = { role: "tool", parts: [{ type: "askUserQuestion", ask: askUserRequest }] };
+    const empty: ChatLine = { role: "tool", parts: [], entryId: "empty-entry", meta: { timestamp: askUserRequest.askedAt } };
+    const messages = normalizeMessages([question, empty]);
+    expect(messages.at(-1)).toEqual({ ...empty, parts: [{ type: "empty" }] });
+    expect(openTranscriptQuestion(messages, { historyReady: true, writable: true, messageEnd: 2, messageTotal: 2 })).toBeUndefined();
+    expect(normalizeMessages(messages)).toEqual(messages);
   });
 
   it.each([

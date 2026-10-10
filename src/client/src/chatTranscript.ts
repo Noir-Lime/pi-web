@@ -57,7 +57,7 @@ export function applyTranscriptEvent(messages: ChatLine[], event: SessionUiEvent
       content: event.content,
       details: event.details,
       presentation: toolResultPresentation({ role: "toolResult", content: event.content }),
-    });
+    }, false);
   }
   if (event.type === "shell.start") return [...messages, shellStartMessage(event.command, event.excludeFromContext)];
   if (event.type === "shell.chunk") return appendShellChunk(messages, event.chunk);
@@ -70,7 +70,7 @@ export function applyTranscriptEvent(messages: ChatLine[], event: SessionUiEvent
 
 function applyFinalMessage(messages: ChatLine[], rawMessage: unknown): ChatLine[] | undefined {
   const rawToolResult = toolResultFromRawMessage(rawMessage);
-  if (rawToolResult !== undefined) return finalizeToolExecution(messages, rawToolResult);
+  if (rawToolResult !== undefined) return finalizeToolExecution(messages, rawToolResult, true);
 
   const ended = normalizeMessage(rawMessage);
   if (ended.length === 0) return messages.at(-1)?.parts.at(-1)?.type === "askUserQuestion"
@@ -146,11 +146,11 @@ function mergeToolExecutionUpdate(part: ToolExecutionPart, event: Extract<Sessio
   };
 }
 
-function finalizeToolExecution(messages: ChatLine[], result: ToolResultUpdate): ChatLine[] {
+function finalizeToolExecution(messages: ChatLine[], result: ToolResultUpdate, committed: boolean): ChatLine[] {
   const { toolCallId, toolName, text, isError, content, details, presentation } = result;
   const updated = updateToolExecution(messages, toolCallId, (part) => {
     const preview = previewFromDetails(details) ?? part.preview;
-    return {
+    const next: ToolExecutionPart = {
       ...part,
       status: isError ? "error" : "success",
       resultText: text,
@@ -158,6 +158,9 @@ function finalizeToolExecution(messages: ChatLine[], result: ToolResultUpdate): 
       ...(details === undefined ? {} : { details }),
       ...(preview === undefined ? {} : { preview }),
     };
+    if (committed && content === undefined) delete next.content;
+    if (committed && details === undefined) delete next.details;
+    return next;
   }, (line) => reconcileToolResultPresentation(line, presentation));
 
   let finalized = updated;
@@ -174,13 +177,18 @@ function finalizeToolExecution(messages: ChatLine[], result: ToolResultUpdate): 
       ...(details === undefined ? {} : { details }),
       ...(preview === undefined ? {} : { preview }),
     };
-    finalized = [...messages, reconcileToolResultPresentation({ role: "tool", parts: [part] }, presentation)];
+    finalized = [...messages, reconcileToolResultPresentation({
+      role: "tool", parts: [part], ...(presentation.entryId === undefined ? {} : { entryId: presentation.entryId }),
+    }, presentation)];
   }
+  // tool.end is provisional: a message_end extension can still change the saved
+  // result. Only ordinary committed messages may contribute conversation facts.
+  if (!committed) return finalized;
   const question = askUserQuestionFromToolDetails(toolName, details, isError);
   const record = askUserRecordFromToolDetails(toolName, details);
+  const boundaryIndex = messages.findIndex((line) => line.parts.some((part) => part.type === "toolResultBoundary" && part.toolCallId === toolCallId));
   if (question === undefined && record === undefined && updated !== messages
-    && messages.some((line) => line.parts.some((part) => part.type === "askUserQuestion"))) {
-    const boundaryIndex = messages.findIndex((line) => line.parts.some((part) => part.type === "toolResultBoundary" && part.toolCallId === toolCallId));
+    && (messages.at(-1)?.parts.at(-1)?.type === "askUserQuestion" || boundaryIndex >= 0)) {
     const boundary: ChatLine = {
       role: "tool", parts: [{ type: "toolResultBoundary", ...(toolCallId === undefined ? {} : { toolCallId }) }],
       ...(presentation.entryId === undefined ? {} : { entryId: presentation.entryId }),
@@ -197,7 +205,7 @@ function finalizeToolExecution(messages: ChatLine[], result: ToolResultUpdate): 
     ...(presentation.entryId === undefined ? {} : { entryId: presentation.entryId }),
     ...(presentation.meta === undefined ? {} : { meta: presentation.meta }),
   };
-  // tool.end and message.end describe the same entry, not two question sets.
+  // Repeated delivery of a finalized tool result does not add another question.
   return questionIndex < 0 ? [...finalized, questionLine]
     : [...finalized.slice(0, questionIndex), questionLine, ...finalized.slice(questionIndex + 1)];
 }
@@ -362,7 +370,7 @@ function messageText(message: ChatLine): string {
 
 function appendNewMessage(messages: ChatLine[], rawMessage: unknown): ChatLine[] {
   const toolResult = toolResultFromRawMessage(rawMessage);
-  if (toolResult !== undefined) return finalizeToolExecution(messages, toolResult);
+  if (toolResult !== undefined) return finalizeToolExecution(messages, toolResult, true);
   const lines = normalizeMessage(rawMessage);
   return lines.length === 0 && messages.at(-1)?.parts.at(-1)?.type === "askUserQuestion"
     ? normalizeMessages([...messages, rawMessage]) : [...messages, ...lines];

@@ -7,10 +7,11 @@ export function normalizeMessages(messages: unknown[]): ChatLine[] {
   const lines: ChatLine[] = [];
   for (const message of messages) {
     const normalized = normalizeMessage(message);
-    if (normalized.length === 0 && getString(message, "role") !== undefined
+    if (normalized.every((line) => line.parts.length === 0) && getString(message, "role") !== undefined
       && lines.at(-1)?.parts.at(-1)?.type === "askUserQuestion") {
       // Even a non-visible conversation entry closes the preceding question.
-      lines.push(withMessageMeta({ role: normalizeRole(getString(message, "role")), parts: [{ type: "empty" }] }, message));
+      const emptyLine = normalized[0] ?? withMessageMeta({ role: normalizeRole(getString(message, "role")), parts: [] }, message);
+      lines.push({ ...emptyLine, parts: [{ type: "empty" }] });
     } else {
       lines.push(...normalized);
     }
@@ -76,7 +77,9 @@ export function normalizeMessage(message: unknown): ChatLine[] {
   const question = rawRole === "toolResult"
     ? askUserQuestionFromToolDetails(getString(message, "toolName") ?? "", getProperty(message, "details"), getBoolean(message, "isError") === true)
     : undefined;
-  const resultParts = question !== undefined && !contentParts.some((part) => part.type === "toolResult")
+  // Every tool result needs a result part, even when its output is empty or
+  // image-only, so coalescing can finish the call without losing chronology.
+  const resultParts = rawRole === "toolResult" && !contentParts.some((part) => part.type === "toolResult")
     ? [toolResultPartFromText(contentParts.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n"), message), ...contentParts.filter((part) => part.type === "image")]
     : contentParts;
   const parts = [...resultParts, ...(supersededRecord === undefined ? [] : [supersededRecord]), ...(question === undefined ? [] : [question])];
@@ -297,7 +300,6 @@ function parseSkillReadPath(path: string | undefined): { name: string; path: str
 function coalesceToolExecutions(lines: ChatLine[]): ChatLine[] {
   const result: ChatLine[] = [];
   const pendingTools = new Map<string, { lineIndex: number; partIndex: number }>();
-  let hasQuestion = false;
 
   for (const line of lines) {
     let passthroughParts: ChatPart[] = [];
@@ -328,7 +330,8 @@ function coalesceToolExecutions(lines: ChatLine[]): ChatLine[] {
           pendingTools.delete(part.toolCallId ?? "");
           // Coalescing must not erase a later conversation entry and reopen an
           // earlier question. The question itself always stays at result position.
-          if (hasQuestion && !line.parts.some((item) => item.type === "askUserQuestion" || item.type === "askUserRecord")) {
+          if (result.at(-1)?.parts.at(-1)?.type === "askUserQuestion"
+            && !line.parts.some((item) => item.type === "askUserQuestion" || item.type === "askUserRecord")) {
             passthroughParts.push({ type: "toolResultBoundary", ...(part.toolCallId === undefined ? {} : { toolCallId: part.toolCallId }) });
           }
           continue;
@@ -338,7 +341,6 @@ function coalesceToolExecutions(lines: ChatLine[]): ChatLine[] {
       if (part.type === "askUserQuestion" || part.type === "askUserRecord") {
         flushPassthrough();
         result.push({ role: line.role, parts: [part], ...metadata });
-        if (part.type === "askUserQuestion") hasQuestion = true;
       } else {
         passthroughParts.push(part);
       }

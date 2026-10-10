@@ -3,29 +3,28 @@ import type { ChatLine, ChatPart } from "./components/shared";
 export type ChatGroup =
   | { kind: "message"; message: ChatLine; index: number }
   | { kind: "tool-image"; message: ChatLine; index: number; toolName?: string }
-  | { kind: "group"; messages: ChatLine[]; startIndex: number; endIndex: number };
+  // Members keep their source indexes even when invisible entries are skipped.
+  | { kind: "group"; messages: { message: ChatLine; index: number }[]; startIndex: number; endIndex: number };
 
 export function groupChatMessages(messages: ChatLine[], indexOffset = 0): ChatGroup[] {
   const groups: ChatGroup[] = [];
-  let eventMessages: ChatLine[] = [];
-  let eventStartIndex = 0;
+  let eventMessages: Extract<ChatGroup, { kind: "group" }>["messages"] = [];
 
   const pushEvent = (message: ChatLine, index: number) => {
-    if (!eventMessages.length) eventStartIndex = index;
-    eventMessages.push(message);
+    eventMessages.push({ message, index });
   };
   const flushEvents = () => {
-    if (!eventMessages.length) return;
-    groups.push({ kind: "group", messages: eventMessages, startIndex: eventStartIndex, endIndex: eventStartIndex + eventMessages.length - 1 });
+    const first = eventMessages[0];
+    const last = eventMessages.at(-1);
+    if (first === undefined || last === undefined) return;
+    groups.push({ kind: "group", messages: eventMessages, startIndex: first.index, endIndex: last.index });
     eventMessages = [];
   };
 
   messages.forEach((message, index) => {
     const visibleParts = message.parts.filter((part) => part.type !== "toolResultBoundary" && part.type !== "empty");
-    if (visibleParts.length === 0) {
-      flushEvents();
-      return;
-    }
+    // Ordering markers affect the conversation tail, not visual grouping.
+    if (visibleParts.length === 0) return;
     const readableParts = visibleParts.filter((part) => isReadablePart(message, part));
     const technicalParts = visibleParts.filter((part) => !isReadablePart(message, part));
 
@@ -60,7 +59,7 @@ export function chatMessageHasHeader(message: ChatLine): boolean {
 export function canonicalEntryActionHeaders(groups: readonly ChatGroup[]): ReadonlySet<ChatLine> {
   const entries = new Map<string, { message: ChatLine; priority: number }>();
   for (const group of groups) {
-    for (const message of group.kind === "group" ? group.messages : [group.message]) {
+    for (const message of group.kind === "group" ? group.messages.map((event) => event.message) : [group.message]) {
       if (message.entryId === undefined || !chatMessageHasHeader(message)) continue;
       // A normal reply wins over attached events. Conversation headers also
       // outrank skill-only slices, so thinking retains history when no reply exists.
