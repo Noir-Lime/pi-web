@@ -45,11 +45,12 @@ import { SessionActivityMarker } from "./sessionActivityMarker.js";
 import { projectSessionTree, type ProjectableSessionTreeNode } from "./sessionTreeProjection.js";
 import { messageHistoryTargetId } from "./messageHistoryTarget.js";
 import { SessionArchiveStore, type ArchivedSessionRecord, type ArchiveSessionInput } from "./sessionArchiveStore.js";
-import { findArchiveCandidateByIdOrPrefix, planSessionArchiveTree, type SessionArchiveTreeCandidate } from "./sessionArchiveTree.js";
+import { findArchiveCandidateByExactId, planSessionArchiveTree, type SessionArchiveTreeCandidate } from "./sessionArchiveTree.js";
 import type { ActiveSession } from "./sessionRuntimeStore.js";
 import type { PiWebHostPiSessionConnection } from "../../server-plugin-api.js";
 import { PiSessionEventConnections } from "./piSessionEventConnections.js";
-import { deterministicSessionName, fallbackSessionName, generateShortSessionName } from "./sessionNameGenerator.js";
+import { fallbackSessionName, generateShortSessionName, requireInitialSessionName } from "./sessionNameGenerator.js";
+import { createExtensionSessionDispatch } from "./extensionSessionDispatch.js";
 import { computeEditPreview, type EditPreviewResult } from "./editPreview.js";
 import { attachmentsToInlineImages, saveAttachmentsToWorkspace } from "./attachmentService.js";
 import { loadEffectiveProjectAttachmentsConfig } from "../workspaces/projectPiWebConfig.js";
@@ -94,6 +95,8 @@ import { PendingExtensionDialogStore, type ExtensionDialogCancelReason } from ".
 import { ExtensionDialogWaiters, effectiveExtensionDialogTimeoutMs, extensionDialogCancelValue } from "./extensionDialogWaiters.js";
 import { DEFAULT_EXTENSION_DIALOGS_TIMEOUT_MS } from "../../config.js";
 import { createSpawnSessionToolDefinition, type SpawnSessionInvocation, type SpawnSessionResult } from "./spawnSessionTool.js";
+import type { SessionUiMetadata } from "../../shared/pluginApiTypes.js";
+import { readSessionUiMetadata, requireSessionUiMetadata, SESSION_UI_METADATA_CUSTOM_TYPE } from "./sessionMetadata.js";
 import { createSubsessionToolDefinitions, type SpawnSubsessionInvocation, type SpawnSubsessionResult, type SubsessionCheckResult, type SubsessionReadQuery, type SubsessionReadResult, type SubsessionStatus, type SubsessionSummary, type SubsessionToolDeps } from "./spawnSubsessionTool.js";
 import { buildTranscriptView } from "./subsessionTranscript.js";
 import { annotateAssistantThinkingLevel, historyMessagesFromEntries } from "./transcriptMessages.js";
@@ -287,6 +290,10 @@ type SessionCreationProvenance = "tracked-subsession" | "host-one-shot";
 
 interface StartSessionOptions {
   parentSession?: string;
+  /** Public metadata is initialized on the manager before extensions start. */
+  metadata?: SessionUiMetadata;
+  /** Explicit display name installed before runtime startup and publication. */
+  name?: string;
   initialModel?: AgentModel;
   /**
    * Thinking level for the brand new session; omit to resolve from settings
@@ -339,6 +346,7 @@ export interface PiSessionListEntry {
   messageCount: number;
   firstMessage: string;
   allMessagesText: string;
+  metadata?: SessionUiMetadata;
   name?: string;
   parentSessionPath?: string;
 }
@@ -404,14 +412,14 @@ export interface PiSessionManager {
   resetLeaf(): void;
   getHeader?(): { parentSession?: string; timestamp?: string } | null | undefined;
   appendCustomEntry?(customType: string, data?: unknown): string;
+  appendSessionInfo?(name: string): string;
 }
 
 export interface PiSessionManagerGateway {
   list(cwd: string): Promise<PiSessionListEntry[]>;
   /**
-   * Locate a session file by id, with an exact header id taking priority over
-   * a prefix, without parsing message bodies or building a full workspace
-   * transcript listing.
+   * Locate a session file by full header id equality, without parsing message
+   * bodies or building a full workspace transcript listing.
    */
   resolveSessionFile(cwd: string, sessionId: string): Promise<ResolvedSessionFile | undefined>;
   /**
@@ -1011,6 +1019,13 @@ function createDefaultRuntimeFactory(
     // resources skip resolution entirely and are trusted, as before.
     const eventBus = createEventBus();
     const builtinFactories = await getBuiltinExtensionFactories();
+    // Resolved before session_start. The bridge shares the same delegation
+    // policy as core tools, including tracked-child and global disablement.
+    let dispatchEnabled = false;
+    const sessionDispatch = createExtensionSessionDispatch(cwd, {
+      ...(spawn === undefined ? {} : { spawn }),
+      isEnabled: () => dispatchEnabled,
+    });
     const projectTrustRequiring = hasTrustRequiringProjectResources(cwd);
     const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: !projectTrustRequiring });
     // Pre-session-creation trust failures (`project_trust` handler errors)
@@ -1022,7 +1037,7 @@ function createDefaultRuntimeFactory(
       agentDir,
       modelRuntime,
       settingsManager,
-      resourceLoaderOptions: { ...resourceLoaderOptions, eventBus, extensionFactories: builtinFactories },
+      resourceLoaderOptions: { ...resourceLoaderOptions, eventBus, extensionFactories: [...builtinFactories, sessionDispatch] },
       ...(projectTrustRequiring
         ? {
             resourceLoaderReloadOptions: {
@@ -1047,6 +1062,7 @@ function createDefaultRuntimeFactory(
     services.diagnostics.push(...modelOptions.diagnostics);
     const resolvedDelegationToolsEnabled = delegationToolsEnabled
       ?? await sessionAllowsDelegationTools(sessionManager, sessionManagers);
+    dispatchEnabled = resolvedDelegationToolsEnabled;
     const customTools = createPiWebCustomToolDefinitions(cwd, resolvedDelegationToolsEnabled, spawn, subsessions, askUser);
     const result = await createAgentSessionFromServices({
       services,
@@ -1568,8 +1584,19 @@ export class PiSessionService implements SessionRouteService {
   }
 
   private async startSession(cwd: string, options: InternalStartSessionOptions): Promise<ClientSession> {
+    const metadata = options.metadata === undefined ? undefined : requireSessionUiMetadata(options.metadata);
+    const name = options.name === undefined ? undefined : requireInitialSessionName(options.name);
+    const manager = this.sessionManager.create(cwd, options.parentSession === undefined ? undefined : { parentSession: options.parentSession });
+    if (metadata !== undefined) {
+      if (manager.appendCustomEntry === undefined) throw new Error("Session manager does not support UI metadata initialization");
+      manager.appendCustomEntry(SESSION_UI_METADATA_CUSTOM_TYPE, { version: 1, metadata });
+    }
+    if (name !== undefined) {
+      if (manager.appendSessionInfo === undefined) throw new Error("Session manager does not support initial naming");
+      manager.appendSessionInfo(name);
+    }
     const active = await this.create(
-      this.sessionManager.create(cwd, options.parentSession === undefined ? undefined : { parentSession: options.parentSession }),
+      manager,
       cwd,
       {
         startupIntent: "create",
@@ -1614,6 +1641,8 @@ export class PiSessionService implements SessionRouteService {
       ? input.model
       : await this.resolveSpawnModel({ id: input.spawningSessionId, cwd: input.spawningCwd }, input.modelSpec);
     const created = await this.start(decision.cwd, {
+      ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+      ...(input.name === undefined ? {} : { name: input.name }),
       ...(model === undefined ? {} : { initialModel: model }),
       ...(input.thinkingLevel === undefined ? {} : { initialThinkingLevel: input.thinkingLevel }),
     });
@@ -3249,7 +3278,7 @@ export class PiSessionService implements SessionRouteService {
   async archiveTree(ref: PiSessionRef): Promise<ClientArchiveSessionsResponse> {
     const session = await this.getOrOpen(ref);
     const catalog = await this.workspaceArchiveCandidates(session.sessionManager.getCwd());
-    const root = findArchiveCandidateByIdOrPrefix(catalog, session.sessionId) ?? archiveCandidateFromActiveSession(session, false);
+    const root = findArchiveCandidateByExactId(catalog, session.sessionId) ?? archiveCandidateFromActiveSession(session, false);
     const plan = planSessionArchiveTree(root, catalog);
     const busy = plan.targets.map((target) => target.activeSession).find((target) => target !== undefined && this.hasActiveWork(target));
     if (busy !== undefined) throw new Error(`Stop current session activity before archiving ${sessionDisplayName(busy)}`);
@@ -3771,23 +3800,13 @@ export class PiSessionService implements SessionRouteService {
   }
 
   private activeForRef(ref: PiSessionRef): ActiveSession<PiSessionRuntime> | undefined {
-    const sessionId = ref.id;
-    const exact = this.active.get(sessionId);
-    if (exact !== undefined && refMatchesActiveSession(ref, exact)) return exact;
-    for (const [candidateId, active] of this.active.entries()) {
-      if (candidateId.startsWith(sessionId) && refMatchesActiveSession(ref, active)) return active;
-    }
-    return undefined;
+    const active = this.active.get(ref.id);
+    return active !== undefined && refMatchesActiveSession(ref, active) ? active : undefined;
   }
 
   private startupSessionForRef(ref: PiSessionRef): PiAgentSession | undefined {
-    const sessionId = ref.id;
-    const exact = this.startupSessions.get(sessionId);
-    if (exact !== undefined && refMatchesStartupSession(ref, exact)) return exact;
-    for (const [candidateId, session] of this.startupSessions.entries()) {
-      if (candidateId.startsWith(sessionId) && refMatchesStartupSession(ref, session)) return session;
-    }
-    return undefined;
+    const session = this.startupSessions.get(ref.id);
+    return session !== undefined && refMatchesStartupSession(ref, session) ? session : undefined;
   }
 
   /**
@@ -4396,12 +4415,6 @@ export class PiSessionService implements SessionRouteService {
   private maybeGenerateSessionName(session: PiAgentSession, firstMessage: string): void {
     if (session.sessionName !== undefined || session.messages.length !== 0 || session.isStreaming || session.isCompacting) return;
 
-    const deterministicName = deterministicSessionName(firstMessage);
-    if (deterministicName !== undefined) {
-      this.applyGeneratedSessionName(session, deterministicName);
-      return;
-    }
-
     const model = session.model;
     if (model === undefined) return;
 
@@ -4815,15 +4828,15 @@ function bulkRefToSessionRef(ref: SessionBulkMutationRef): PiSessionRef {
 }
 
 function findArchivedRecordForBulkRef(records: readonly ArchivedSessionRecord[], ref: SessionBulkMutationRef): ArchivedSessionRecord | undefined {
-  return records.find((record) => record.cwd === ref.cwd && (record.sessionId === ref.id || record.sessionId.startsWith(ref.id)));
+  return records.find((record) => record.cwd === ref.cwd && record.sessionId === ref.id);
 }
 
 function findListedSessionForBulkRef(context: BulkSessionRefContext, ref: SessionBulkMutationRef): PiSessionListEntry | undefined {
-  return findSessionByIdOrPrefix(context.sessionsByCwd.get(ref.cwd) ?? [], ref.id);
+  return findSessionByExactId(context.sessionsByCwd.get(ref.cwd) ?? [], ref.id);
 }
 
-function findSessionByIdOrPrefix(sessions: readonly PiSessionListEntry[], sessionId: string): PiSessionListEntry | undefined {
-  return sessions.find((session) => session.id === sessionId) ?? sessions.find((session) => session.id.startsWith(sessionId));
+function findSessionByExactId(sessions: readonly PiSessionListEntry[], sessionId: string): PiSessionListEntry | undefined {
+  return sessions.find((session) => session.id === sessionId);
 }
 
 function uniqueStrings(values: readonly string[]): string[] {
@@ -4870,9 +4883,14 @@ function notificationIdentityForSession(session: PiAgentSession): { sessionId: s
   };
 }
 
+function metadataFromActiveSession(session: PiAgentSession): SessionUiMetadata | undefined {
+  return readSessionUiMetadata(session.sessionManager.getEntries?.() ?? session.sessionManager.getBranch());
+}
+
 function clientSessionFromActiveSession(session: PiAgentSession): ClientSession {
   const header = session.sessionManager.getHeader?.();
   const created = header?.timestamp ?? new Date().toISOString();
+  const metadata = metadataFromActiveSession(session);
   return {
     id: session.sessionId,
     path: session.sessionFile ?? "",
@@ -4882,6 +4900,7 @@ function clientSessionFromActiveSession(session: PiAgentSession): ClientSession 
     modified: created,
     messageCount: session.messages.length,
     firstMessage: "",
+    ...(metadata === undefined ? {} : { metadata }),
     ...(session.sessionName === undefined ? {} : { name: session.sessionName }),
     ...(header?.parentSession === undefined ? {} : { parentSessionPath: header.parentSession }),
   };
@@ -4893,6 +4912,7 @@ function clientSessionFromListEntry(session: PiSessionListEntry): ClientSession 
     path: session.path,
     cwd: session.cwd,
     persisted: true,
+    ...(session.metadata === undefined ? {} : { metadata: requireSessionUiMetadata(session.metadata) }),
     ...(session.name === undefined ? {} : { name: session.name }),
     created: session.created.toISOString(),
     modified: session.modified.toISOString(),
@@ -4911,6 +4931,7 @@ function archiveInputFromListEntry(session: PiSessionListEntry): ArchiveSessionI
     modified: session.modified.toISOString(),
     messageCount: session.messageCount,
     firstMessage: session.firstMessage,
+    ...(session.metadata === undefined ? {} : { metadata: session.metadata }),
     ...(session.name === undefined ? {} : { name: session.name }),
     ...(session.parentSessionPath === undefined ? {} : { parentSessionPath: session.parentSessionPath }),
   };
@@ -4920,6 +4941,7 @@ function archiveInputFromActiveSession(session: PiAgentSession): ArchiveSessionI
   const sessionFile = session.sessionFile;
   if (sessionFile === undefined || sessionFile === "") throw new Error("Session is not persisted");
   const parentSessionPath = session.sessionManager.getHeader?.()?.parentSession;
+  const metadata = metadataFromActiveSession(session);
   return {
     sessionId: session.sessionId,
     cwd: session.sessionManager.getCwd(),
@@ -4928,6 +4950,7 @@ function archiveInputFromActiveSession(session: PiAgentSession): ArchiveSessionI
     modified: new Date().toISOString(),
     messageCount: session.messages.length,
     firstMessage: "",
+    ...(metadata === undefined ? {} : { metadata }),
     ...(session.sessionName === undefined ? {} : { name: session.sessionName }),
     ...(parentSessionPath === undefined ? {} : { parentSessionPath }),
   };
@@ -4994,11 +5017,13 @@ function clientSessionFromArchivedRecord(record: ArchivedSessionRecord, fallback
   const firstMessage = record.firstMessage ?? fallback?.firstMessage;
   if (path === undefined || created === undefined || modified === undefined || messageCount === undefined || firstMessage === undefined) return undefined;
   const name = record.name ?? fallback?.name;
+  const metadata = record.metadata ?? fallback?.metadata;
   const parentSessionPath = record.parentSessionPath ?? fallback?.parentSessionPath;
   return {
     id: record.sessionId,
     path,
     cwd: record.cwd,
+    ...(metadata === undefined ? {} : { metadata: requireSessionUiMetadata(metadata) }),
     ...(name === undefined ? {} : { name }),
     created,
     modified,

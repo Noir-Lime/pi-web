@@ -7,21 +7,21 @@ import type { PluginPromptEditor } from "../../../plugin-api";
 import { compareContentRenderers, contentRendererMatches, snapshotContentRenderer, type ContentRendererChoice, type RegisteredContentRenderer } from "./contentRenderers";
 import { createContentRenderingService, contentRenderingCapabilityToken } from "../formatting/contentRendering";
 import { requirePluginBackendRevision } from "../../../shared/pluginBackendProtocol";
-import type { ApplicationPanelContext, ApplicationPanelContribution, QualifiedApplicationPanelContribution, PiWebPluginRegistration, PiWebPluginRegistrationDeclaration, PluginAction, PluginActivationContext, PluginActivationResult, PluginCapability, PluginCapabilityProvision, PluginContributions, PluginRuntimeContext, PluginStartContext, QualifiedContributionId, QualifiedPluginAction, QualifiedThemeContribution, QualifiedThemePairContribution, QualifiedWorkspaceLabelContribution, QualifiedWorkspacePanelContribution, ThemeContribution, ThemePairContribution, WorkspaceInvalidation, WorkspaceLabelContext, WorkspaceLabelContribution, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePanelContribution, WorkspacePluginBinding, WorkspaceResource } from "./types";
+import type { ApplicationPanelContext, ApplicationPanelContribution, QualifiedApplicationPanelContribution, PiWebPluginRegistration, PiWebPluginRegistrationDeclaration, PluginAction, PluginActivationContext, PluginActivationResult, PluginCapability, PluginCapabilityProvision, PluginContributions, PluginRuntimeContext, PluginStartContext, QualifiedContributionId, QualifiedPluginAction, QualifiedThemeContribution, QualifiedThemePairContribution, QualifiedWorkspaceLabelContribution, QualifiedWorkspacePanelContribution, QualifiedSessionLabelContribution, SessionLabelContext, SessionLabelContribution, SessionLabelItem, ThemeContribution, ThemePairContribution, WorkspaceInvalidation, WorkspaceLabelContext, WorkspaceLabelContribution, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePanelContribution, WorkspacePluginBinding, WorkspaceResource } from "./types";
 
 const idPattern = /^[a-z][a-z0-9.-]*$/u;
 const localIdPattern = /^[a-z][a-z0-9.-]*$/u;
 const qualifiedContributionIdPattern = /^[a-z][a-z0-9.-]*:[a-z][a-z0-9.-]*$/u;
-const routeAliasPattern = /^[a-z][a-z0-9.-]*(?::[a-z][a-z0-9.-]*)?$/u;
 const pluginRuntimeScopes = new WeakMap<PluginRuntimeContext, (pluginId: string) => PluginRuntimeContext>();
 type WorkspacePanelScope = (
   binding: WorkspacePluginBinding,
   contributionId: QualifiedContributionId,
-  navigationAliases: readonly QualifiedContributionId[],
+  sourceContributionId: QualifiedContributionId,
 ) => WorkspacePanelContext;
 const workspacePanelScopes = new WeakMap<WorkspacePanelContext, WorkspacePanelScope>();
 const applicationPanelScopes = new WeakMap<ApplicationPanelContext, (pluginId: string) => ApplicationPanelContext>();
 const workspaceLabelScopes = new WeakMap<WorkspaceLabelContext, (binding: WorkspacePluginBinding) => WorkspaceLabelContext>();
+const sessionLabelScopes = new WeakMap<SessionLabelContext, (binding: WorkspacePluginBinding) => SessionLabelContext>();
 
 export interface PluginRegistryOptions {
   /** Request a composer refresh after browser-memory chip staging changes. */
@@ -87,6 +87,7 @@ interface PreparedPluginContributions {
   readonly workspacePanels: readonly QualifiedWorkspacePanelContribution[];
   readonly applicationPanels: readonly QualifiedApplicationPanelContribution[];
   readonly workspaceLabels: readonly QualifiedWorkspaceLabelContribution[];
+  readonly sessionLabels: readonly QualifiedSessionLabelContribution[];
   readonly themes: readonly QualifiedThemeContribution[];
   readonly themePairs: readonly QualifiedThemePairContribution[];
 }
@@ -189,6 +190,7 @@ export class PluginRegistry {
   private readonly workspacePanels: QualifiedWorkspacePanelContribution[] = [];
   private readonly applicationPanels: QualifiedApplicationPanelContribution[] = [];
   private readonly workspaceLabels: QualifiedWorkspaceLabelContribution[] = [];
+  private readonly sessionLabels: QualifiedSessionLabelContribution[] = [];
   private readonly themes: QualifiedThemeContribution[] = [];
   private readonly themePairs: QualifiedThemePairContribution[] = [];
   private readonly pluginIds = new Set<string>();
@@ -284,6 +286,7 @@ export class PluginRegistry {
     this.workspacePanels.splice(0);
     this.applicationPanels.splice(0);
     this.workspaceLabels.splice(0);
+    this.sessionLabels.splice(0);
     this.themes.splice(0);
     this.themePairs.splice(0);
     this.contributionIds.clear();
@@ -492,13 +495,14 @@ export class PluginRegistry {
     const applicationPanels = (contributions.applicationPanels ?? []).map((panel) => this.qualifyApplicationPanel(runtimePluginId, panel, registration.machineId, registration.sourcePluginId, contributionIds));
     const workspacePanels = (contributions.workspacePanels ?? []).map((panel) => this.qualifyWorkspacePanel(runtimePluginId, panel, registration.machineId, registration.sourcePluginId, backendRevision, pairedRequestVersion, pairedChannelVersion, contributionIds));
     const workspaceLabels = (contributions.workspaceLabels ?? []).map((contribution) => this.qualifyWorkspaceLabelContribution(runtimePluginId, contribution, registration.machineId, registration.sourcePluginId, backendRevision, pairedRequestVersion, pairedChannelVersion, contributionIds));
+    const sessionLabels = (contributions.sessionLabels ?? []).map((contribution) => this.qualifySessionLabelContribution(runtimePluginId, contribution, registration.machineId, registration.sourcePluginId, backendRevision, pairedRequestVersion, pairedChannelVersion, contributionIds));
     const themes = registration.machineId === undefined
       ? (contributions.themes ?? []).map((theme) => this.qualifyTheme(runtimePluginId, theme, contributionIds))
       : [];
     const themePairs = registration.machineId === undefined
       ? (contributions.themePairs ?? []).map((pair) => this.qualifyThemePair(runtimePluginId, pair, contributionIds))
       : [];
-    return Object.freeze({ ids: contributionIds, contentRenderers, actions, messageActions, applicationPanels, workspacePanels, workspaceLabels, themes, themePairs });
+    return Object.freeze({ ids: contributionIds, contentRenderers, actions, messageActions, applicationPanels, workspacePanels, workspaceLabels, sessionLabels, themes, themePairs });
   }
 
   private dependencyFailure(
@@ -608,6 +612,7 @@ export class PluginRegistry {
     this.workspacePanels.push(...staged.contributions.workspacePanels);
     this.applicationPanels.push(...staged.contributions.applicationPanels);
     this.workspaceLabels.push(...staged.contributions.workspaceLabels);
+    this.sessionLabels.push(...staged.contributions.sessionLabels);
     this.themes.push(...staged.contributions.themes);
     this.themePairs.push(...staged.contributions.themePairs);
     this.activeCapabilitiesByRegistration.set(staged.registration.id, new Map(staged.provisions.map((provision) => [provision.key, provision])));
@@ -774,7 +779,7 @@ export class PluginRegistry {
     for (const panel of this.getWorkspacePanels()) {
       if (panel.visible?.(context) === false) continue;
       const query = panel.fileOpenQuery?.(context, path);
-      if (query !== undefined) return { contributionId: panel.id, navigationAliases: panel.navigationAliases, query };
+      if (query !== undefined) return { contributionId: panel.id, sourceContributionId: panel.sourceContributionId, query };
     }
     return undefined;
   }
@@ -783,9 +788,9 @@ export class PluginRegistry {
     const activePanels = [...this.workspacePanels, ...this.applicationPanels].filter((panel) => this.isContributionActive(panel.pluginId, panel.machineId, selectedMachineId, panel.sourcePluginId));
     const exact = activePanels.find((panel) => panel.id === value);
     if (exact !== undefined) return exact.id;
-    const aliases = activePanels.filter((panel) => panel.routeAliases?.includes(value) === true);
-    if (aliases.length === 1) return aliases[0]?.id;
-    if (aliases.length > 1) console.warn(`Ambiguous PI WEB workspace panel route: ${value}`);
+    const sourceMatches = activePanels.filter((panel) => panel.sourceContributionId === value);
+    if (sourceMatches.length === 1) return sourceMatches[0]?.id;
+    if (sourceMatches.length > 1) console.warn(`Ambiguous PI WEB workspace panel source identity: ${value}`);
     return undefined;
   }
 
@@ -842,6 +847,36 @@ export class PluginRegistry {
       });
   }
 
+  getSessionLabelItems(context: SessionLabelContext): SessionLabelItem[] {
+    return [...this.sessionLabels]
+      .sort((left, right) => (left.order ?? 1000) - (right.order ?? 1000) || left.id.localeCompare(right.id))
+      .flatMap((contribution) => {
+        const reportFailure = (phase: string, error: unknown) => {
+          console.warn(`PI WEB plugin session label ${contribution.id} ${phase} failed for session ${context.session.id} on machine ${context.machine.id}`, error);
+        };
+        let phase = "visible";
+        try {
+          if (contribution.visible?.(context) === false) return [];
+          phase = "items";
+          return contribution.items(context).flatMap((item): SessionLabelItem[] => {
+            if (item.type !== "render") return [item];
+            try {
+              // Resolve plugin templates while their owner is known, so a failed
+              // item is omitted before the list adds separators or renders rows.
+              const template = item.render();
+              return [{ ...item, render: () => template }];
+            } catch (error) {
+              reportFailure("render", error);
+              return [];
+            }
+          });
+        } catch (error) {
+          reportFailure(phase, error);
+          return [];
+        }
+      });
+  }
+
   private qualifyAction(
     pluginId: string,
     action: PluginAction,
@@ -871,11 +906,11 @@ export class PluginRegistry {
     contributionIds: Set<QualifiedContributionId>,
   ): QualifiedApplicationPanelContribution {
     const id = this.qualify(pluginId, panel.id, contributionIds);
-    const routeAliases = this.parseRouteAliases(id, panel.routeAliases, `${sourcePluginId ?? pluginId}:${panel.id}`);
+    this.rejectPanelAliases(panel, id);
+    const sourceContributionId: QualifiedContributionId = `${sourcePluginId ?? pluginId}:${panel.id}`;
     const scopedContext = (context: ApplicationPanelContext) => applicationPanelScopes.get(context)?.(pluginId) ?? context;
     return {
-      ...panel, id, pluginId, localId: panel.id,
-      ...(routeAliases.length === 0 ? {} : { routeAliases }),
+      ...panel, id, sourceContributionId, pluginId, localId: panel.id,
       ...(machineId === undefined ? {} : { machineId }),
       ...(sourcePluginId === undefined ? {} : { sourcePluginId }),
       visible: (context) => this.isContributionActive(pluginId, machineId, context.machine.id, sourcePluginId)
@@ -903,18 +938,16 @@ export class PluginRegistry {
     const visible = panel.visible;
     const onInvalidate = panel.onInvalidate;
     const binding = workspacePluginBinding(pluginId, sourcePluginId, backendRevision, pairedRequestVersion, pairedChannelVersion);
-    const sourceId = `${sourcePluginId ?? pluginId}:${panel.id}`;
-    const routeAliases = this.parseRouteAliases(id, panel.routeAliases, sourceId);
-    const navigationAliases = this.parseNavigationAliases(id, panel.navigationAliases, sourceId);
+    this.rejectPanelAliases(panel, id);
+    const sourceContributionId: QualifiedContributionId = `${sourcePluginId ?? pluginId}:${panel.id}`;
     const invalidationResources = this.parseInvalidationResources(id, panel.invalidationResources);
-    const scopedContext = (context: WorkspacePanelContext) => workspacePanelContextFor(context, binding, id, navigationAliases);
+    const scopedContext = (context: WorkspacePanelContext) => workspacePanelContextFor(context, binding, id, sourceContributionId);
     return {
       ...panel,
       id,
       pluginId,
       localId: panel.id,
-      ...(routeAliases.length === 0 ? {} : { routeAliases }),
-      navigationAliases,
+      sourceContributionId,
       ...(panel.invalidationResources === undefined ? {} : { invalidationResources }),
       ...(machineId === undefined ? {} : { machineId }),
       ...(sourcePluginId === undefined ? {} : { sourcePluginId }),
@@ -954,6 +987,34 @@ export class PluginRegistry {
       ...(machineId === undefined ? {} : { machineId }),
       visible: (context) => this.isContributionActive(pluginId, machineId, context.machine.id, sourcePluginId) && (visible?.(workspaceLabelContextFor(context, binding)) ?? true),
       items: (context) => this.isContributionActive(pluginId, machineId, context.machine.id, sourcePluginId) ? items(workspaceLabelContextFor(context, binding)) : [],
+    };
+  }
+
+  private qualifySessionLabelContribution(
+    pluginId: string,
+    contribution: SessionLabelContribution,
+    machineId: string | undefined,
+    sourcePluginId: string | undefined,
+    backendRevision: string | undefined,
+    pairedRequestVersion: 1 | undefined,
+    pairedChannelVersion: 1 | undefined,
+    contributionIds: Set<QualifiedContributionId>,
+  ): QualifiedSessionLabelContribution {
+    const id = this.qualify(pluginId, contribution.id, contributionIds);
+    const visible = contribution.visible;
+    const items = contribution.items;
+    const binding = workspacePluginBinding(pluginId, sourcePluginId, backendRevision, pairedRequestVersion, pairedChannelVersion);
+    const scopedContext = (context: SessionLabelContext) => sessionLabelScopes.get(context)?.(binding) ?? context;
+    return {
+      ...contribution,
+      id,
+      pluginId,
+      localId: contribution.id,
+      ...(machineId === undefined ? {} : { machineId }),
+      visible: (context) => this.isContributionActive(pluginId, machineId, context.machine.id, sourcePluginId)
+        && (visible?.(scopedContext(context)) ?? true),
+      items: (context) => this.isContributionActive(pluginId, machineId, context.machine.id, sourcePluginId)
+        ? items(scopedContext(context)) : [],
     };
   }
 
@@ -1028,19 +1089,10 @@ export class PluginRegistry {
     return parsed.filter(isQualifiedContributionId);
   }
 
-  private parseRouteAliases(id: QualifiedContributionId, aliases: readonly string[] | undefined, sourceId: string): string[] {
-    const parsed = [...new Set([...(aliases ?? []), sourceId])].filter((alias) => alias !== id);
-    for (const alias of parsed) {
-      if (!routeAliasPattern.test(alias)) throw new Error(`Invalid workspace panel route alias for ${id}: ${alias}`);
+  private rejectPanelAliases(panel: ApplicationPanelContribution | WorkspacePanelContribution, id: QualifiedContributionId): void {
+    if (Reflect.get(panel, "routeAliases") !== undefined || Reflect.get(panel, "navigationAliases") !== undefined) {
+      throw new BrowserPluginIncompatibleError(`Panel aliases were removed for ${id}; remove routeAliases and navigationAliases and use the current contribution ID`);
     }
-    return parsed;
-  }
-
-  private parseNavigationAliases(id: QualifiedContributionId, aliases: readonly string[] | undefined, sourceId: string): QualifiedContributionId[] {
-    const parsed = [...new Set([...(aliases ?? []), sourceId])].filter((alias) => alias !== id);
-    const invalid = parsed.find((alias) => !isQualifiedContributionId(alias));
-    if (invalid !== undefined) throw new Error(`Invalid workspace panel navigation alias for ${id}: ${invalid}`);
-    return parsed.filter(isQualifiedContributionId);
   }
 
   private parseInvalidationResources(id: QualifiedContributionId, value: unknown): WorkspaceResource[] {
@@ -1099,9 +1151,9 @@ function workspacePanelContextFor(
   context: WorkspacePanelContext,
   binding: WorkspacePluginBinding,
   contributionId: QualifiedContributionId,
-  navigationAliases: readonly QualifiedContributionId[],
+  sourceContributionId: QualifiedContributionId,
 ): WorkspacePanelContext {
-  return workspacePanelScopes.get(context)?.(binding, contributionId, navigationAliases) ?? context;
+  return workspacePanelScopes.get(context)?.(binding, contributionId, sourceContributionId) ?? context;
 }
 
 function workspaceLabelContextFor(context: WorkspaceLabelContext, binding: WorkspacePluginBinding): WorkspaceLabelContext {
@@ -1134,6 +1186,14 @@ export function installWorkspaceLabelScope(
   scope: (binding: WorkspacePluginBinding) => WorkspaceLabelContext,
 ): WorkspaceLabelContext {
   workspaceLabelScopes.set(context, scope);
+  return context;
+}
+
+export function installSessionLabelScope(
+  context: SessionLabelContext,
+  scope: (binding: WorkspacePluginBinding) => SessionLabelContext,
+): SessionLabelContext {
+  sessionLabelScopes.set(context, scope);
   return context;
 }
 
@@ -1478,7 +1538,7 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-const contributionNames: readonly string[] = ["actions", "applicationPanels", "workspacePanels", "workspaceLabels", "themes", "themePairs", "contentRenderers", "messageActions"];
+const contributionNames: readonly string[] = ["actions", "applicationPanels", "workspacePanels", "workspaceLabels", "sessionLabels", "themes", "themePairs", "contentRenderers", "messageActions"];
 
 function isPluginContributions(value: unknown): value is PluginContributions {
   if (!isRecord(value)) return false;

@@ -1,5 +1,5 @@
 import type { TemplateResult } from "lit";
-import type { PluginProjects, PluginPromptEditor, PluginSelectionService } from "../../../plugin-api";
+import type { PluginNavigate, PluginProjects, PluginPromptEditor, PluginSelectedSession, PluginSelectionService } from "../../../plugin-api";
 import type { AppAction } from "../actions";
 import type { DeleteWorkspaceFileResponse, FileContentResponse, FileTreeResponse, JsonValue, Machine, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, TerminalCommandRunHandle, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse, Workspace } from "../api";
 import type { PluginCapability, PluginCapabilityProvision } from "../../../shared/pluginApiTypes";
@@ -84,6 +84,7 @@ export interface PluginContributions {
   applicationPanels?: ApplicationPanelContribution[];
   workspacePanels?: WorkspacePanelContribution[];
   workspaceLabels?: WorkspaceLabelContribution[];
+  sessionLabels?: SessionLabelContribution[];
   themes?: ThemeContribution[];
   themePairs?: ThemePairContribution[];
 }
@@ -211,10 +212,10 @@ export interface PiWebUnstableRuntimeContext {
 
 export type { PluginPromptEditor } from "../../../plugin-api";
 
-export type { PluginNavigationDestination } from "../../../plugin-api";
+export type { PluginNavigate, PluginNavigationPatchDestination, PluginNavigationOptions } from "../../../plugin-api";
 
 export interface PluginRuntimeContext {
-  navigate: (destination: import("../../../plugin-api").PluginNavigationDestination) => Promise<void>;
+  navigate: PluginNavigate;
   state: AppState;
   projects?: PluginProjects;
   prompt: PluginPromptEditor;
@@ -279,7 +280,7 @@ export interface WorkspacePanelNavigationV1 {
 }
 
 export interface WorkspacePanelContext extends WorkspaceContext {
-  navigate: (destination: import("../../../plugin-api").PluginNavigationDestination) => Promise<void>;
+  navigate: PluginNavigate;
   prompt: PluginPromptEditor;
   terminal: WorkspacePanelTerminal;
   /** Contribution-scoped address-bar state for deep links and browser history. */
@@ -292,7 +293,7 @@ export interface ApplicationPanelContext {
   projects?: PluginProjects;
   workspace?: Workspace;
   terminal?: WorkspacePanelTerminal;
-  navigate: (destination: import("../../../plugin-api").PluginNavigationDestination) => Promise<void>;
+  navigate: PluginNavigate;
   prompt: PluginPromptEditor;
   host: WorkspaceHost;
 }
@@ -302,7 +303,6 @@ export interface ApplicationPanelContribution {
   title: string;
   icon?: TemplateResult;
   order?: number;
-  routeAliases?: string[];
   visible?: (context: ApplicationPanelContext) => boolean;
   badge?: (context: ApplicationPanelContext) => string | number | TemplateResult | undefined;
   render: (context: ApplicationPanelContext) => TemplateResult;
@@ -310,6 +310,8 @@ export interface ApplicationPanelContribution {
 
 export interface QualifiedApplicationPanelContribution extends ApplicationPanelContribution {
   id: QualifiedContributionId;
+  /** Host-generated portable identity; never an author-defined migration alias. */
+  sourceContributionId: QualifiedContributionId;
   pluginId: PluginId;
   localId: LocalContributionId;
   machineId?: string;
@@ -330,10 +332,6 @@ export interface WorkspacePanelContribution {
   title: string;
   icon?: WorkspacePanelIcon;
   order?: number;
-  /** Former URL tool/view values that should resolve to this panel. */
-  routeAliases?: string[];
-  /** Former qualified contribution ids whose namespaced query keys remain readable. */
-  navigationAliases?: QualifiedContributionId[];
   visible?: (context: WorkspacePanelContext) => boolean;
   /** Return a deep-link query to open a workspace-relative file, or undefined if unsupported. */
   fileOpenQuery?: (context: WorkspacePanelContext, path: string) => Readonly<Record<string, ContributionQueryValue>> | undefined;
@@ -345,6 +343,8 @@ export interface WorkspacePanelContribution {
 
 export interface QualifiedWorkspacePanelContribution extends WorkspacePanelContribution {
   id: QualifiedContributionId;
+  /** Host-generated portable identity; never an author-defined migration alias. */
+  sourceContributionId: QualifiedContributionId;
   pluginId: PluginId;
   localId: LocalContributionId;
   machineId?: string;
@@ -385,6 +385,27 @@ export interface WorkspaceLabelContribution {
   order?: number;
   visible?: (context: WorkspaceLabelContext) => boolean;
   items: (context: WorkspaceLabelContext) => WorkspaceLabelItem[];
+}
+
+export interface SessionLabelContext extends WorkspaceContext {
+  session: Readonly<PluginSelectedSession>;
+  navigate: PluginNavigate;
+}
+
+export type { SessionLabelItem } from "../../../plugin-api";
+
+export interface SessionLabelContribution {
+  id: LocalContributionId;
+  order?: number;
+  visible?: (context: SessionLabelContext) => boolean;
+  items: (context: SessionLabelContext) => import("../../../plugin-api").SessionLabelItem[];
+}
+
+export interface QualifiedSessionLabelContribution extends SessionLabelContribution {
+  id: QualifiedContributionId;
+  pluginId: PluginId;
+  localId: LocalContributionId;
+  machineId?: string;
 }
 
 export type ThemeColorScheme = "dark" | "light";

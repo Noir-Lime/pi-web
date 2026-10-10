@@ -22,6 +22,7 @@ export type {
   PiWebVersionResponse,
   PluginCapability,
   PluginCapabilityProvision,
+  SessionUiMetadata,
   TerminalCommandRun,
   TerminalCommandRunHandle,
   TerminalCommandRunStatus,
@@ -163,6 +164,7 @@ export interface PluginContributions {
   applicationPanels?: ApplicationPanelContribution[];
   workspacePanels?: WorkspacePanelContribution[];
   workspaceLabels?: WorkspaceLabelContribution[];
+  sessionLabels?: SessionLabelContribution[];
   themes?: ThemeContribution[];
   themePairs?: ThemePairContribution[];
 }
@@ -200,6 +202,8 @@ export interface PluginSelectedSession {
   /** Workspace working directory. */
   cwd: string;
   name?: string;
+  /** Detached, explicitly UI-safe data by package/plugin namespace. Absent on older hosts. */
+  metadata?: import("./shared/pluginApiTypes.js").SessionUiMetadata;
   archived: boolean;
   /** True while the browser is waiting for session creation to finish. */
   pending: boolean;
@@ -268,19 +272,52 @@ export interface PluginPromptEditor {
   removeChip?(id: string): void;
 }
 
-/** A complete navigation destination, not a patch of the current route. */
+/** A non-null destination: complete by default, or a current-URL patch with mode: "patch". */
 export interface PluginNavigationDestination {
   machineId?: string;
   projectId?: string;
   workspaceId?: string;
+  /** Full, exact session ID in the target workspace; prefixes are not resolved. */
   sessionId?: string;
   view?: "navigation" | "chat" | "workspace";
   tool?: QualifiedContributionId;
+  /** Local query keys for tool. Requires a tool/project/workspace
+   *  (explicit in replace mode, optionally inherited in patch mode).
+   *  Replace mode replaces all contribution query state; patch mode merges only these keys. */
+  query?: Readonly<Record<string, ContributionQueryValue>>;
+}
+
+/** Current-URL patch, accepted only with mode: "patch". Undefined fields are preserved. */
+export interface PluginNavigationPatchDestination {
+  /** Null resets the machine to local; other null route fields remove that URL field. */
+  machineId?: string | null;
+  projectId?: string | null;
+  workspaceId?: string | null;
+  /** Full, exact session ID in the target workspace; prefixes are not resolved. */
+  sessionId?: string | null;
+  view?: "navigation" | "chat" | "workspace" | null;
+  tool?: QualifiedContributionId | null;
+  /** Merge local keys into the effective tool/project/workspace query; null values remove keys. */
+  query?: Readonly<Record<string, ContributionQueryValue | null>>;
+}
+
+export interface PluginNavigationOptions {
+  /** Defaults to replace. Patch preserves omitted fields and clears inherited descendants
+   *  when their machine/project/workspace changes. Null route fields are valid only in patch mode. */
+  mode?: "replace" | "patch";
+  /** Browser history behavior, independent of mode. Defaults to push. */
+  history?: "push" | "replace";
+}
+
+/** Shared navigation callable; nullable destinations require explicit patch options. */
+export interface PluginNavigate {
+  (destination: PluginNavigationDestination, options?: PluginNavigationOptions): Promise<void>;
+  (destination: PluginNavigationPatchDestination, options: PluginNavigationOptions & { mode: "patch" }): Promise<void>;
 }
 
 export interface PluginRuntimeContext {
   /** Navigate using host restoration defaults. Route failures appear in the host UI. */
-  navigate: (destination: PluginNavigationDestination) => Promise<void>;
+  navigate: PluginNavigate;
   state: PluginRuntimeState;
   /** Read-only discovery on this context's machine. Omitted by older hosts. */
   projects?: PluginProjects;
@@ -324,7 +361,7 @@ export interface MessageActionAvailabilityContext {
 /** Created on invocation, with helpers scoped to the initiating machine/conversation. */
 export interface MessageActionContext extends MessageActionAvailabilityContext {
   readonly prompt: PluginPromptEditor;
-  readonly navigate: (destination: PluginNavigationDestination) => Promise<void>;
+  readonly navigate: PluginNavigate;
   readonly projects: PluginProjects;
   readonly workspace?: Workspace;
   readonly files?: WorkspaceFilesContextValue;
@@ -566,7 +603,7 @@ export interface WorkspacePanelNavigationV1 {
 
 export interface WorkspacePanelContext extends WorkspaceContext {
   /** Navigate using host restoration defaults. Route failures appear in the host UI. */
-  navigate: (destination: PluginNavigationDestination) => Promise<void>;
+  navigate: PluginNavigate;
   prompt: PluginPromptEditor;
   terminal: WorkspacePanelTerminal;
   /** Contribution-scoped address-bar state for deep links and browser history. */
@@ -583,7 +620,7 @@ export interface ApplicationPanelContext {
   workspace?: Workspace;
   /** Workspace-bound terminal; present only with a selected workspace and an available Terminal provider. */
   terminal?: WorkspacePanelTerminal;
-  navigate: (destination: PluginNavigationDestination) => Promise<void>;
+  navigate: PluginNavigate;
   prompt: PluginPromptEditor;
   host: WorkspaceHost;
 }
@@ -594,7 +631,6 @@ export interface ApplicationPanelContribution {
   title: string;
   icon?: TemplateResult;
   order?: number;
-  routeAliases?: string[];
   visible?: (context: ApplicationPanelContext) => boolean;
   badge?: (context: ApplicationPanelContext) => string | number | TemplateResult | undefined;
   render: (context: ApplicationPanelContext) => TemplateResult;
@@ -614,10 +650,6 @@ export interface WorkspacePanelContribution {
   title: string;
   icon?: WorkspacePanelIcon;
   order?: number;
-  /** Former URL tool/view values that should resolve to this panel. */
-  routeAliases?: string[];
-  /** Former qualified contribution ids whose namespaced query keys remain readable. */
-  navigationAliases?: QualifiedContributionId[];
   visible?: (context: WorkspacePanelContext) => boolean;
   /** Return a deep-link query to open a workspace-relative file, or undefined if unsupported. */
   fileOpenQuery?: (context: WorkspacePanelContext, path: string) => Readonly<Record<string, ContributionQueryValue>> | undefined;
@@ -663,6 +695,42 @@ export interface WorkspaceLabelContribution {
   order?: number;
   visible?: (context: WorkspaceLabelContext) => boolean;
   items: (context: WorkspaceLabelContext) => WorkspaceLabelItem[];
+}
+
+/** Context for one session-list row, including unselected and archived sessions. */
+export interface SessionLabelContext extends WorkspaceContext {
+  /** Basic detached row snapshot, not necessarily state.selectedSession. */
+  session: Readonly<PluginSelectedSession>;
+  navigate: PluginNavigate;
+}
+
+export type SessionLabelItem = SessionLabelTextItem | SessionLabelLinkItem | SessionLabelRenderItem;
+
+export interface SessionLabelTextItem {
+  type: "text";
+  text: string;
+  title?: string;
+}
+
+export interface SessionLabelLinkItem {
+  type: "link";
+  text: string;
+  href: string;
+  title?: string;
+  target?: "_blank" | "_self";
+}
+
+export interface SessionLabelRenderItem {
+  type: "render";
+  render: () => TemplateResult;
+}
+
+/** Indicators on session-list rows only. Callbacks are synchronous and side-effect-free. */
+export interface SessionLabelContribution {
+  id: LocalContributionId;
+  order?: number;
+  visible?: (context: SessionLabelContext) => boolean;
+  items: (context: SessionLabelContext) => SessionLabelItem[];
 }
 
 export type ThemeColorScheme = "dark" | "light";

@@ -34,17 +34,17 @@ import { initialSessionWarningVisibilityState, reconcileSessionWarningVisibility
 import { RealtimeSocket, type BrowserRealtimeEvent } from "../sessionSocket";
 import { ServerNoticesController, visibleServerNotices } from "../serverNotices";
 import type { ServerNotice } from "../../../shared/apiTypes";
-import type { ApplicationPanelContext, PluginNavigationDestination, ContributionQueryValue, PiWebPluginRegistration, PluginMachine, PluginPromptEditor, QualifiedContributionId, PluginRuntimeContext, WorkspaceFilesCapabilityV1, WorkspaceHost, WorkspaceInvalidation, WorkspaceLabelContext, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePanelNavigationV1, WorkspacePanelTerminal, WorkspacePluginBinding, WorkspaceTerminalCommandInput } from "../plugins/types";
+import type { ApplicationPanelContext, PluginNavigationPatchDestination, PluginNavigationOptions, ContributionQueryValue, PiWebPluginRegistration, PluginMachine, PluginPromptEditor, QualifiedContributionId, PluginRuntimeContext, SessionLabelContext, SessionLabelItem, WorkspaceFilesCapabilityV1, WorkspaceHost, WorkspaceInvalidation, WorkspaceLabelContext, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePanelNavigationV1, WorkspacePanelTerminal, WorkspacePluginBinding, WorkspaceTerminalCommandInput } from "../plugins/types";
 import { CLASSIC_THEME_ID, applyPiWebTheme, clearStoredThemePreference, effectiveThemePreference, readStoredThemePreference, resolveThemePreference, writeStoredThemePreference, type ThemePreference, type ThemePreferenceResolution } from "../theme";
 import { corePlugin } from "../plugins/core";
 import { themePackPlugin } from "../plugins/themes";
 import { loadExternalPlugins, type ExternalPluginLoadResult } from "../plugins/external";
-import { publicPluginSelection } from "../plugins/publicContext";
+import { publicPluginSelection, publicPluginSession } from "../plugins/publicContext";
 import type { DisplayedMessageActionAvailabilityContext, MessageActionAvailabilityContext, MessageActionContext, MessageActionResult } from "../../../plugin-api";
 import { messageActionMessage } from "../plugins/messageActions";
 import { createPluginProjects } from "../plugins/projects";
 import { REQUIRED_TERMINAL_PLUGIN_ID, type TerminalPluginMode } from "../../../shared/requiredTerminalPlugin";
-import { PluginRegistry, installApplicationPanelScope, installPluginRuntimeScope, installWorkspaceLabelScope, installWorkspacePanelScope, type BrowserPluginLifecyclePhase, type PluginRegistrationFailure } from "../plugins/registry";
+import { PluginRegistry, installApplicationPanelScope, installPluginRuntimeScope, installSessionLabelScope, installWorkspaceLabelScope, installWorkspacePanelScope, type BrowserPluginLifecyclePhase, type PluginRegistrationFailure } from "../plugins/registry";
 import { createPluginPeer } from "../plugins/pluginPeer";
 import { REQUIRED_TERMINAL_BROWSER_FACADE_CAPABILITY, requiredTerminalUnavailableError, type RequiredTerminalBrowserComposition, type WorkspaceContributionNavigationV1 } from "../plugins/requiredTerminalFacade";
 import { createWorkspaceFiles as createPluginWorkspaceFiles } from "../plugins/workspaceFiles";
@@ -55,6 +55,7 @@ import { NavigationSectionsController, type NavigationSection } from "../appShel
 import { PanelCollapseController, mainViewClass } from "../appShell/panelCollapseController";
 import { PanelResizeController, type PanelResizeConstraints, type ResizablePanelSide } from "../appShell/panelResizeController";
 import { isCreatingSessionId, parseMainView, readRoute, resolveAppRoute, routeMatchesWorkspaceIdentity, writeRoute, type AppRoute, type ParsedAppRoute, type WorkspaceRouteIdentity } from "../route";
+import { resolvePluginNavigation } from "../pluginNavigation";
 import { readSettingsSection, writeSettingsSection, type SettingsSection } from "../settingsRoute";
 import { applyActiveShortcutPreferences } from "../shortcutPreferences";
 import { loadNavigationPreferences, saveNavigationPreferences, pinnedNavigationTabs, type NavigationPreferences } from "../navigationPreferences";
@@ -750,32 +751,31 @@ export class PiWebApp extends LitElement {
    * load failure into navigation. Only explicit actions publish another URL.
    */
   private async restoreCommittedNavigation(snapshot: MachineNavigationSnapshot): Promise<boolean> {
-    return this.restoreRoute(false, snapshot.view, "deferred");
+    return this.restoreRoute(false, parseMainView(snapshot.view), "deferred");
   }
 
-  private async navigate(destination: PluginNavigationDestination | null): Promise<void> {
-    if (destination === null || typeof destination !== "object" || Array.isArray(destination)) {
-      throw new TypeError("Navigation destination must be an object");
-    }
-    for (const key of ["machineId", "projectId", "workspaceId", "sessionId", "tool"] as const) {
-      if (destination[key] !== undefined && typeof destination[key] !== "string") {
-        throw new TypeError(`Navigation ${key} must be a string`);
-      }
-    }
-    if (destination.view !== undefined && !["navigation", "chat", "workspace"].includes(destination.view)) {
-      throw new TypeError("Navigation view must be navigation, chat, or workspace");
-    }
+  private async navigate(destination: PluginNavigationPatchDestination | null, options?: PluginNavigationOptions, capturedMachineId?: string): Promise<void> {
+    const { route, contributionQuery } = resolvePluginNavigation(
+      destination, options, readRoute(), readContributionQueryRecord(), selectedMachineId(this.state),
+      (tool, machineId) => {
+        const contributionId = this.plugins.resolveWorkspacePanelRouteId(tool, machineId);
+        if (contributionId === undefined) return undefined;
+        const sourceContributionId = this.plugins.getWorkspacePanels().find((panel) => panel.id === contributionId)?.sourceContributionId;
+        return { contributionId, sourceContributionId };
+      },
+      capturedMachineId,
+    );
     await this.commitAndRestoreNavigation({
-      machineId: destination.machineId ?? selectedMachineId(this.state),
-      projectId: destination.projectId,
-      workspaceId: destination.workspaceId,
-      sessionId: destination.sessionId,
-      view: destination.view,
-      // Public IDs are strings; route restoration owns unavailable/malformed ID UI.
+      ...route,
+      machineId: route.machineId ?? "local",
+      // Retain omitted raw URL values in patch mode, including unavailable IDs/views.
+      // Restoration resolves or explains them, rather than silently dropping them.
       // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
-      tool: destination.tool as QualifiedContributionId | undefined,
-      surface: {},
-    });
+      tool: route.tool as QualifiedContributionId | undefined,
+      // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
+      view: route.view as AppState["mainView"] | undefined,
+      surface: { contributionQuery },
+    }, { replace: options?.history === "replace" });
   }
 
   private async commitAndRestoreNavigation(snapshot: MachineNavigationSnapshot, options: NavigationDestinationOptions = {}): Promise<boolean> {
@@ -907,7 +907,6 @@ export class PiWebApp extends LitElement {
       const loadedSession = loadedWorkspace !== undefined
         && this.state.selectedWorkspace?.projectId === loadedWorkspace.projectId
         && this.state.selectedWorkspace.id === loadedWorkspace.id
-        && route.sessionId !== undefined
         ? this.sessions.preferredSession(loadedWorkspace.path, this.state.sessions, route.sessionId)
         : undefined;
       // In-app navigation published this known destination before reconciliation.
@@ -944,7 +943,7 @@ export class PiWebApp extends LitElement {
       && (this.state.selectedProject?.id !== options.requestedRoute.projectId
         || this.state.selectedWorkspace?.id !== options.requestedRoute.workspaceId);
     const requestedSessionUnavailable = options.requestedRoute?.sessionId !== undefined
-      && !sessionMatchesRouteTarget(this.state.selectedSession?.id, options.requestedRoute.sessionId);
+      && this.state.selectedSession?.id !== options.requestedRoute.sessionId;
     const unavailablePanel = options.unavailableToolRoute || options.unavailablePanelViewRoute
       || requestedToolUnavailable;
     // Invalid destinations belong to panel content, not the notification history.
@@ -1175,13 +1174,17 @@ export class PiWebApp extends LitElement {
   }
 
   private routeMatchesCurrentSelection(route: Pick<AppRoute, "machineId" | "projectId" | "workspaceId" | "sessionId">): boolean {
-    return (route.machineId ?? "local") === (this.state.selectedMachine?.id ?? "local")
-      && route.workspaceId !== undefined
-      && route.workspaceId !== ""
-      && this.state.selectedProject?.id === route.projectId
-      && this.state.selectedWorkspace?.id === route.workspaceId
-      && this.state.selectedSession?.archived !== true
-      && this.state.selectedSession?.id === route.sessionId;
+    const workspace = this.state.selectedWorkspace;
+    if ((route.machineId ?? "local") !== selectedMachineId(this.state)
+      || route.workspaceId === undefined || route.workspaceId === ""
+      || this.state.selectedProject?.id !== route.projectId
+      || workspace?.id !== route.workspaceId
+      || !this.sessions.canReuseSelectedSession()) return false;
+    // A URL can omit the session while its remembered/default conversation is
+    // already joined. Surface navigation must not repeat that same join.
+    return route.sessionId === undefined
+      ? this.state.selectedSession?.id === this.sessions.preferredSession(workspace.path, this.state.sessions, undefined)?.id
+      : this.state.selectedSession?.id === route.sessionId;
   }
 
   private async refreshRestoredWorkspaceTool(
@@ -1241,8 +1244,7 @@ export class PiWebApp extends LitElement {
   private commitMachineNavigationSnapshot(snapshot: MachineNavigationSnapshot, options?: { replace?: boolean | undefined }): void {
     this.syncNavigationFreshness();
     this.machineNavigation.remember(snapshot);
-    writeRoute(routeFromMachineNavigationSnapshot(snapshot), options);
-    this.writeWorkspaceRouteSurfaceToUrl(snapshot.surface);
+    writeRoute(routeFromMachineNavigationSnapshot(snapshot), { ...options, contributionQuery: snapshot.surface.contributionQuery ?? {} });
     this.syncNavigationFreshness();
   }
 
@@ -1289,13 +1291,7 @@ export class PiWebApp extends LitElement {
     return (current.machineId ?? "local") === expected.machineId
       && current.projectId === expected.projectId
       && current.workspaceId === expected.workspaceId
-      // Restoration accepts abbreviated session IDs; guarded handoffs must
-      // recognize the same resolved identity without relaxing hierarchy checks.
-      && (isCreatingSessionId(expected.sessionId)
-        ? current.sessionId === expected.sessionId
-        : current.sessionId === undefined
-          ? expected.sessionId === undefined
-          : sessionMatchesRouteTarget(expected.sessionId, current.sessionId))
+      && current.sessionId === expected.sessionId
       && (selectionOnly || (current.tool === expected.tool && current.view === expected.view));
   }
 
@@ -1441,6 +1437,11 @@ export class PiWebApp extends LitElement {
     this.workspaceTerminal("core", workspace, machineId).open(options);
   }
 
+  private workspacePanelSourceQueryIds(contributionId: QualifiedContributionId): readonly QualifiedContributionId[] {
+    const sourceContributionId = this.plugins.getWorkspacePanels().find((panel) => panel.id === contributionId)?.sourceContributionId;
+    return sourceContributionId === undefined || sourceContributionId === contributionId ? [] : [sourceContributionId];
+  }
+
   private async navigateRuntimeWorkspaceContribution(
     machineId: string,
     workspace: Workspace,
@@ -1448,7 +1449,7 @@ export class PiWebApp extends LitElement {
     expected: NavigationUrlContext,
   ): Promise<void> {
     if (!this.navigationUrlContextMatchesUrl(expected)) return;
-    const aliases = navigation.navigationAliases ?? [];
+    const sourceQueryIds = this.workspacePanelSourceQueryIds(navigation.contributionId);
     const currentIdentity = this.selectedWorkspaceRouteIdentity();
     const targetIdentity: WorkspaceRouteIdentity = { machineId, projectId: workspace.projectId, workspaceId: workspace.id };
     const contributionQuery = patchContributionQueryRecord(
@@ -1456,7 +1457,7 @@ export class PiWebApp extends LitElement {
         ? this.currentContributionQueryForState()
         : {},
       navigation.contributionId,
-      aliases,
+      sourceQueryIds,
       navigation.query,
     );
     const destination: MachineNavigationSnapshot = {
@@ -1943,6 +1944,7 @@ export class PiWebApp extends LitElement {
         .workspacesCollapsed=${this.navigationSections.isCollapsed("workspaces")}
         .sessionsCollapsed=${this.navigationSections.isCollapsed("sessions")}
         .workspaceLabelItems=${guard(this.workspaceSurfaceInputs(), () => (workspace: Workspace) => this.workspaceLabelItems(workspace))}
+        .sessionLabelItems=${guard(this.workspaceSurfaceInputs(), () => (session: SessionInfo) => this.sessionLabelItems(session))}
         .refreshControl=${this.appShell.shouldShowAppRefreshInHeader() ? this.renderAppRefresh() : undefined}
         .onShowActions=${this.navigationActions.showActions}
         .onToggleProjects=${this.navigationActions.toggleProjects}
@@ -2108,7 +2110,7 @@ export class PiWebApp extends LitElement {
       || request.projectId !== workspace.projectId || request.workspaceId !== workspace.id || request.root !== workspace.path) return;
     const navigation = this.plugins.resolveWorkspaceFileOpen(this.createWorkspacePanelContext(workspace), request.path);
     if (navigation === undefined) return;
-    const query = patchContributionQueryRecord(this.currentContributionQueryForState(), navigation.contributionId, navigation.navigationAliases ?? [], navigation.query);
+    const query = patchContributionQueryRecord(this.currentContributionQueryForState(), navigation.contributionId, this.workspacePanelSourceQueryIds(navigation.contributionId), navigation.query);
     event.preventDefault();
     this.publishWorkspaceTool(navigation.contributionId, query);
   };
@@ -2279,6 +2281,27 @@ export class PiWebApp extends LitElement {
     return createContext(coreWorkspacePluginBinding());
   }
 
+  private sessionLabelItems(session: SessionInfo): SessionLabelItem[] {
+    const workspace = this.state.selectedWorkspace;
+    if (workspace === undefined) return [];
+    const machine = pluginMachineFromState(this.state);
+    const createContext = (binding: WorkspacePluginBinding): SessionLabelContext => {
+      const peer = createPluginPeer(binding, workspace, machine.id);
+      return installSessionLabelScope({
+        machine,
+        workspace,
+        session: publicPluginSession(session),
+        state: this.state,
+        files: this.createWorkspaceFiles(workspace, machine),
+        projects: createPluginProjects(projectsApi, machine.id),
+        ...(peer === undefined ? {} : { peer }),
+        navigate: (destination, options) => this.navigate(destination, options, machine.id),
+        host: this.createWorkspaceHost(),
+      }, createContext);
+    };
+    return this.plugins.getSessionLabelItems(createContext(coreWorkspacePluginBinding()));
+  }
+
   private createWorkspaceFiles(workspace: Workspace, machine: PluginMachine): WorkspaceFilesCapabilityV1 {
     return createPluginWorkspaceFiles(workspacesApi, workspace, machine.id, {
       defaultUploadFolder: workspaceEffectiveUploadFolder(workspace.effectiveConfig, this.workspaceUploadDefaultFolder),
@@ -2305,7 +2328,7 @@ export class PiWebApp extends LitElement {
         ...(workspace === undefined || !this.terminalAvailableForMachine(machine.id) ? {} : {
           terminal: this.workspaceTerminal(pluginId, workspace, machine.id, navigation),
         }),
-        navigate: (destination) => this.navigate(destination),
+        navigate: (destination, options) => this.navigate(destination, options),
         prompt: this.createPromptEditor(pluginId, machine.id),
         host: this.createWorkspaceHost(),
       }, createContext);
@@ -2322,14 +2345,14 @@ export class PiWebApp extends LitElement {
     const createContext = (
       binding: WorkspacePluginBinding,
       contributionId?: QualifiedContributionId,
-      navigationAliases: readonly QualifiedContributionId[] = [],
+      sourceContributionId: QualifiedContributionId | undefined = contributionId,
     ): WorkspacePanelContext => {
       // Retained panel contexts may outlive the visible surface. Terminal and
       // navigation mutations use this token; workspace data refreshes do not.
       const navigation = this.beginNavigationOperation(WORKSPACE_SURFACE_SCOPE);
       const peer = createPluginPeer(binding, workspace, machineId);
       return installWorkspacePanelScope({
-        navigate: (destination) => this.navigate(destination),
+        navigate: (destination, options) => this.navigate(destination, options),
         machine,
         workspace,
         state: this.state,
@@ -2339,7 +2362,7 @@ export class PiWebApp extends LitElement {
         prompt: this.createPromptEditor(binding.registrationPluginId, machineId),
         terminal: this.workspaceTerminal(binding.registrationPluginId, workspace, machineId, navigation),
         ...(contributionId === undefined ? {} : {
-          navigation: this.createWorkspacePanelNavigation(workspace, machine, contributionId, navigationAliases, contributionQueryRestore, navigation),
+          navigation: this.createWorkspacePanelNavigation(workspace, machine, contributionId, sourceContributionId, contributionQueryRestore, navigation),
         }),
         host: this.createWorkspaceHost(),
       }, createContext);
@@ -2363,15 +2386,16 @@ export class PiWebApp extends LitElement {
     workspace: Workspace,
     machine: PluginMachine,
     contributionId: QualifiedContributionId,
-    navigationAliases: readonly QualifiedContributionId[],
+    sourceContributionId: QualifiedContributionId | undefined,
     contributionQueryRestore: WorkspaceContributionQueryRestore | undefined,
     navigation: NavigationFreshness,
   ): WorkspacePanelNavigationV1 {
+    const sourceQueryIds = sourceContributionId === undefined || sourceContributionId === contributionId ? [] : [sourceContributionId];
     const identity: WorkspaceRouteIdentity = { machineId: machine.id, projectId: workspace.projectId, workspaceId: workspace.id };
     const query = contributionQueryRestore !== undefined && sameWorkspaceRouteIdentity(identity, contributionQueryRestore.identity)
-      ? contributionQueryFromRecord(contributionQueryRestore.query, contributionId, navigationAliases)
+      ? contributionQueryFromRecord(contributionQueryRestore.query, contributionId, sourceQueryIds)
       : routeMatchesWorkspaceIdentity(readRoute(), identity)
-        ? readContributionQuery(contributionId, navigationAliases)
+        ? readContributionQuery(contributionId, sourceQueryIds)
         : Object.freeze({});
     let expectedQuery = query;
     return Object.freeze({
@@ -2385,9 +2409,9 @@ export class PiWebApp extends LitElement {
         if (selectedIdentity === undefined
           || !sameWorkspaceRouteIdentity(identity, selectedIdentity)
           || !routeMatchesWorkspaceIdentity(readRoute(), identity)
-          || !sameContributionQueryRecord(readContributionQuery(contributionId, navigationAliases), expectedQuery)) return false;
-        if (setContributionQueryKey(contributionId, navigationAliases, key, value, options)) {
-          expectedQuery = readContributionQuery(contributionId, navigationAliases);
+          || !sameContributionQueryRecord(readContributionQuery(contributionId, sourceQueryIds), expectedQuery)) return false;
+        if (setContributionQueryKey(contributionId, sourceQueryIds, key, value, options)) {
+          expectedQuery = readContributionQuery(contributionId, sourceQueryIds);
           this.rememberCurrentMachineNavigation();
           this.requestUpdate();
         }
@@ -2824,7 +2848,7 @@ export class PiWebApp extends LitElement {
       openModelPicker: () => this.openModelDialog(),
       openThinkingLevelPicker: () => this.openThinkingDialog(),
       selectMainView: (view) => { this.selectMainView(view); },
-      navigate: (destination) => this.navigate(destination),
+      navigate: (destination, options) => this.navigate(destination, options),
       selectWorkspaceTool: (tool) => { this.openWorkspaceTool(tool); },
       openTerminal: (options) => { this.openTerminal(options); },
       refreshFiles: () => this.invalidateSelectedWorkspaceFiles(),
@@ -3502,7 +3526,7 @@ export class PiWebApp extends LitElement {
         getText: () => isCurrent() ? prompt.getText() : "",
         getSelection: () => isCurrent() ? prompt.getSelection() : null,
       },
-      navigate: (destination) => this.navigate({ ...destination, machineId: destination.machineId ?? machineId }),
+      navigate: (destination, options) => this.navigate(destination, options, machineId),
       projects: createPluginProjects(projectsApi, machineId),
       ...(workspace === undefined || workspaceSnapshot === undefined ? {} : {
         workspace: workspaceSnapshot,
@@ -3808,18 +3832,12 @@ function selectedChatIdentity(state: Pick<AppState, "selectedMachine" | "selecte
   return session === undefined ? undefined : unreadChatIdentity(selectedMachineId(state), session);
 }
 
-function sessionMatchesRouteTarget(selectedSessionId: string | undefined, requestedSessionId: string): boolean {
-  return selectedSessionId === requestedSessionId || selectedSessionId?.startsWith(requestedSessionId) === true;
-}
-
 function browserErrorContextForRoute(
   state: Pick<AppState, "selectedSession">,
   route: Pick<ParsedAppRoute, "machineId" | "projectId" | "workspaceId" | "sessionId">,
 ): ReturnType<typeof browserErrorContext> {
   const selectedSession = state.selectedSession;
-  const sessionId = route.sessionId !== undefined && sessionMatchesRouteTarget(selectedSession?.id, route.sessionId)
-    ? selectedSession?.id
-    : route.sessionId;
+  const sessionId = route.sessionId;
   return {
     machineId: route.machineId ?? "local",
     ...(route.projectId === undefined ? {} : { projectId: route.projectId }),

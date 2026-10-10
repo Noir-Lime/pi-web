@@ -9,6 +9,7 @@ This guide explains what is possible and what to expect. For implementation, use
 | Goal | Plugin feature |
 | --- | --- |
 | Show project health, service links, or environment information | Workspace labels and panels |
+| Identify a conversation's workflow and link to its saved context | Session-list labels and public session metadata |
 | Add a dashboard, file viewer, or project-specific tool | Workspace panels, file helpers, and browser UI |
 | Make common actions easier to find | Action-palette commands and shortcuts |
 | Act on a chat message | Message-action callbacks |
@@ -86,6 +87,32 @@ export default {
 
 The returned unsubscribe function is idempotent and can be called as soon as observation is no longer needed. The host also stops subscriptions when the plugin lifetime ends, including failed activation/start rollback; retaining the service cannot start a new subscription after that point. A throwing or rejected subscriber is logged with its plugin identity without blocking other subscribers. For rendering alone, use the panel's fresh `state` instead of subscribing. `selection` is optional on older hosts; update PI WEB when the service is needed.
 
+### Read public session metadata
+
+Session snapshots can include optional `metadata`: JSON objects keyed by a package/plugin namespace, for example `metadata["example.workflow"]`. This is explicitly browser-public data saved with the conversation, available in listings and after reopening without a live Pi messaging connection. Snapshots are detached from host state. Missing metadata means no public data is available; it is not inferred from the title or conversation text.
+
+Only deliberately published session metadata is exposed, not arbitrary Pi custom entries. Keep secrets and private extension state out of it. Namespaces organize data rather than enforce ownership or authorization, and plugins must validate their own schema and render values as untrusted input. Browser API v4 remains unchanged; older hosts omit the field.
+
+### Dispatch a session from a Pi extension
+
+Trusted Pi extensions hosted by PI WEB can emit `pi-web:session-dispatch:v1` on their session-local `pi.events` bus. Pass `{ input, accept }`; the host synchronously calls `accept(promise)` with a promise for `{ sessionId, cwd, model? }`. If no callback runs before `emit()` returns, this host lacks the bridge: report that no dispatch occurred rather than waiting or retrying. Await the accepted promise to observe validation/startup failures. This in-process callback protocol is for extensions, not browser JSON messaging.
+
+`input` requires a non-empty `prompt` (at most 64 KiB of UTF-8). Optional fields are `cwd` (a workspace of the same registered project), `name` (a trimmed, non-empty display name of at most 60 characters with no control characters), `metadata` (namespaced public JSON objects, at most 16 KiB), `model` (exact `provider/model-id`), and `thinkingLevel`. No caller-supplied session identity or inherited model object is accepted. Omit model/thinking overrides to inherit from the dispatching session; set overrides only when instructed. Pi clamps valid thinking levels to the chosen model.
+
+The host validates and snapshots metadata, installs metadata and name before extensions, publication and the first prompt, and returns an independent session. Dispatch obeys the same global and tracked-child delegation gates as `spawn_session`; it is not a bypass. The model-visible `spawn_session` schema remains unchanged. Loading this host capability after an upgrade requires a manual session-daemon restart when safe; restarting interrupts active sessions and terminals.
+
+### Add indicators to session-list rows
+
+Contribute `sessionLabels` to label individual conversations, including unselected and archived rows. Each contribution has a local `id`, optional `order` and `visible(context)`, and `items(context)`. Items support `{ type: "text", text, title? }`, `{ type: "link", text, href, title?, target? }`, and `{ type: "render", render }`, where `render()` returns a Lit template. Contributions are ordered by `order` then qualified ID, with the same machine availability and portable/machine-specific precedence as workspace labels.
+
+`SessionLabelContext.session` is the row's detached basic snapshot (`id`, `cwd`, optional `name` and `metadata`, `archived`, `pending`), not necessarily `state.selectedSession`. The context supplies the row's `machine` and `workspace`, basic selection `state`, file/project helpers, any package-paired `peer`, `navigate`, and `host.requestRender()`. It exposes no transcript or private session-file path. Read your namespace and validate its schema before showing membership; no live Pi connection is required.
+
+Keep `visible` and `items` synchronous and side-effect-free. Own asynchronous loading in a component and request a refresh through `host.requestRender()`. Links open a new tab by default with `noopener noreferrer`; HTTP(S), mail, and telephone links are allowed, while unsafe schemes display plain text. Custom buttons and links can use `context.navigate()` from event handlers without selecting the row. Session-label navigation defaults to the context's captured machine; supply the workspace and tool explicitly to open an exact item, using the query support below.
+
+If `visible` or `items` throws, the host skips that contribution for the row; if an item's `render()` throws, it skips only that item. Failures are logged in the browser console with the contribution, session, and machine identity, while the session list stays usable. Callbacks are tried again on the next render.
+
+Indicators appear only on session-list rows, not the top Session pill or transcript bubbles. Browser API v4 is unchanged; older hosts ignore `sessionLabels`, so update PI WEB to use them.
+
 ### Discover projects on the context's machine
 
 Action, application-panel, and workspace contexts supply read-only `projects` access directly. `listProjects()` returns registered projects with `id`, `name`, and `path`; `suggestDirectories(query)` returns directory suggestions with `path`, using the same path-search rules as the host's Add Project picker. Discovery works without a selected project or workspace. Call these asynchronous methods from an action, event handler, or component that owns loading and error display, not from the synchronous panel render itself.
@@ -141,11 +168,26 @@ A workspace panel can opt in with `fileOpenQuery(context, path)`. This synchrono
 
 ### Panel and tab navigation
 
+**Panel ID migration.** `routeAliases` and `navigationAliases` have been removed from application and workspace panel contributions. Remove these options from plugins; declarations that still supply them fail registration. Update saved links to the current qualified contribution ID and its query namespace. Short tool names such as `files` and historical IDs such as `core:workspace.files` or `core:workspace.terminal` no longer select the bundled panels; use `pi-web.files:workspace.files` and `pi-web.terminal:workspace.terminal`. Remote plugins still use the host's source-to-runtime ID mapping; this is not an author-configurable alias mechanism. Action `shortcutAliases` are unchanged.
+
 The URL's `view` selects a responsive panel: `navigation`, `chat`, or `workspace`. The independent `tool` parameter selects an application or workspace tab by contribution ID. Opening a workspace tool sets `view=workspace` and `tool` to its ID; switching to chat keeps the selected tool. Contribution IDs are not accepted in `view`. Browser plugins use `selectMainView("workspace")` to show the workspace panel without changing its selected tab, or `selectWorkspaceTool(panelId)` to select and show a particular tool.
 
 Invalid values remain in the URL rather than triggering a redirect. An invalid `view` shows a warning and displays navigation on mobile; on two-column layouts, navigation remains alongside a valid requested tool or, otherwise, chat. Desktop keeps its normal columns. A valid workspace view with an invalid tool shows an unavailable-tab message inside the workspace panel, without selecting another tab or adding a duplicate warning. Omitted parameters use defaults and are not errors.
 
-Action, application-panel, and workspace-panel contexts expose `navigate(destination): Promise<void>` for complete destinations. For a selected workspace:
+Action, message-action, application-panel, workspace-panel, and session-label contexts expose `navigate(destination, options?: PluginNavigationOptions): Promise<void>` to open a complete destination or patch the current URL:
+
+```ts
+interface PluginNavigationOptions {
+  mode?: "replace" | "patch";
+  history?: "push" | "replace";
+}
+```
+
+The defaults are `mode: "replace"` and `history: "push"`, preserving existing behavior. All destination fields are optional: `machineId`, `projectId`, `workspaceId`, `sessionId`, `view` (`navigation`, `chat`, or `workspace`), `tool` (a qualified contribution ID), and `query` (local tool-query keys).
+
+**Session IDs.** Browser URLs, plugin navigation, and PI WEB session APIs use exact, case-sensitive IDs. Pass the full `session.id` returned by the session catalog or creation response. Abbreviated IDs produce a missing-session destination instead of matching or expanding a prefix; update old shortened links and integrations to use full IDs. Short IDs shown in labels are display-only.
+
+**Complete destinations (`mode: "replace"`).** Omitted location, tool, and view fields use normal host restoration defaults rather than copying the current URL's session, tool, or contribution query. Those defaults can select a remembered session. Omitted `machineId` means the machine selected at invocation, except session-label and message-action contexts use their captured machine. Supply the project/workspace scope when opening a known session; the host does not search for IDs or create missing destinations. For a selected workspace:
 
 ```ts
 await context.navigate({
@@ -157,9 +199,56 @@ await context.navigate({
 });
 ```
 
-All destination fields are optional: `machineId`, `projectId`, `workspaceId`, `sessionId`, `view` (`navigation`, `chat`, or `workspace`), and `tool` (a qualified contribution ID). Omitted `machineId` means the machine selected when called. This is not a route patch: omitted fields use normal host restoration defaults rather than copying the current route's session, tool, or contribution query. Those defaults can select a remembered session. Supply the project/workspace scope when opening a known session; the host does not search for IDs or create missing destinations.
+**Route patches (`mode: "patch"`).** A patch starts from the current URL at invocation, not a potentially stale component-state snapshot. Omitted or `undefined` fields preserve their URL values; session-label and message-action contexts still default to their captured machine. Scope changes follow these rules:
+
+- Changing machine clears inherited project, workspace, session, tool, and all contribution query.
+- Changing project clears inherited workspace, session, and all contribution query.
+- Changing workspace clears inherited session and all contribution query.
+
+Explicit child fields supplied in the destination win over these clearing rules. Tool and view are retained across project/workspace changes; a machine change clears the inherited tool but retains view. In patch mode only, `null` clears a route field; `machineId: null` resets to the local machine. Removing URL fields still invokes normal host restoration defaults: clearing `sessionId`, for example, is not a promise to deselect a remembered session.
+
+For TypeScript consumers, `PluginNavigationDestination` retains non-null fields. Use `PluginNavigationPatchDestination` for a patch containing `null`; the `navigate` overload requires explicit `{ mode: "patch" }` options for that type. This distinction does not change the runtime preservation, clearing, or restoration behavior described above.
+
+**Tool queries.** Add `query` with the tool's **local** keys, for example `query: { item: "saved-item-id" }`. The host namespaces and encodes the values and exposes them through the target panel's `context.navigation.query`, including after browser history restoration. Values can be strings, numbers, booleans, or arrays of those values; existing panel-query limits apply. Invalid keys, values, or scope reject before navigation.
+
+In replace mode, a query requires explicit `tool`, `projectId`, and `workspaceId` and replaces **all** contribution query. In patch mode, the host validates the effective target tool/project/workspace after applying the route patch; these fields may be inherited from the URL. It merges only the supplied local keys into the target tool's namespace: omitted keys remain and `null` query values remove keys. Unrelated tools' query state is retained only within the same machine/project/workspace. A scope change discards the old contribution query before applying the supplied query.
+
+**Browser history.** `history: "replace"` replaces the current history entry instead of pushing a new one. It is independent of mode: `mode: "replace"` controls destination semantics, not history. Either mode can push or replace history.
+
+For a URL with a project and workspace, open a tab and its saved context without changing the conversation, replacing the history entry:
+
+```ts
+await context.navigate({
+  tool: "example:workspace.review",
+  view: "workspace",
+  query: { item: savedItemId, filter: null },
+}, { mode: "patch", history: "replace" });
+```
+
+Open a session in the current URL's workspace, retaining its tool and contribution query:
+
+```ts
+await context.navigate({
+  sessionId: sourceSessionId,
+  view: "chat",
+}, { mode: "patch" });
+```
+
+Open a known session in another workspace with explicit scope, also suitable for a cross-machine target:
+
+```ts
+await context.navigate({
+  machineId: targetMachineId,
+  projectId: targetProjectId,
+  workspaceId: targetWorkspaceId,
+  sessionId: sourceSessionId,
+  view: "chat",
+}, { mode: "patch" });
+```
 
 The promise settles after host restoration, or normally when newer navigation supersedes it. Missing or unavailable destinations use the normal host UI and do not also reject the promise. Malformed argument types and invalid `view` values reject with `TypeError` before changing the URL or UI. Captain's Log uses this API for **Open source session** on translations that record a source session.
+
+Older hosts ignore the options argument and still treat the destination as a complete replacement; upgrade PI WEB before relying on patch behavior or history replacement. Hosts without destination-query support also ignore `query`; upgrade before relying on exact item selection.
 
 ### Message actions
 
@@ -301,9 +390,13 @@ Open the **Tasks** tab to run a command in a workspace terminal. Tasks can also 
 
 The shipped Relay package adds `/relay` and `/relay-worktree` to clarify a goal and its boundaries with you, then dispatch after explicit approval. Each fresh session chooses the next useful slice, records progress, and hands off until the finish line is reached or human help is needed. Project instructions and skills govern the work; the development route remains adaptive. The runner requires a fresh-context review of the whole result before completion, with at most three attempts total. Further attempts follow concrete corrections; unresolved blockers after the third stop the relay for human help. These are limits, not three mandatory reviews.
 
-The read-only **Relays** tab shows the goal (`charter.md`), current baton (`status.md`), and history (`log.md`) under `.pi-web/relays/`. An optional `decisions.md` keeps consequential decisions and their reasons outside the baton; revisions are recorded in the log. The tab does not start or edit a relay. `/relay` uses the current checkout by default; `/relay-worktree` prepares a fresh worktree.
+The package's `dispatch_relay` tool takes `packet` (saved directory), `leg` (a string identity such as `"2"` or `"R1-a"`; non-string values are rejected, not converted), and optional `cwd` (target workspace), `model` and `thinkingLevel` overrides. It validates non-empty UTF-8 `charter.md`, `status.md` and `log.md` files inside the target workspace (up to 256 KiB each), generates the handover instructions, and records explicit public Relay membership and a predictable session name. The charter supplies the goal; saved `status.md` is the actual baton. Save progress, gaps, decisions and blockers there before dispatch; no separate handover prompt is accepted. Dispatch is the final operational action. Packet validation is not proof of human approval; initial dispatch still requires your explicit approval.
 
-PI WEB installs Relay automatically for the active agent profile if it is not configured. Removing it through **Settings → Pi packages** is remembered; it will not be silently reinstalled. Reinstall from **Available packages** if you change your mind. Disabling just the Relays plugin hides its tab but leaves its agent resources available.
+The read-only **Relays** tab lists packets under `.pi-web/relays/` and shows the goal (`charter.md`), current baton (`status.md`), and history (`log.md`). An optional `decisions.md` keeps consequential decisions and their reasons outside the baton; revisions are recorded in the log. The tab does not start or edit a relay. `/relay` uses the current checkout by default; `/relay-worktree` prepares a fresh worktree.
+
+The Relay plugin also adds a clickable session-list row indicator from saved Relay metadata. It opens the exact packet in **Relays** on that row's machine and workspace, including user-chosen packet locations inside the workspace. It works without a live Pi connection. Older sessions without Relay metadata are not identified from titles or handover prose.
+
+PI WEB installs Relay automatically for the active agent profile if it is not configured. Removing it through **Settings → Pi packages** is remembered; it will not be silently reinstalled. Reinstall from **Available packages** if you change your mind. Disabling just the Relays plugin hides its tab and row indicators but leaves its agent resources available.
 
 ### Try Captain's Log
 
