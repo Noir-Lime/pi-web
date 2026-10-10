@@ -256,6 +256,14 @@ export class ChatView extends LitElement {
   private loadMoreRequested = false;
   private readonly onViewportResize = () => { this.scrollFlows.onViewportResize(); };
   private readonly handleScroll = () => { this.scrollFlows.onScroll(); };
+  // Native details toggles do not bubble; capture layout changes independently
+  // of the listener that remembers a group's disclosure choice.
+  private readonly handleDisclosureToggle = {
+    capture: true,
+    handleEvent: (event: Event): void => {
+      if (event.target instanceof HTMLDetailsElement) this.scrollFlows.onContentLayoutChanged();
+    },
+  };
   private readonly handleWheel = (event: WheelEvent) => {
     if (event.deltaY !== 0) this.scrollFlows.onInteraction();
     if (event.deltaY < 0) this.scrollFlows.onUpIntent();
@@ -414,6 +422,7 @@ export class ChatView extends LitElement {
       <div class=${this.behaviors.visualEffects ? "chat-wrap" : "chat-wrap plain"}>
         <div class="chat" @image-open=${(event: CustomEvent<ImageOpenDetail>) => { this.openImageZoom(event.detail.src, event.detail.alt); }}
           @scroll=${this.behaviors.rememberPosition || this.behaviors.followTail || this.behaviors.automaticHistory ? this.handleScroll : undefined}
+          @toggle=${this.behaviors.followTail ? this.handleDisclosureToggle : undefined}
           @wheel=${this.handlesScrollIntent ? this.handleWheel : undefined}
           @touchstart=${this.handlesScrollIntent ? this.handleTouchStart : undefined}
           @touchmove=${this.handlesScrollIntent ? this.handleTouchMove : undefined}

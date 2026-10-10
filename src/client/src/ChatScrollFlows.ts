@@ -390,6 +390,11 @@ export class ChatScrollFlows {
     if (!this.disposed && this.host.getBehaviors().followTail) this.tail.pause();
   }
 
+  onContentLayoutChanged(): void {
+    if (this.disposed || this.position.restoring) return;
+    this.tail.schedule();
+  }
+
   onViewportResize(): void {
     if (this.disposed) return;
     if (this.position.restoring) this.position.retry(false);

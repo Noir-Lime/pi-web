@@ -4,6 +4,7 @@ import { DEFAULT_CHAT_BEHAVIORS, type ChatBehaviors } from "../chatBehaviors";
 import { MANUAL_CHAT_BEHAVIORS } from "../chatBehaviors.testSupport";
 import { groupStorageKey } from "../chatDisclosure";
 import { ChatView } from "./ChatView";
+import { controlledChatViewport } from "./chatScroll.testSupport";
 import type { ChatLine } from "./shared";
 import type { TranscriptImage } from "./TranscriptImage";
 import { nativeImage, settleImage } from "./imagePresentation.testSupport";
@@ -85,6 +86,55 @@ describe("composable normal chat", () => {
     expect(required(group, "pi-web-transcript-image")).toBe(image);
     expect(render).not.toHaveBeenCalled();
     expect(localStorage.getItem(groupStorageKey(view.sessionId))).not.toBeNull();
+  });
+
+  it.each([true, false])("follows native group and nested toggles without rerendering (remember choices: %s)", async (rememberDisclosures) => {
+    const view = await mount({ ...DEFAULT_CHAT_BEHAVIORS, rememberDisclosures });
+    const { metrics, write } = controlledChatViewport(view);
+    flushFrames(); await view.updateComplete;
+    write.mockClear();
+    const render = vi.spyOn(view, "render");
+    const group = required(view.renderRoot, ".event-group");
+    const nested = required(group, ".group-body details.part");
+    if (!(group instanceof HTMLDetailsElement) || !(nested instanceof HTMLDetailsElement)) throw new Error("Expected native disclosures");
+
+    group.open = true; metrics.height = 2500;
+    group.dispatchEvent(new Event("toggle", { bubbles: false }));
+    expect(write).not.toHaveBeenCalled();
+    flushFrames();
+    expect(write).toHaveBeenNthCalledWith(1, 2500);
+
+    nested.open = true; metrics.height = 3000;
+    nested.dispatchEvent(new Event("toggle", { bubbles: false }));
+    flushFrames();
+    expect(write).toHaveBeenNthCalledWith(2, 3000);
+
+    group.open = false; metrics.height = 2000;
+    metrics.top = Math.min(metrics.top, metrics.height - 300); // Native collapse can clamp the viewport.
+    group.dispatchEvent(new Event("toggle", { bubbles: false }));
+    flushFrames(); await view.updateComplete;
+    expect(write).toHaveBeenNthCalledWith(3, 2000);
+    expect(write).toHaveBeenCalledTimes(3);
+    expect(required(view.renderRoot, '[aria-label="Jump to end"]').classList.contains("following")).toBe(true);
+    expect(render).not.toHaveBeenCalled();
+  });
+
+  it.each(["paused", "disabled"])("leaves disclosure layout alone when following is %s", async (mode) => {
+    const view = await mount({ ...DEFAULT_CHAT_BEHAVIORS, followTail: mode !== "disabled" });
+    const { metrics, write } = controlledChatViewport(view);
+    flushFrames();
+    if (mode === "paused") required(view.renderRoot, ".chat").dispatchEvent(new WheelEvent("wheel", { deltaY: -10 }));
+    await view.updateComplete;
+    metrics.top = 400; write.mockClear();
+    const group = required(view.renderRoot, ".event-group");
+    if (!(group instanceof HTMLDetailsElement)) throw new Error("Expected native disclosure");
+    group.open = true; metrics.height += 500;
+    group.dispatchEvent(new Event("toggle", { bubbles: false }));
+    flushFrames(); await view.updateComplete;
+    expect(write).not.toHaveBeenCalled();
+    expect(metrics.top).toBe(400);
+    expect(frames.size).toBe(0);
+    expect(required(view.renderRoot, '[aria-label="Jump to end"]').classList.contains("following")).toBe(false);
   });
 
   it("can disable every scroll/disclosure effect while keeping manual navigation", async () => {

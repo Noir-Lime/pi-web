@@ -127,6 +127,7 @@ describe("ChatScrollFlows composition", () => {
     f.flows.configure();
     f.flows.onScroll();
     f.flows.onUpIntent();
+    f.flows.onContentLayoutChanged();
     f.flows.onViewportResize();
     f.flows.savePosition();
     f.flows.restorePosition();
@@ -199,6 +200,8 @@ describe("ChatScrollFlows composition", () => {
     f.state.anchors = [f.element(400, "m:4")];
     f.storage.seed("s1", { mode: "anchor", anchorId: "m:4", offset: -20 });
     f.start();
+    f.flows.onContentLayoutChanged();
+    expect(f.frames.pending).toBe(1); // Only the selected position's restore frame.
     f.frames.flush();
     expect(f.state.top).toBe(420);
     expect(f.flows.followingLive).toBe(false);
@@ -471,6 +474,43 @@ describe("tail and forms", () => {
     expect(f.state.top).toBe(850);
   });
 
+  it("coalesces layout-change notifications into one cancellable follow-scroll", () => {
+    const f = fixture({ ...MANUAL_CHAT_BEHAVIORS, followTail: true });
+    f.start(); f.frames.flush();
+    f.writeTop.mockClear();
+    f.state.height += 500;
+    f.flows.onContentLayoutChanged();
+    f.flows.onContentLayoutChanged();
+    expect(f.frames.pending).toBe(1);
+    expect(f.writeTop).not.toHaveBeenCalled();
+    f.frames.flush();
+    expect(f.state.top).toBe(1200);
+    expect(f.writeTop).toHaveBeenCalledOnce();
+    expect(f.flows.followingLive).toBe(true);
+
+    f.state.height += 100;
+    f.flows.onContentLayoutChanged();
+    f.flows.onUpIntent(); f.frames.flush();
+    expect(f.state.top).toBe(1200);
+    expect(f.writeTop).toHaveBeenCalledOnce();
+    expect(f.flows.followingLive).toBe(false);
+  });
+
+  it("leaves a paused reading viewport alone after a layout-change notification", () => {
+    const f = fixture();
+    f.start(); f.frames.flush();
+    f.flows.onUpIntent();
+    f.state.top = 200; f.flows.onScroll();
+    f.writeTop.mockClear(); f.host.requestEarlier.mockClear();
+    f.state.height += 500;
+    f.flows.onContentLayoutChanged(); f.frames.flush();
+    expect(f.state.top).toBe(200);
+    expect(f.flows.followingLive).toBe(false);
+    expect(f.writeTop).not.toHaveBeenCalled();
+    expect(f.host.requestEarlier).not.toHaveBeenCalled();
+    expect(f.frames.pending).toBe(0);
+  });
+
   it("does not change modes because layout changed the scroll range or anchored position", () => {
     const f = fixture({ ...MANUAL_CHAT_BEHAVIORS, followTail: true });
     f.start(); f.frames.flush();
@@ -727,6 +767,7 @@ describe("prepend and cleanup", () => {
     f.flows.dispose();
     f.flows.onScroll();
     f.flows.onUpIntent();
+    f.flows.onContentLayoutChanged();
     f.flows.onViewportResize();
     f.flows.configure();
     f.flows.restorePosition();
