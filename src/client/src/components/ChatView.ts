@@ -7,9 +7,10 @@ import type { DisplayedMessageActionAvailabilityContext, MessageActionAvailabili
 import { displayedMessageActionMessage, messageActionMessage, MessageActionAvailabilityCache, type RegisteredMessageAction } from "../plugins/messageActions";
 import { machineSessionKey } from "../machineKeys";
 import { canonicalEntryActionHeaders, chatMessageHasHeader, groupChatMessages, summarizeChatGroup, type ChatGroup } from "../chatGroups";
+import { openTranscriptQuestion, transcriptQuestionOutcomes } from "../chatQuestions";
 import { ChatScrollFlows } from "../ChatScrollFlows";
 import { DEFAULT_CHAT_BEHAVIORS, type ChatBehaviors } from "../chatBehaviors";
-import type { AskUserSubmission, PendingAskUser, PendingExtensionDialog, QueuedSessionMessage, SessionActivity, SessionRef, SessionStatus, SessionWarningSeverity } from "../api";
+import type { AskUserSubmission, PendingExtensionDialog, QueuedSessionMessage, SessionActivity, SessionRef, SessionStatus, SessionWarningSeverity } from "../api";
 import type { ClosedExtensionDialog } from "../appState";
 import {
   notificationAnnouncementLabel,
@@ -204,9 +205,8 @@ export class ChatView extends LitElement {
   @property({ attribute: false }) status?: SessionStatus;
   @property({ attribute: false }) onUseSuggestedInput: ((machineId: string, sessionId: string) => void) | undefined;
   @property({ attribute: false }) activity?: SessionActivity;
-  @property({ attribute: false }) pendingAsk?: PendingAskUser;
   @property({ attribute: false }) askDraftSessionId = "";
-  @property({ attribute: false }) onSubmitAsk?: (askId: string, submission: AskUserSubmission) => void | Promise<void>;
+  @property({ attribute: false }) onSubmitAsk: ((askId: string, submission: AskUserSubmission) => void | Promise<void>) | undefined;
   @property({ attribute: false }) pendingDialogs: PendingExtensionDialog[] = [];
   @property({ attribute: false }) closedDialogs: ClosedExtensionDialog[] = [];
   @property({ attribute: false }) onAnswerDialog?: ExtensionDialogAnswerCallback;
@@ -244,9 +244,12 @@ export class ChatView extends LitElement {
     requestEarlier: () => { this.requestLoadMore(); },
     getOpenForm: (kind) => this.renderRoot.querySelector<HTMLElement>(kind === "dialog"
       ? ".chat > extension-dialog-card.open-dialog-card"
-      : kind === "ask" ? ".chat > ask-user-card"
-      : ".chat > ask-user-card, .chat > extension-dialog-card.open-dialog-card") ?? undefined,
+      : kind === "ask" ? ".chat ask-user-card.open-question-card"
+      : ".chat ask-user-card.open-question-card, .chat > extension-dialog-card.open-dialog-card") ?? undefined,
   });
+  private lastOpenQuestionId: string | undefined;
+  private questionOutcomes = transcriptQuestionOutcomes([]);
+  private questionIds: ReadonlySet<string> = new Set();
   private groupedMessagesInput?: ChatLine[];
   private groupedMessagesStart = 0;
   private groupedMessagesCache: ChatGroup[] = [];
@@ -325,6 +328,11 @@ export class ChatView extends LitElement {
   }
 
   protected override willUpdate(changed: Map<string, unknown>): void {
+    if (changed.has("messages")) {
+      this.questionOutcomes = transcriptQuestionOutcomes(this.messages);
+      this.questionIds = new Set(this.messages.flatMap((line) => line.parts.flatMap((part) => part.type === "askUserQuestion" ? [part.ask.askId] : [])));
+    }
+    if (changed.has("sessionId") || changed.has("machineId")) this.lastOpenQuestionId = undefined;
     if (changed.has("sessionId") || changed.has("machineId")) {
       this.messageActionGeneration += 1;
       this.clearMessageActionFeedback();
@@ -355,13 +363,15 @@ export class ChatView extends LitElement {
   protected override updated(changed: Map<string, unknown>): void {
     if (changed.has("loadingMore") && !this.loadingMore) this.loadMoreRequested = false;
     if (changed.has("hasMore") && !this.hasMore) this.loadMoreRequested = false;
+    const openQuestionId = this.openQuestion()?.askId;
     this.scrollFlows.afterRender({
       sessionChanged: changed.has("sessionId") || changed.has("machineId"),
       contentChanged: this.scrollContentChanged(changed),
       historyChanged: changed.has("messages") || changed.has("messageStart") || changed.has("hasMore") || changed.has("loadingMore") || changed.has("historyReady"),
       openedForm: changed.has("pendingDialogs") && this.isNewOpenDialog(changed.get("pendingDialogs")) ? "dialog"
-        : changed.has("pendingAsk") && this.isNewPendingAsk(changed.get("pendingAsk")) ? "ask" : false,
+        : openQuestionId !== undefined && openQuestionId !== this.lastOpenQuestionId ? "ask" : false,
     });
+    this.lastOpenQuestionId = openQuestionId;
     if (changed.has("notificationInbox") && this.pendingNotificationFocus !== undefined) this.focusPendingNotificationTarget();
     if (changed.has("zoomedImage")) this.syncImageZoomDialog();
   }
@@ -441,7 +451,6 @@ export class ChatView extends LitElement {
           ${this.renderQueuedMessages()}
           ${this.renderSessionActivity()}
           ${this.renderSuggestedInput()}
-          ${this.renderOpenAsk()}
           ${this.renderExtensionDialogs()}
         </div>
         ${this.renderActivityDock()}
@@ -736,18 +745,6 @@ export class ChatView extends LitElement {
     `;
   }
 
-  private renderOpenAsk() {
-    if (this.pendingAsk === undefined) return null;
-    return html`
-      <ask-user-card
-        data-scroll-anchor-id=${`ask:${this.pendingAsk.askId}`}
-        .ask=${this.pendingAsk}
-        .draftSessionId=${this.askDraftSessionId}
-        .onSubmit=${this.onSubmitAsk}
-      ></ask-user-card>
-    `;
-  }
-
   private renderExtensionDialogs() {
     const open = this.pendingDialogs[0];
     if (open === undefined && this.closedDialogs.length === 0) return null;
@@ -838,8 +835,9 @@ export class ChatView extends LitElement {
     const toolOnly = this.isToolExecutionOnlyMessage(message);
     const hasHeader = chatMessageHasHeader(message);
     const shellClass = toolOnly ? "msg tool-execution-shell" : "msg ask-user-record-shell";
+    const question = message.parts.find((part) => part.type === "askUserQuestion");
     return html`
-      <article class=${hasHeader ? `msg ${message.role}` : shellClass} data-index=${index} data-scroll-anchor-id=${this.messageAnchorKey(index)}>
+      <article class=${hasHeader ? `msg ${message.role}` : shellClass} data-index=${index} data-scroll-anchor-id=${question === undefined ? this.messageAnchorKey(index) : `ask:${question.ask.askId}`}>
         ${hasHeader ? this.renderMessageHeader(message, String(index), index, entryActionHeaders) : null}
         ${message.parts.map((part, partIndex) => this.renderPart(part, message, index, partIndex))}
       </article>
@@ -1010,10 +1008,21 @@ export class ChatView extends LitElement {
         <small>read ${part.path}</small>
       </div>
     `;
+    if (part.type === "askUserQuestion") {
+      const open = this.openQuestion()?.askId === part.ask.askId;
+      return html`<ask-user-card
+        class=${open ? "part open-question-card" : "part closed-question-card"}
+        .ask=${part.ask} .open=${open}
+        .outcomes=${this.questionOutcomes.get(part.ask.askId) ?? []}
+        .draftSessionId=${this.askDraftSessionId}
+        .onSubmit=${open ? this.onSubmitAsk : undefined}
+      ></ask-user-card>`;
+    }
     if (part.type === "askUserRecord") return html`
       <ask-user-card
         class="part"
         .outcome=${part.outcome}
+        .compact=${this.questionIds.has(part.outcome.askId)}
         .draftSessionId=${this.askDraftSessionId}
       ></ask-user-card>
     `;
@@ -1046,7 +1055,7 @@ export class ChatView extends LitElement {
   }
 
   private scrollContentChanged(changed: Map<string, unknown>): boolean {
-    return changed.has("messages") || changed.has("pendingAsk") || changed.has("pendingDialogs") || changed.has("closedDialogs");
+    return changed.has("messages") || changed.has("historyReady") || changed.has("messageEnd") || changed.has("messageTotal") || changed.has("onSubmitAsk") || changed.has("pendingDialogs") || changed.has("closedDialogs");
   }
 
   private requestLoadMore(): void {
@@ -1055,9 +1064,13 @@ export class ChatView extends LitElement {
     this.onLoadMore();
   }
 
-  private isNewPendingAsk(previous: unknown): boolean {
-    return this.pendingAsk !== undefined
-      && (typeof previous !== "object" || previous === null || Reflect.get(previous, "askId") !== this.pendingAsk.askId);
+  private openQuestion() {
+    return openTranscriptQuestion(this.messages, {
+      historyReady: this.historyReady,
+      messageEnd: this.messageEnd,
+      messageTotal: this.messageTotal,
+      writable: this.onSubmitAsk !== undefined,
+    });
   }
 
   private isNewOpenDialog(previous: unknown): boolean {

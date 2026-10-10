@@ -21,8 +21,13 @@ export function groupChatMessages(messages: ChatLine[], indexOffset = 0): ChatGr
   };
 
   messages.forEach((message, index) => {
-    const readableParts = message.parts.filter((part) => isReadablePart(message, part));
-    const technicalParts = message.parts.filter((part) => !isReadablePart(message, part));
+    const visibleParts = message.parts.filter((part) => part.type !== "toolResultBoundary" && part.type !== "empty");
+    if (visibleParts.length === 0) {
+      flushEvents();
+      return;
+    }
+    const readableParts = visibleParts.filter((part) => isReadablePart(message, part));
+    const technicalParts = visibleParts.filter((part) => !isReadablePart(message, part));
 
     const absoluteIndex = indexOffset + index;
     const metadata = { ...(message.entryId === undefined ? {} : { entryId: message.entryId }), ...(message.source === undefined ? {} : { source: message.source }), ...(message.meta === undefined ? {} : { meta: message.meta }) };
@@ -47,7 +52,7 @@ export function groupChatMessages(messages: ChatLine[], indexOffset = 0): ChatGr
 export function chatMessageHasHeader(message: ChatLine): boolean {
   return !(message.parts.length > 0 && (
     (message.role === "tool" && message.parts.every((part) => part.type === "toolExecution"))
-    || message.parts.every((part) => part.type === "askUserRecord")
+    || message.parts.every((part) => part.type === "askUserQuestion" || part.type === "askUserRecord")
   ));
 }
 
@@ -93,6 +98,6 @@ function toolNameFromParts(parts: ChatPart[]): string | undefined {
 
 function isReadablePart(message: ChatLine, part: ChatPart): boolean {
   if (message.source === "compaction" || message.source === "branch_summary") return false;
-  if (part.type === "skillInvocation" || part.type === "skillRead" || part.type === "image" || part.type === "askUserRecord") return true;
+  if (part.type === "skillInvocation" || part.type === "skillRead" || part.type === "image" || part.type === "askUserQuestion" || part.type === "askUserRecord") return true;
   return part.type === "text" && (message.role === "user" || message.role === "assistant" || message.role === "system" || message.role === "bash");
 }

@@ -104,7 +104,7 @@ describe("builtin extension factories load through DefaultResourceLoader", () =>
       ({ session } = await createAgentSession({
         cwd: directory, agentDir: directory, settingsManager, resourceLoader: loader,
         sessionManager: SessionManager.inMemory(directory), modelRuntime, model: testModel(),
-        customTools: [createAskUserToolDefinition({ open: unexpectedRunEndingCall }),
+        customTools: [createAskUserToolDefinition({ createAskId: unexpectedRunEndingCall }),
           ...createSubsessionToolDefinitions(directory, {
             spawn: unexpectedRunEndingCall, list: unexpectedRunEndingCall,
             check: unexpectedRunEndingCall, read: unexpectedRunEndingCall,
