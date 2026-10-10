@@ -48,7 +48,7 @@ describe("PiSessionService media", () => {
     const page = await service.messages(ref);
     expect(page.messages).toEqual([{ ...message, entryId: "selected" }]); // Service/Pi history stays inline.
     const projected = projectBrowserMessageResponse(page, (block) => hub.mediaIndex.reference(ref, block));
-    expect(projected.messages).toEqual([{ ...message, entryId: "selected", content: [{ type: "image", mediaId: idOf(png), mimeType: "image/png", byteSize: Buffer.from(png, "base64").byteLength }] }]);
+    expect(projected.messages).toEqual([{ ...message, entryId: "selected", content: [{ type: "image", mediaId: idOf(png), mimeType: "image/png", byteSize: Buffer.from(png, "base64").byteLength, width: 1, height: 1 }] }]);
     expect(await service.media(ref, idOf(png))).toEqual({ data: Buffer.from(png, "base64"), mimeType: "image/png" });
     expect(await service.media(ref, idOf(other.data))).toEqual({ data: Buffer.from(other.data, "base64"), mimeType: "image/png" });
     expect(hub.mediaIndex.get(ref, idOf(png))).toBeUndefined();
@@ -83,7 +83,7 @@ describe("PiSessionService media", () => {
     fake.session.isStreaming = true;
     fake.emit({ type: "message_start", message: partial });
     const snapshot = projectBrowserTranscriptSnapshot(await service.transcriptSnapshot(ref), (block) => hub.mediaIndex.reference(ref, block));
-    expect(snapshot.partial).toMatchObject({ content: [{ type: "image", mediaId: idOf(png) }, { type: "thinking", thinking: "working" }] });
+    expect(snapshot.partial).toMatchObject({ content: [{ type: "image", mediaId: idOf(png), width: 1, height: 1 }, { type: "thinking", thinking: "working" }] });
     expect(JSON.stringify(snapshot)).not.toContain(png);
     expect(JSON.stringify(snapshot)).not.toContain("secret");
     expect(partial.content).toEqual([image(), { type: "thinking", thinking: "working", thinkingSignature: "secret" }]);

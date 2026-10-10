@@ -1,6 +1,6 @@
 import { css, svg, type TemplateResult } from "lit";
 import type { AskUserOutcome } from "../../../shared/apiTypes";
-import type { SessionMediaReference } from "../../../shared/sessionMedia";
+import type { ImageDimensions, SessionMediaReference } from "../../../shared/sessionMedia";
 import type { SessionWarningSeverity } from "../api";
 
 /** Shared downstream shadow for content passing beneath sticky scroll controls. */
@@ -57,7 +57,7 @@ export interface ToolExecutionPart {
 
 /** A reference never carries base64; inline images remain compatible with older machines. */
 export type ChatImagePart =
-  | { type: "image"; mimeType: string; data: string; mediaId?: never; byteSize?: never }
+  | ({ type: "image"; mimeType: string; data: string; mediaId?: never; byteSize?: never } & Partial<ImageDimensions>)
   | (SessionMediaReference & { data?: never });
 
 export type ChatPart =

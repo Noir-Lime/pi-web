@@ -1,7 +1,7 @@
 import { LitElement, css, html } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import type { SessionRef } from "../../../shared/apiTypes";
-import { isSessionMediaId } from "../../../shared/sessionMedia";
+import { isSessionMediaId, validImageDimensions } from "../../../shared/sessionMedia";
 import { sessionMediaUrl } from "../api/urls";
 import type { ChatImagePart } from "./shared";
 import "./ImagePresentation";
@@ -25,6 +25,7 @@ export class TranscriptImage extends LitElement {
     const source = this.loadingDisabled || this.imagePart === undefined ? undefined : transcriptImageSource(this.imagePart, this.session, this.machineId)?.src;
     return html`<pi-web-image-presentation
       .source=${source} .requestDisabled=${true}
+      .dimensions=${validImageDimensions(this.imagePart?.width, this.imagePart?.height)}
       .pendingLabel=${this.loadingDisabled ? "Image loading disabled" : "Image unavailable"}
       description="attached image" label="attached image"
     ></pi-web-image-presentation>`;

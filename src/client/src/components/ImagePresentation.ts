@@ -1,5 +1,7 @@
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
+import { styleMap } from "lit/directives/style-map.js";
+import type { ImageDimensions } from "../../../shared/sessionMedia";
 
 export interface ImageOpenDetail {
   src: string;
@@ -10,6 +12,7 @@ export interface ImageOpenDetail {
 @customElement("pi-web-image-presentation")
 export class ImagePresentation extends LitElement {
   @property({ attribute: false }) source: string | undefined;
+  @property({ attribute: false }) dimensions: ImageDimensions | undefined;
   @property() description = "";
   @property() label = "";
   @property({ type: Boolean }) requestDisabled = false;
@@ -33,6 +36,7 @@ export class ImagePresentation extends LitElement {
 
   override render() {
     const pending = this.source === undefined || this.source === "";
+    const dimensions = this.dimensions;
     return html`
       <div class="frame">
         <button class="placeholder" type="button" ?hidden=${!pending} ?disabled=${this.requestDisabled}
@@ -43,7 +47,13 @@ export class ImagePresentation extends LitElement {
           aria-label=${`Enlarge ${this.description || "image"}`} title="Click to enlarge"
           @click=${(event: MouseEvent) => { this.open(event); }}
           @keydown=${(event: KeyboardEvent) => { if (event.key === "Enter" || event.key === " ") this.open(event); }}>
-          <img loading="lazy" decoding="async" src=${pending ? nothing : this.source} alt=${this.description} />
+          <img loading="lazy" decoding="async" src=${pending ? nothing : this.source} alt=${this.description}
+            width=${dimensions?.width ?? nothing} height=${dimensions?.height ?? nothing}
+            style=${styleMap(dimensions === undefined ? {} : {
+              "--image-width": `${String(dimensions.width)}px`,
+              "--image-height": `${String(dimensions.height)}px`,
+              "--image-ratio": String(dimensions.width / dimensions.height),
+            })} />
         </button>
       </div>
     `;
@@ -60,5 +70,8 @@ export class ImagePresentation extends LitElement {
     .image-button { display: block; max-width: 100%; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
     [hidden] { display: none !important; }
     img { display: block; max-width: 100%; max-height: var(--pi-image-max-height, none); width: auto; height: auto; object-fit: contain; border-radius: var(--pi-image-radius, 0); }
+    /* A definite width plus the declared ratio reserves the final, height-capped
+       footprint before lazy loading. CSS still handles narrow viewports. */
+    img[width][height] { width: min(var(--image-width), calc(var(--pi-image-max-height, var(--image-height)) * var(--image-ratio))); }
   `;
 }

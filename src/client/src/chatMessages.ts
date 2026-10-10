@@ -1,6 +1,6 @@
 import { ASK_USER_ANSWERS_CUSTOM_TYPE } from "../../shared/apiTypes";
 import { parseAskUserOutcome } from "./api/parsers";
-import { isSessionMediaId } from "../../shared/sessionMedia";
+import { isSessionMediaId, validImageDimensions } from "../../shared/sessionMedia";
 import type { ChatLine, ChatPart, ToolExecutionPart, ToolPreview } from "./components/shared";
 
 export function normalizeMessages(messages: unknown[]): ChatLine[] {
@@ -206,16 +206,17 @@ function normalizeContent(content: unknown, message: unknown): ChatPart[] {
 function normalizeImage(part: unknown): ChatPart[] {
   const mimeType = getString(part, "mimeType");
   const mediaId = getProperty(part, "mediaId");
+  const dimensions = validImageDimensions(getProperty(part, "width"), getProperty(part, "height"));
   if (mediaId !== undefined) {
     const byteSize = getNumber(part, "byteSize");
     if (isSessionMediaId(mediaId)
       && mimeType !== undefined && /^image\/[a-z0-9][a-z0-9.+-]*$/iu.test(mimeType)
       && byteSize !== undefined && Number.isSafeInteger(byteSize) && byteSize >= 0) {
-      return [{ type: "image", mediaId, mimeType, byteSize }];
+      return [{ type: "image", mediaId, mimeType, byteSize, ...dimensions }];
     }
   } else {
     const data = getString(part, "data");
-    if (data !== undefined && data !== "" && mimeType !== undefined && mimeType !== "") return [{ type: "image", mimeType, data }];
+    if (data !== undefined && data !== "" && mimeType !== undefined && mimeType !== "") return [{ type: "image", mimeType, data, ...dimensions }];
   }
   return [{ type: "text", text: "[image]" }];
 }

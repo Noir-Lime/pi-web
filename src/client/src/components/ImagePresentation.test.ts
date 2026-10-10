@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, expect, it, vi } from "vitest";
+import type { ImageDimensions } from "../../../shared/sessionMedia";
 import { ImagePresentation } from "./ImagePresentation";
 import { imageButton, nativeImage } from "./imagePresentation.testSupport";
 
@@ -7,9 +8,10 @@ const source = "https://example.test/first.png";
 
 afterEach(() => { document.body.replaceChildren(); localStorage.clear(); vi.restoreAllMocks(); });
 
-async function mount(initialSource?: string) {
+async function mount(initialSource?: string, dimensions?: ImageDimensions) {
   const presentation = new ImagePresentation();
   presentation.source = initialSource;
+  presentation.dimensions = dimensions;
   presentation.description = "Example screenshot";
   presentation.label = "/private/example.png";
   document.body.append(presentation);
@@ -51,12 +53,40 @@ it.each([undefined, ""])('keeps a native image without a src while pending (%s)'
   expect(request.hidden).toBe(true);
 });
 
+it("declares intrinsic geometry before loading and updates or clears it in place", async () => {
+  const presentation = await mount(source, { width: 1200, height: 800 });
+  const native = nativeImage(presentation);
+  expect(native.getAttribute("width")).toBe("1200");
+  expect(native.getAttribute("height")).toBe("800");
+  expect(native.style.getPropertyValue("--image-width")).toBe("1200px");
+  expect(native.style.getPropertyValue("--image-height")).toBe("800px");
+  expect(native.style.getPropertyValue("--image-ratio")).toBe("1.5");
+
+  presentation.source = "https://example.test/portrait.png";
+  presentation.dimensions = { width: 400, height: 1600 };
+  await presentation.updateComplete;
+  expect(nativeImage(presentation)).toBe(native);
+  expect(native.getAttribute("width")).toBe("400");
+  expect(native.getAttribute("height")).toBe("1600");
+  expect(native.style.getPropertyValue("--image-ratio")).toBe("0.25");
+
+  presentation.dimensions = undefined;
+  await presentation.updateComplete;
+  expect(nativeImage(presentation)).toBe(native);
+  expect(native.hasAttribute("width")).toBe(false);
+  expect(native.hasAttribute("height")).toBe(false);
+  for (const name of ["--image-width", "--image-height", "--image-ratio"]) {
+    expect(native.style.getPropertyValue(name)).toBe("");
+  }
+});
+
 it("leaves load/error display to the browser without renders, layout events or image replacement", async () => {
   const layout = vi.fn();
   const presentation = new ImagePresentation();
   presentation.addEventListener("image-will-layout", layout);
   presentation.addEventListener("image-layout", layout);
   presentation.source = source;
+  presentation.dimensions = { width: 1200, height: 800 };
   document.body.append(presentation);
   await presentation.updateComplete;
   const native = nativeImage(presentation);
@@ -69,6 +99,8 @@ it("leaves load/error display to the browser without renders, layout events or i
     expect(nativeImage(presentation)).toBe(native);
     expect(imageButton(presentation)).toBe(enlarge);
     expect(native.getAttribute("src")).toBe(source);
+    expect(native.getAttribute("width")).toBe("1200");
+    expect(native.getAttribute("height")).toBe("800");
     expect(enlarge.hidden).toBe(false);
     expect(enlarge.disabled).toBe(false);
   }

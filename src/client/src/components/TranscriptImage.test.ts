@@ -4,7 +4,7 @@ import { TranscriptImage, transcriptImageSource } from "./TranscriptImage";
 import { imageButton, nativeImage, settleImage } from "./imagePresentation.testSupport";
 
 const mediaId = "abc012".repeat(10) + "abcd";
-const reference = { type: "image" as const, mediaId, mimeType: "image/png", byteSize: 42 };
+const reference = { type: "image" as const, mediaId, mimeType: "image/png", byteSize: 42, width: 1200, height: 800 };
 const session = { id: "session /?#%", cwd: "/repo with spaces/?#%" };
 
 afterEach(() => {
@@ -34,6 +34,8 @@ describe("native transcript images", () => {
     expect(url.pathname).toBe(`/nested/pi-web/api/machines/remote%20%2F%3F%23%25/sessions/session%20%2F%3F%23%25/media/${mediaId}`);
     expect(url.searchParams.get("cwd")).toBe(session.cwd);
     expect(native.alt).toBe("attached image");
+    expect(native.getAttribute("width")).toBe("1200");
+    expect(native.getAttribute("height")).toBe("800");
     expect(native.getAttribute("loading")).toBe("lazy");
     expect(native.getAttribute("decoding")).toBe("async");
     expect(imageButton(presentation).hidden).toBe(false);
@@ -48,6 +50,14 @@ describe("native transcript images", () => {
     await settleImage(image);
     expect(nativeImage(presentation)).toBe(native);
     expect(native.src).toBe("data:image/jpeg;base64,QUJD");
+    expect(native.hasAttribute("width")).toBe(false);
+    expect(native.hasAttribute("height")).toBe(false);
+
+    image.imagePart = { ...image.imagePart, width: 400, height: 1600 };
+    await settleImage(image);
+    expect(nativeImage(presentation)).toBe(native);
+    expect(native.getAttribute("width")).toBe("400");
+    expect(native.getAttribute("height")).toBe("1600");
   });
 
   it("updates sources and session context in place, including across reconnection", async () => {
@@ -74,6 +84,8 @@ describe("native transcript images", () => {
     await settleImage(image);
     expect(nativeImage(presentation)).toBe(native);
     expect(native.hasAttribute("src")).toBe(false);
+    expect(native.hasAttribute("width")).toBe(false);
+    expect(native.hasAttribute("height")).toBe(false);
   });
 
   it("leaves disclosure loading decisions to the browser instead of gating source assignment", async () => {

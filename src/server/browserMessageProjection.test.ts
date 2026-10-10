@@ -61,7 +61,8 @@ describe("browser message projection", () => {
   });
 
   it("projects images in pages, snapshot partials, and every image-carrying event without URLs or mutation", () => {
-    const image = Object.freeze({ type: "image", data: "AQID", mimeType: "image/png" });
+    const data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=";
+    const image = Object.freeze({ type: "image", data, mimeType: "image/png" });
     const message = { role: "assistant", content: [...signedAssistantMessage().content, image] };
     const original = structuredClone(message);
     const index = new SessionMediaIndex();
@@ -82,7 +83,7 @@ describe("browser message projection", () => {
     const snapshot = { seq: 5, page, partial: message, status: { sessionId: "s1", isStreaming: true, isCompacting: false, isBashRunning: false, pendingMessageCount: 0, queuedMessages: [], tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 } };
     expect(projectBrowserTranscriptSnapshot(snapshot, images)).toEqual({ ...snapshot, page: { ...page, messages: [projectedMessage] }, partial: projectedMessage });
     expect(message).toEqual(original);
-    expect(reference).toMatchObject({ type: "image", mimeType: "image/png", byteSize: 3 });
+    expect(reference).toMatchObject({ type: "image", mimeType: "image/png", byteSize: Buffer.from(data, "base64").byteLength, width: 1, height: 1 });
     expect(reference?.mediaId).toMatch(/^[0-9a-f]{64}$/u);
   });
 });

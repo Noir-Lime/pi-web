@@ -7,7 +7,7 @@ Normal chat follows progress at the tail, remembers reading positions, loads ear
 - `ChatView` renders the transcript, tool actions, forms, and native disclosures. Closed groups keep their body DOM; recording a disclosure choice does not rebuild it. Effectful plugin renderers suspend their work while an ancestor disclosure is closed.
 - `ChatScrollFlows` composes position memory, tail-follow, earlier-history loading, and one-shot prepend anchoring. Each owns and cancels its pending work independently.
 - `chatBehaviors.ts` declares the capabilities injected through `PiWebApp.chatBehaviors` → `ChatView.behaviors`. All are enabled by default. This is an internal composition seam, not user-editable configuration or a diagnostic UI.
-- Native images own fetching/decoding. Outside-workspace Markdown images retain explicit approval: their sources remain unset until approved, whether visible or hidden.
+- Native images own fetching/decoding. Attachment and tool-image references include display-oriented dimensions when their headers are readable, reserving their responsive footprint before position restoration without image-load scroll corrections. Older machines, unreadable headers, and Markdown images retain native intrinsic sizing. Outside-workspace Markdown images retain explicit approval: their sources remain unset until approved, whether visible or hidden.
 
 Scrolling does not update reactive position/index state. Earlier-history loading uses a near-top threshold and an in-flight guard. Prepending can make one height-delta adjustment when the browser/user has not already moved the viewport; it does not repeatedly settle or compensate for later image loads. Manual top/end arrows work independently of automatic flows.
 
