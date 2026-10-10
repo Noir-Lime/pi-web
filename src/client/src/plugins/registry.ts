@@ -5,7 +5,7 @@ import { PluginSelectionHost } from "./selection";
 import { PromptChipStore, type PromptChipTarget } from "../promptChips";
 import type { PluginPromptEditor } from "../../../plugin-api";
 import { compareContentRenderers, contentRendererMatches, snapshotContentRenderer, type ContentRendererChoice, type RegisteredContentRenderer } from "./contentRenderers";
-import { createContentRenderingService, contentRenderingCapabilityToken } from "../formatting/contentRendering";
+import { createContentRenderingCapability, createContentRenderingService, contentRenderingCapabilityToken, type ChatContentRendering } from "../formatting/contentRendering";
 import { requirePluginBackendRevision } from "../../../shared/pluginBackendProtocol";
 import type { ApplicationPanelContext, ApplicationPanelContribution, QualifiedApplicationPanelContribution, PiWebPluginRegistration, PiWebPluginRegistrationDeclaration, PluginAction, PluginActivationContext, PluginActivationResult, PluginCapability, PluginCapabilityProvision, PluginContributions, PluginRuntimeContext, PluginStartContext, QualifiedContributionId, QualifiedPluginAction, QualifiedThemeContribution, QualifiedThemePairContribution, QualifiedWorkspaceLabelContribution, QualifiedWorkspacePanelContribution, QualifiedSessionLabelContribution, SessionLabelContext, SessionLabelContribution, SessionLabelItem, ThemeContribution, ThemePairContribution, WorkspaceInvalidation, WorkspaceLabelContext, WorkspaceLabelContribution, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePanelContribution, WorkspacePluginBinding, WorkspaceResource } from "./types";
 
@@ -145,11 +145,29 @@ export class PluginRegistry {
   }
 
   private readonly contentRenderers: RegisteredContentRenderer[] = [];
-  readonly chatContentRendering = createContentRenderingService((request) => this.matchContentRenderers(request));
-  readonly contentRendering = this.chatContentRendering.capability;
+  private readonly chatContentRenderingViews = new Map<string, { choices: readonly ContentRendererChoice[]; rendering: ChatContentRendering }>();
+  // Plugins retain one live capability; chat receives a reactive rendering snapshot.
+  readonly contentRendering = createContentRenderingCapability((request) => this.matchContentRenderers(request));
+
+  /** Stable input while this machine's eligible renderers are unchanged. */
+  getChatContentRendering(machineId: string): ChatContentRendering {
+    const choices = this.activeContentRendererChoices(machineId);
+    const previous = this.chatContentRenderingViews.get(machineId);
+    if (previous?.choices.length === choices.length
+      && choices.every((choice, index) => choice.renderer === previous.choices[index]?.renderer)) return previous.rendering;
+    const rendering = createContentRenderingService((request) => request.machineId === machineId
+      ? choices.filter(({ renderer }) => contentRendererMatches(renderer, request))
+      : []);
+    this.chatContentRenderingViews.set(machineId, { choices, rendering });
+    return rendering;
+  }
 
   matchContentRenderers(request: ContentRenderRequest): readonly ContentRendererChoice[] {
-    return this.contentRenderers.filter((renderer) => this.isContributionActive(renderer.pluginId, renderer.machineId, request.machineId, renderer.sourcePluginId) && contentRendererMatches(renderer, request))
+    return this.activeContentRendererChoices(request.machineId).filter(({ renderer }) => contentRendererMatches(renderer, request));
+  }
+
+  private activeContentRendererChoices(machineId: string): readonly ContentRendererChoice[] {
+    return this.contentRenderers.filter((renderer) => this.isContributionActive(renderer.pluginId, renderer.machineId, machineId, renderer.sourcePluginId))
       .sort(compareContentRenderers)
       .map((renderer) => ({ id: renderer.id, label: renderer.label, renderer }));
   }
@@ -283,6 +301,7 @@ export class PluginRegistry {
     this.actions.splice(0);
     this.messageActions.splice(0);
     this.contentRenderers.splice(0);
+    this.chatContentRenderingViews.clear();
     this.workspacePanels.splice(0);
     this.applicationPanels.splice(0);
     this.workspaceLabels.splice(0);

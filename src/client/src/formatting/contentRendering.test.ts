@@ -28,7 +28,7 @@ async function mount(text: string, contribution = renderer()) {
   await registry.register({ id: "test", plugin: { apiVersion: 4, name: "Test", activate: () => ({ contributions: { contentRenderers: [contribution] } }) } });
   const element = new FormattedText();
   element.text = text;
-  element.contentRendering = registry.chatContentRendering;
+  element.contentRendering = registry.getChatContentRendering(element.machineId);
   document.body.append(element);
   await element.updateComplete;
   return { element, registry };
@@ -55,6 +55,44 @@ function button(host: ContentRendererHost, label: string): HTMLButtonElement {
 }
 
 describe("shared content rendering", () => {
+  it("renders machine-scoped snapshots and refreshes unavailable renderers through the same input", async () => {
+    let enabled = true;
+    const registry = new PluginRegistry({ isContributionEnabled: () => enabled });
+    await registry.registerBatch(["local", "remote"].map((machineId) => ({
+      id: `${machineId}-diagram`, machineId, machineSpecific: true,
+      plugin: { apiVersion: 4, name: machineId, activate: () => ({ contributions: {
+        contentRenderers: [renderer(({ text }) => html`<div class="diagram">${machineId}: ${text}</div>`)],
+      } }) },
+    })));
+    const element = new FormattedText();
+    element.text = "```diagram\nsource\n```";
+    element.contentRendering = registry.getChatContentRendering("local");
+    document.body.append(element);
+    await element.updateComplete;
+    expect((await hostIn(element)).shadowRoot?.querySelector(".diagram")?.textContent).toBe("local: source");
+
+    // A retained snapshot cannot render against another machine's request.
+    element.machineId = "remote";
+    await element.updateComplete;
+    expect(element.shadowRoot?.querySelector("pi-web-content-renderer")).toBeNull();
+    expect(element.shadowRoot?.querySelector("pre")?.textContent).toBe("source\n");
+    element.contentRendering = registry.getChatContentRendering("remote");
+    await element.updateComplete;
+    expect((await hostIn(element)).shadowRoot?.querySelector(".diagram")?.textContent).toBe("remote: source");
+
+    enabled = false;
+    element.contentRendering = registry.getChatContentRendering("remote");
+    await element.updateComplete;
+    expect(element.shadowRoot?.querySelector("pi-web-content-renderer")).toBeNull();
+    expect(element.shadowRoot?.querySelector("pre")?.textContent).toBe("source\n");
+    enabled = true;
+    element.contentRendering = registry.getChatContentRendering("remote");
+    await element.updateComplete;
+    expect((await hostIn(element)).shadowRoot?.querySelector(".diagram")?.textContent).toBe("remote: source");
+    element.remove();
+    await registry.dispose();
+  });
+
   it("remembers independent duplicate blocks only with an opt-in identity and expires on revisit", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(1000);
     const manual = { ...renderer(), renderMode: "manual" as const };
@@ -88,6 +126,7 @@ describe("shared content rendering", () => {
   it("restores exact renderer and mode, but not across identities, source changes or missing renderers", async () => {
     const { element, registry } = await mount("```diagram\nsource\n```", { ...renderer(), renderMode: "manual" });
     await registry.register({ id: "z", plugin: { apiVersion: 4, name: "Z", activate: () => ({ contributions: { contentRenderers: [{ ...renderer(), renderMode: "manual" }] } }) } });
+    element.contentRendering = registry.getChatContentRendering(element.machineId);
     element.intentKey = "memory-chooser";
     await element.updateComplete;
     const host = await hostIn(element);
@@ -173,10 +212,15 @@ describe("shared content rendering", () => {
     expect(host.shadowRoot?.querySelector("pre")?.textContent).toBe("two");
     button(host, "Render").click();
     await host.updateComplete;
+    const preview = host.shadowRoot?.querySelector("b");
     await registry.register({ id: "other", plugin: { apiVersion: 4, name: "Other", activate: () => ({ contributions: { contentRenderers: [{ ...manual, renderMode: "manual" }] } }) } });
-    element.requestUpdate();
+    element.contentRendering = registry.getChatContentRendering(element.machineId);
     await element.updateComplete;
     await host.updateComplete;
+    expect(element.renderRoot.querySelector("pi-web-content-renderer")).toBe(host);
+    expect(host.shadowRoot?.querySelector("b")).toBe(preview);
+    expect(draw).toHaveBeenCalledTimes(2);
+    expect(draw.mock.calls[1]?.[0].signal.aborted).toBe(false);
     const chooser = host.renderRoot.querySelector("select");
     if (chooser === null) throw new Error("Expected chooser");
     chooser.value = "other:diagram";
@@ -433,7 +477,7 @@ describe("shared content rendering", () => {
     const draw = vi.fn((input: ContentRendererInput) => { inputs.push(input); return html`<b>Alternative</b>`; });
     const { element, registry } = await mount("```diagram\nfirst\n```\n\n```diagram\nsecond\n```");
     await registry.register({ id: "z-other", plugin: { apiVersion: 4, name: "Other", activate: () => ({ contributions: { contentRenderers: [renderer(draw)] } }) } });
-    element.requestUpdate();
+    element.contentRendering = registry.getChatContentRendering(element.machineId);
     await element.updateComplete;
     const host = await hostIn(element);
     const second = element.renderRoot.querySelectorAll<ContentRendererHost>("pi-web-content-renderer")[1];

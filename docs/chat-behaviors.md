@@ -4,6 +4,7 @@ Normal chat follows progress at the tail, remembers reading positions, loads ear
 
 ## Ownership
 
+- `PluginRegistry` owns renderer eligibility and a cached chat rendering view per machine. Its identity changes only when the eligible renderer set changes. `PiWebApp` passes that view through `ChatView` to `FormattedText` as an ordinary reactive input, so late plugin loading reveals diagram controls without navigation or transcript remounting. Initial loading and later updates use the same flow; Mermaid previews remain manually activated.
 - `ChatView` renders the transcript, tool actions, forms, and native disclosures. It captures native transcript disclosure toggles and reports layout changes to `ChatScrollFlows`, independently of remembering disclosure choices. Closed groups keep their body DOM; recording a disclosure choice does not rebuild it. Effectful plugin renderers suspend their work while an ancestor disclosure is closed.
 - `ChatScrollFlows` composes position memory, tail-follow, earlier-history loading, and one-shot prepend anchoring. Each owns and cancels its pending work independently.
 - `chatBehaviors.ts` declares the capabilities injected through `PiWebApp.chatBehaviors` → `ChatView.behaviors`. All are enabled by default. This is an internal composition seam, not user-editable configuration or a diagnostic UI.
