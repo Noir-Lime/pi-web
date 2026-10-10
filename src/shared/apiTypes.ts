@@ -1394,11 +1394,17 @@ export interface ModelScopeChangedEvent {
   revision: number;
 }
 
+export interface WorkspaceChangedEvent {
+  type: "workspaces.changed";
+  projectId: string;
+}
+
 export type GlobalSessionEvent =
   | Extract<SessionUiEventBody, { type: "status.update" | "activity.update" | "session.name" | "session.created" }>
   | SessionNotificationSummaryEvent
   | SessionUnreadEvent
   | SessionStartupProgressEvent
   | ModelScopeChangedEvent
+  | WorkspaceChangedEvent
   | ServerNoticeEvent;
 export type RealtimeEvent = GlobalSessionEvent | MachineStatusUiEvent;
