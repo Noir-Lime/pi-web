@@ -106,6 +106,7 @@ describe("composable normal chat", () => {
   it("does not rerender or enqueue animation frames for steady-state scrolling", async () => {
     const view = await mount();
     const { move } = scrollingViewport(view);
+    flushFrames();
     move(2400); await view.updateComplete;
     frames.clear();
     const render = vi.spyOn(view, "render");
@@ -113,6 +114,66 @@ describe("composable normal chat", () => {
     await view.updateComplete;
     expect(render).not.toHaveBeenCalled();
     expect(frames.size).toBe(0);
+  });
+
+  it("shows live-follow mode and resumes it through the end arrow or returning to the bottom", async () => {
+    const view = await mount();
+    const { chat, move } = scrollingViewport(view, 5700);
+    flushFrames(); await view.updateComplete;
+    const end = required(view.renderRoot, '[aria-label="Jump to end"]');
+    expect(end.getAttribute("aria-describedby")).toBe("chat-follow-state");
+    const state = required(view.renderRoot, "#chat-follow-state");
+    expect(end.classList.contains("following")).toBe(true);
+    expect(state.textContent).toBe("Following live");
+
+    chat.dispatchEvent(new WheelEvent("wheel", { deltaY: -10 }));
+    await view.updateComplete;
+    expect(end.classList.contains("following")).toBe(false);
+    expect(state.textContent).toBe("Live following paused");
+    expect(end.title).toBe("Jump to end and follow live");
+    move(5650); move(5670); await view.updateComplete;
+    expect(end.classList.contains("following")).toBe(false);
+    move(5700); await view.updateComplete;
+    expect(end.classList.contains("following")).toBe(true);
+
+    required(view.renderRoot, '[aria-label="Jump to top"]').click();
+    await view.updateComplete;
+    expect(chat.scrollTop).toBe(0);
+    expect(end.classList.contains("following")).toBe(false);
+    end.click(); await view.updateComplete;
+    expect(chat.scrollTop).toBe(5700);
+    expect(end.classList.contains("following")).toBe(true);
+    end.click(); await view.updateComplete;
+    expect(end.classList.contains("following")).toBe(true);
+
+    view.behaviors = { ...view.behaviors, followTail: false };
+    await view.updateComplete;
+    end.click(); await view.updateComplete;
+    expect(end.classList.contains("following")).toBe(false);
+    expect(end.title).toBe("Jump to end");
+    expect(state.textContent).toBe("Automatic following disabled");
+  });
+
+  it("pauses on an upward touch reversal even before the finger crosses its starting point", async () => {
+    const view = await mount();
+    const { chat } = scrollingViewport(view, 5700);
+    flushFrames(); await view.updateComplete;
+    const end = required(view.renderRoot, '[aria-label="Jump to end"]');
+    const touch = (type: string, y: number) => {
+      chat.dispatchEvent(new TouchEvent(type, { touches: [new Touch({ identifier: 1, target: chat, clientY: y })] }));
+    };
+    touch("touchstart", 100);
+    touch("touchmove", 80);
+    await view.updateComplete;
+    expect(end.classList.contains("following")).toBe(true);
+    touch("touchmove", 90);
+    await view.updateComplete;
+    expect(end.classList.contains("following")).toBe(false);
+    chat.dispatchEvent(new TouchEvent("touchcancel"));
+    end.click(); await view.updateComplete;
+    touch("touchmove", 110);
+    await view.updateComplete;
+    expect(end.classList.contains("following")).toBe(true);
   });
 
   it("propagates the image switch into persistent normal-chat disclosure bodies", async () => {

@@ -377,6 +377,7 @@ export const chatStyles = css`
   .chat { --pi-chat-sticky-top: -26px; flex: 1 1 auto; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 26px 16px 16px; box-sizing: border-box; }
   .chat-jumps { position: absolute; right: 8px; bottom: 6px; z-index: 21; display: flex; gap: 3px; }
   .chat-jumps button { display: inline-grid; place-items: center; width: 24px; height: 22px; padding: 0; border: 1px solid var(--pi-border); border-radius: 4px; background: var(--pi-bg); color: var(--pi-muted); font: 16px/1 system-ui, sans-serif; cursor: pointer; }
+  .chat-jumps button.following { color: var(--pi-accent); border-color: var(--pi-accent); background: var(--pi-selection-bg); }
   .chat-jumps button:hover, .chat-jumps button:focus-visible { color: var(--pi-text-bright); border-color: var(--pi-accent); }
   .chat-jumps button:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 2px; }
   .chat-wrap.plain .msg-header, .chat-wrap.plain .event-group > summary { position: static; top: auto; }

@@ -1,5 +1,5 @@
 import type { ChatBehaviors } from "./chatBehaviors";
-import { ChatScrollController, isNearScrollBottom, type ChatScrollPosition, type ChatScrollScheduler, type ChatScrollStorage } from "./chatScrollPosition";
+import { ChatScrollController, type ChatScrollPosition, type ChatScrollScheduler, type ChatScrollStorage } from "./chatScrollPosition";
 
 export interface ChatScrollFlowsHost {
   getScroller(): HTMLDivElement | undefined;
@@ -12,6 +12,7 @@ export interface ChatScrollFlowsHost {
   requestEarlier(): void;
   canRequestEarlier(): boolean;
   getOpenForm(kind?: "ask" | "dialog"): HTMLElement | undefined;
+  onFollowingChange?(following: boolean): void;
 }
 
 export interface ChatScrollFrameScheduler {
@@ -46,9 +47,17 @@ function canLoadEarlier(host: ChatScrollFlowsHost): boolean {
   return host.hasMore() && !host.isLoadingMore() && host.canRequestEarlier();
 }
 
+const BOTTOM_TOLERANCE_PX = 2;
+
+interface TailScrollPosition {
+  top: number;
+  maxTop: number;
+  overscrollBottom: number | undefined;
+}
+
 class TailFlow {
-  pinned = true;
-  private lastTop: number | undefined;
+  private following = false;
+  private lastPosition: TailScrollPosition | undefined;
   private frame: number | undefined;
   private alignForm: boolean | "ask" | "dialog" = false;
   private enabled: boolean;
@@ -57,58 +66,106 @@ class TailFlow {
     this.enabled = host.getBehaviors().followTail;
   }
 
+  get followingLive(): boolean {
+    return this.following;
+  }
+
   configure(): void {
     const enabled = this.host.getBehaviors().followTail;
-    if (!enabled) this.cancel();
-    else if (!this.enabled) this.refreshPin();
+    if (!enabled) this.pause();
+    else if (!this.enabled) this.syncFollowingAfterNavigation();
     this.enabled = enabled;
   }
 
-  refreshPin(): void {
+  /** Navigation and capability changes may choose a mode; ordinary layout changes may not. */
+  syncFollowingAfterNavigation(): void {
     if (!this.host.getBehaviors().followTail) return;
-    const scroller = this.host.getScroller();
-    if (scroller === undefined) return;
-    this.lastTop = scroller.scrollTop;
-    this.pinned = isNearScrollBottom(scroller);
+    const position = this.readPosition();
+    if (position === undefined) return;
+    this.lastPosition = position;
+    this.setFollowing(position.maxTop - position.top < BOTTOM_TOLERANCE_PX);
+  }
+
+  recordScrollBaseline(): void {
+    if (this.host.getBehaviors().followTail) this.lastPosition = this.readPosition();
   }
 
   onScroll(): void {
     if (!this.host.getBehaviors().followTail) return;
-    const scroller = this.host.getScroller();
-    if (scroller === undefined) return;
-    const upward = this.lastTop !== undefined && scroller.scrollTop < this.lastTop;
-    this.lastTop = scroller.scrollTop;
-    this.pinned = !upward && isNearScrollBottom(scroller);
-    if (!this.pinned) this.cancel();
+    const position = this.readPosition({ preserveOverscroll: true });
+    if (position === undefined) return;
+    const previous = this.lastPosition;
+    this.lastPosition = position;
+    if (previous?.maxTop !== position.maxTop) return;
+    const atBottom = position.maxTop - position.top < BOTTOM_TOLERANCE_PX;
+    const returnedToBottom = position.top > previous.top && atBottom;
+    const isBottomRebound = position.overscrollBottom !== undefined || previous.overscrollBottom !== undefined;
+    const readingUpward = position.top < previous.top && !atBottom && !isBottomRebound;
+    // A stationary event after content growth is not a decision to read history.
+    // A rebound stays browser-owned even if streaming moved the bottom meanwhile.
+    if (returnedToBottom) this.setFollowing(true);
+    else if (readingUpward) this.pause();
   }
 
   pause(): void {
-    this.pinned = false;
+    this.setFollowing(false);
     this.cancel();
+  }
+
+  startFollowing(): void {
+    this.setFollowing(true);
+    this.recordScrollBaseline();
   }
 
   startup(): void {
     if (!this.host.getBehaviors().followTail) return;
-    this.refreshPin();
-    this.pinned = true;
+    this.startFollowing();
     this.schedule(true);
   }
 
+  private readPosition(options: { preserveOverscroll?: boolean } = {}): TailScrollPosition | undefined {
+    const scroller = this.host.getScroller();
+    if (scroller === undefined) return undefined;
+    const maxTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+    const rawTop = scroller.scrollTop;
+    // Safari can report scrollTop beyond either end during native rubber-banding.
+    // Retain the original bottom through rebound when content grows mid-gesture;
+    // an explicit navigation/follow write starts a fresh position sample instead.
+    const overscrollBottom = (options.preserveOverscroll === true ? this.lastPosition?.overscrollBottom : undefined)
+      ?? (rawTop > maxTop ? maxTop : undefined);
+    return {
+      top: Math.max(0, Math.min(rawTop, maxTop)),
+      maxTop,
+      overscrollBottom: overscrollBottom !== undefined && rawTop >= overscrollBottom ? overscrollBottom : undefined,
+    };
+  }
+
+  private setFollowing(following: boolean): void {
+    following = following && this.host.getBehaviors().followTail;
+    if (this.following === following) return;
+    this.following = following;
+    this.host.onFollowingChange?.(following);
+  }
+
   schedule(alignForm: boolean | "ask" | "dialog" = false): void {
-    if (!this.host.getBehaviors().followTail || !this.pinned) return;
+    if (!this.host.getBehaviors().followTail) return;
+    // Establish the rendered/resized range before native input can precede the RAF.
+    this.lastPosition = this.readPosition({ preserveOverscroll: true });
+    if (!this.following) return;
     if (alignForm !== false) this.alignForm = alignForm;
     if (this.frame !== undefined) return;
     this.frame = this.frames.request(() => {
       this.frame = undefined;
       const alignForm = this.alignForm;
       this.alignForm = false;
-      if (!this.host.getBehaviors().followTail || !this.pinned) return;
+      if (!this.host.getBehaviors().followTail || !this.following) return;
       const scroller = this.host.getScroller();
       if (scroller === undefined) return;
       const form = alignForm === false ? undefined : this.host.getOpenForm(typeof alignForm === "string" ? alignForm : undefined);
       if (form === undefined) scroller.scrollTop = scroller.scrollHeight;
       else scroller.scrollTop += form.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
-      this.refreshPin();
+      if (form === undefined) this.recordScrollBaseline();
+      else this.syncFollowingAfterNavigation();
     });
   }
 
@@ -120,8 +177,8 @@ class TailFlow {
 
   reset(): void {
     this.cancel();
-    this.lastTop = undefined;
-    this.pinned = true;
+    this.lastPosition = undefined;
+    this.setFollowing(false);
   }
 }
 
@@ -275,13 +332,13 @@ export class ChatScrollFlows {
     positionOptions: ChatScrollPositionOptions = {},
   ) {
     this.tail = new TailFlow(host, frames);
-    this.position = new PositionFlow(host, frames, new ChatScrollController(positionOptions.storage, positionOptions.saveScheduler), () => { this.tail.refreshPin(); }, () => { this.tail.pause(); });
+    this.position = new PositionFlow(host, frames, new ChatScrollController(positionOptions.storage, positionOptions.saveScheduler), () => { this.tail.syncFollowingAfterNavigation(); }, () => { this.tail.pause(); });
     this.history = new HistoryFlow(host, frames);
-    this.prepend = new PrependFlow(host, frames, () => { this.tail.refreshPin(); });
+    this.prepend = new PrependFlow(host, frames, () => { this.tail.recordScrollBaseline(); });
   }
 
-  get pinnedToBottom(): boolean {
-    return this.tail.pinned;
+  get followingLive(): boolean {
+    return this.tail.followingLive;
   }
 
   beforeRender(change: ChatScrollBeforeRender): void {
@@ -313,7 +370,7 @@ export class ChatScrollFlows {
 
   onScroll(): void {
     if (this.disposed) return;
-    this.tail.onScroll();
+    if (!this.position.restoring) this.tail.onScroll();
     this.position.scheduleSave();
     if (!this.position.restoring) this.history.schedule();
   }
@@ -321,7 +378,10 @@ export class ChatScrollFlows {
   onInteraction(): void {
     // A delayed history-backed restore must not reclaim the user's viewport.
     if (this.disposed) return;
-    if (this.position.restoring) this.position.reset();
+    if (this.position.restoring) {
+      this.position.reset();
+      this.tail.recordScrollBaseline();
+    }
     this.prepend.cancel();
   }
 
@@ -377,8 +437,11 @@ export class ChatScrollFlows {
     const scroller = this.host.getScroller();
     if (scroller === undefined) return;
     scroller.scrollTop = end ? scroller.scrollHeight : 0;
-    this.tail.pinned = end;
-    this.tail.refreshPin();
+    if (end) this.tail.startFollowing();
+    else {
+      this.tail.pause();
+      this.tail.recordScrollBaseline();
+    }
     this.position.scheduleSave();
   }
 

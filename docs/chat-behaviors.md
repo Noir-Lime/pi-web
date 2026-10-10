@@ -9,7 +9,19 @@ Normal chat follows progress at the tail, remembers reading positions, loads ear
 - `chatBehaviors.ts` declares the capabilities injected through `PiWebApp.chatBehaviors` → `ChatView.behaviors`. All are enabled by default. This is an internal composition seam, not user-editable configuration or a diagnostic UI.
 - Native images own fetching/decoding. Attachment and tool-image references include display-oriented dimensions when their headers are readable, reserving their responsive footprint before position restoration without image-load scroll corrections. Older machines, unreadable headers, and Markdown images retain native intrinsic sizing. Outside-workspace Markdown images retain explicit approval: their sources remain unset until approved, whether visible or hidden.
 
-Scrolling does not update reactive position/index state. Earlier-history loading uses a near-top threshold and an in-flight guard. Prepending can make one height-delta adjustment when the browser/user has not already moved the viewport; it does not repeatedly settle or compensate for later image loads. Manual top/end arrows work independently of automatic flows.
+Scrolling does not update reactive position/index state; only a change of live-follow mode updates its indicator. Earlier-history loading uses a near-top threshold and an in-flight guard. Prepending can make one height-delta adjustment when the browser/user has not already moved the viewport; it does not repeatedly settle or compensate for later image loads. Manual top/end arrows work independently of automatic flows.
+
+## Following live
+
+The highlighted ↓ arrow means new transcript content follows automatically, whether or not the session is currently streaming. Its tooltip and accessible description report the same mode.
+
+- Press ↓ to jump to the latest content and enable following. Pressing it again keeps following enabled.
+- Scroll down to the actual bottom to resume following, allowing less than two pixels for rounding rather than a near-bottom zone.
+- Upward wheel/touch input, native upward scrolling away from the bottom, or ↑ pauses following. A stationary scroll event does not undo that choice.
+- Content growth and viewport changes retain the selected mode. Native overscroll is clamped for direction detection, so a bottom rebound does not count as reading history.
+- Restoring a historical reading position, or aligning an open form away from the bottom, pauses following; the arrow shows that pause too.
+
+When the `followTail` capability is disabled, ↓ remains a jump-only control and is not highlighted. This step adds no image-load corrections, continuous polling, or layout-settling loop; late descendant layout changes remain browser-owned.
 
 ## Incremental changes
 
@@ -18,7 +30,7 @@ To enable or disable a capability for a requested change, edit its value in `DEF
 | Capability | Owner's responsibility |
 | --- | --- |
 | `rememberPosition` | Save and restore per-session reading positions |
-| `followTail` | Follow new content while at the tail |
+| `followTail` | Follow new content while live-follow mode is selected |
 | `automaticHistory` | Request earlier history near the top |
 | `anchorPrepends` | Make one adjustment after earlier messages are inserted |
 | `loadImages` | Assign authorized native chat image sources |

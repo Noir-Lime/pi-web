@@ -223,6 +223,7 @@ export class ChatView extends LitElement {
   @property({ attribute: false }) behaviors: ChatBehaviors = DEFAULT_CHAT_BEHAVIORS;
   @query(".chat") private chat?: HTMLDivElement;
   @query("dialog.image-zoom") private imageZoomDialog?: HTMLDialogElement;
+  @state() private followingLive = false;
   @state() private zoomedImage: { src: string; alt: string } | undefined = undefined;
   @state() private expandedMetaKey: string | undefined;
   @state() private collapsedNotificationTargetKeys: ReadonlySet<string> = new Set();
@@ -232,6 +233,7 @@ export class ChatView extends LitElement {
   private readonly disclosures = new ChatDisclosureController();
   private readonly scrollFlows = new ChatScrollFlows({
     getScroller: () => this.chat ?? undefined,
+    onFollowingChange: (following) => { this.followingLive = following; },
     getAnchors: () => this.scrollAnchorElements(),
     getSessionId: () => this.sessionId,
     getBehaviors: () => this.behaviors,
@@ -250,7 +252,7 @@ export class ChatView extends LitElement {
   private groupedMessagesCache: ChatGroup[] = [];
   private readonly messageMetaCache = new WeakMap<ChatLine, string>();
   private imageSession: SessionRef | undefined;
-  private touchStartY: number | undefined;
+  private touchY: number | undefined;
   private loadMoreRequested = false;
   private readonly onViewportResize = () => { this.scrollFlows.onViewportResize(); };
   private readonly handleScroll = () => { this.scrollFlows.onScroll(); };
@@ -259,13 +261,15 @@ export class ChatView extends LitElement {
     if (event.deltaY < 0) this.scrollFlows.onUpIntent();
   };
   private readonly handleTouchStart = (event: TouchEvent) => {
-    this.touchStartY = event.touches[0]?.clientY;
+    this.touchY = event.touches[0]?.clientY;
     this.scrollFlows.onInteraction();
   };
   private readonly handleTouchMove = (event: TouchEvent) => {
     const y = event.touches[0]?.clientY;
-    if (this.touchStartY !== undefined && y !== undefined && y > this.touchStartY) this.scrollFlows.onUpIntent();
+    if (this.touchY !== undefined && y !== undefined && y > this.touchY) this.scrollFlows.onUpIntent();
+    this.touchY = y;
   };
+  private readonly handleTouchEnd = () => { this.touchY = undefined; };
   private readonly handleJumpTop = () => { this.scrollFlows.jumpToTop(); };
   private readonly handleJumpEnd = () => { this.scrollFlows.jumpToEnd(); };
   private readonly openImageZoom = (src: string, alt: string): void => {
@@ -403,6 +407,7 @@ export class ChatView extends LitElement {
     // DOM reuse, clearing the part reclaims the end markers that the current Lit
     // build retains when repeat items are removed.
     const transcriptIdentity = machineSessionKey(this.machineId, this.sessionId);
+    const following = this.behaviors.followTail && this.followingLive;
     return html`
       ${this.renderTopNotices()}
       ${this.renderNotificationLiveRegions()}
@@ -411,7 +416,9 @@ export class ChatView extends LitElement {
           @scroll=${this.behaviors.rememberPosition || this.behaviors.followTail || this.behaviors.automaticHistory ? this.handleScroll : undefined}
           @wheel=${this.handlesScrollIntent ? this.handleWheel : undefined}
           @touchstart=${this.handlesScrollIntent ? this.handleTouchStart : undefined}
-          @touchmove=${this.handlesScrollIntent ? this.handleTouchMove : undefined}>
+          @touchmove=${this.handlesScrollIntent ? this.handleTouchMove : undefined}
+          @touchend=${this.handlesScrollIntent ? this.handleTouchEnd : undefined}
+          @touchcancel=${this.handlesScrollIntent ? this.handleTouchEnd : undefined}>
           ${this.renderHistoryBoundary()}
           ${keyed(transcriptIdentity, repeat(
             groups,
@@ -431,7 +438,10 @@ export class ChatView extends LitElement {
         ${this.renderActivityDock()}
         <nav class="chat-jumps" aria-label="Chat navigation">
           <button type="button" title="Jump to top" aria-label="Jump to top" @click=${this.handleJumpTop}>↑</button>
-          <button type="button" title="Jump to end" aria-label="Jump to end" @click=${this.handleJumpEnd}>↓</button>
+          <button type="button" class=${following ? "following" : ""}
+            title=${!this.behaviors.followTail ? "Jump to end" : following ? "Following live — jump to end" : "Jump to end and follow live"}
+            aria-label="Jump to end" aria-describedby="chat-follow-state" @click=${this.handleJumpEnd}>↓</button>
+          <span id="chat-follow-state" class="visually-hidden">${!this.behaviors.followTail ? "Automatic following disabled" : following ? "Following live" : "Live following paused"}</span>
         </nav>
       </div>
       ${this.renderImageZoom()}
