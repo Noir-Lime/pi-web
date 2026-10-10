@@ -1,7 +1,7 @@
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { styleMap } from "lit/directives/style-map.js";
-import type { ImageDimensions } from "../../../shared/sessionMedia";
+import { validImageDimensions, type ImageDimensions } from "../../../shared/sessionMedia";
 
 export interface ImageOpenDetail {
   src: string;
@@ -13,6 +13,8 @@ export interface ImageOpenDetail {
 export class ImagePresentation extends LitElement {
   @property({ attribute: false }) source: string | undefined;
   @property({ attribute: false }) dimensions: ImageDimensions | undefined;
+  /** Optional metadata report; loading never changes this component's own state. */
+  @property({ attribute: false }) onIntrinsicDimensions: ((source: string, dimensions: ImageDimensions) => void) | undefined;
   @property() description = "";
   @property() label = "";
   @property({ type: Boolean }) requestDisabled = false;
@@ -23,6 +25,15 @@ export class ImagePresentation extends LitElement {
     event.preventDefault();
     event.stopPropagation();
     this.dispatchEvent(new Event("image-request", { bubbles: true, composed: true }));
+  }
+
+  private reportIntrinsicDimensions(event: Event): void {
+    const image = event.currentTarget;
+    const source = this.source;
+    if (this.onIntrinsicDimensions === undefined || !(image instanceof HTMLImageElement)
+      || source === undefined || source === "" || image.getAttribute("src") !== source || !image.complete) return;
+    const dimensions = validImageDimensions(image.naturalWidth, image.naturalHeight);
+    if (dimensions !== undefined) this.onIntrinsicDimensions(source, dimensions);
   }
 
   private open(event: Event): void {
@@ -48,6 +59,7 @@ export class ImagePresentation extends LitElement {
           @click=${(event: MouseEvent) => { this.open(event); }}
           @keydown=${(event: KeyboardEvent) => { if (event.key === "Enter" || event.key === " ") this.open(event); }}>
           <img loading="lazy" decoding="async" src=${pending ? nothing : this.source} alt=${this.description}
+            @load=${(event: Event) => { this.reportIntrinsicDimensions(event); }}
             width=${dimensions?.width ?? nothing} height=${dimensions?.height ?? nothing}
             style=${styleMap(dimensions === undefined ? {} : {
               "--image-width": `${String(dimensions.width)}px`,

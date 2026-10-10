@@ -15,6 +15,17 @@ export async function settleImage(host: LitElement): Promise<ImagePresentation> 
   return presentation;
 }
 
+/** Stub browser decode metadata, not layout: happy-dom does not decode images. */
+export function loadIntrinsicDimensions(image: HTMLImageElement, width: number, height: number): void {
+  Object.defineProperties(image, {
+    naturalWidth: { configurable: true, value: width },
+    naturalHeight: { configurable: true, value: height },
+    currentSrc: { configurable: true, value: image.src },
+    complete: { configurable: true, value: true },
+  });
+  image.dispatchEvent(new Event("load"));
+}
+
 export function nativeImage(presentation: ImagePresentation): HTMLImageElement {
   const image = presentation.renderRoot.querySelector("img");
   if (image === null) throw new Error("Expected native image");

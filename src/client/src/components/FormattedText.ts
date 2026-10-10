@@ -4,6 +4,7 @@ import { customElement, property } from "lit/decorators.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { writeClipboardText } from "../clipboard";
 import { toSafeMarkdownHtml } from "../formatting/markdown";
+import { rememberExternalMarkdownImageDimensions, restoreExternalMarkdownImageDimensions } from "../formatting/externalMarkdownImages";
 import type { MarkdownWorkspaceContext, WorkspaceFileOpenRequest } from "../formatting/workspaceLinks";
 import { formattedTextStyles } from "./shared";
 
@@ -22,12 +23,23 @@ export class FormattedText extends LitElement {
       machineId: this.workspaceContext?.machineId ?? this.machineId,
       toSafeHtml: (text) => toSafeMarkdownHtml(text, this.workspaceContext, this.intentKey, this.imagesEnabled),
     }, this.intentKey) ?? unsafeHTML(toSafeMarkdownHtml(this.text, this.workspaceContext, this.intentKey, this.imagesEnabled));
-    return html`<div class="formatted" dir="auto" @click=${this.onFormattedClick}>${content}</div>`;
+    return html`<div class="formatted" dir="auto" @load=${this.onImageLoad} @click=${this.onFormattedClick}>${content}</div>`;
   }
 
   override updated(): void {
+    // HTML is memoized independently of geometry; apply hints on every DOM mount,
+    // in this update's microtask before paint or the chat's position-restoration frame.
+    restoreExternalMarkdownImageDimensions(this.renderRoot);
     this.enhanceCodeBlocks();
   }
+
+  private readonly onImageLoad = {
+    // Native image loads do not bubble. Capture only inside this formatting root.
+    capture: true,
+    handleEvent: (event: Event): void => {
+      if (event.target instanceof HTMLImageElement) rememberExternalMarkdownImageDimensions(event.target);
+    },
+  };
 
   private enhanceCodeBlocks(): void {
     this.renderRoot.querySelectorAll("pre").forEach((element) => {

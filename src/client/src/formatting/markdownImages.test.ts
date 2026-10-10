@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { localMarkdownImage } from "./markdownImages";
 import { toSafeMarkdownHtml } from "./markdown";
 import { MarkdownImage } from "../components/MarkdownImage";
-import { imagePresentation, settleImage } from "../components/imagePresentation.testSupport";
+import { imagePresentation, loadIntrinsicDimensions, nativeImage, settleImage } from "../components/imagePresentation.testSupport";
 
 beforeEach(() => { vi.stubGlobal("IntersectionObserver", undefined); });
 afterEach(() => { document.body.replaceChildren(); localStorage.clear(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.useRealTimers(); });
@@ -119,6 +119,29 @@ it("restores only a clicked image on revisit within the code-block intent lifeti
   expect(isShown(await visit("![changed](/tmp/new.png)"))).toBe(false);
   expect(isShown(await visit())).toBe(false);
   expect(localStorage.length).toBe(0);
+});
+
+it("restores dimension hints even when reusing the same cached Markdown HTML", async () => {
+  const context = { machineId: "remote /1", projectId: "p", workspaceId: "w", root: "/srv/work" };
+  const text = "![cached geometry](screenshots/reused.png)";
+  const html = toSafeMarkdownHtml(text, context, "dimension-html-cache");
+  async function visit() {
+    const host = document.createElement("div");
+    host.innerHTML = toSafeMarkdownHtml(text, context, "dimension-html-cache");
+    document.body.append(host);
+    const image = required(host.querySelector<MarkdownImage>("pi-web-markdown-image"));
+    const presentation = await settleImage(image);
+    return { host, image, presentation, native: nativeImage(presentation) };
+  }
+  const first = await visit();
+  expect(first.native.hasAttribute("width")).toBe(false);
+  loadIntrinsicDimensions(first.native, 640, 480);
+  await settleImage(first.image);
+  first.host.remove();
+  expect(toSafeMarkdownHtml(text, context, "dimension-html-cache")).toBe(html);
+  const returned = await visit();
+  expect(returned.native.getAttribute("width")).toBe("640");
+  expect(returned.native.getAttribute("height")).toBe("480");
 });
 
 it("keeps an inert native image until approval and resets consent for a different source", async () => {

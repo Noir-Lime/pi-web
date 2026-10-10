@@ -2,7 +2,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { ImageDimensions } from "../../../shared/sessionMedia";
 import { ImagePresentation } from "./ImagePresentation";
-import { imageButton, nativeImage } from "./imagePresentation.testSupport";
+import { imageButton, loadIntrinsicDimensions, nativeImage } from "./imagePresentation.testSupport";
 
 const source = "https://example.test/first.png";
 
@@ -124,6 +124,34 @@ it("leaves load/error display to the browser without renders, layout events or i
   expect(native.hasAttribute("src")).toBe(false);
   expect(enlarge.hidden).toBe(true);
   expect(layout).not.toHaveBeenCalled();
+});
+
+it("reports successful intrinsic metadata only to an opted-in owner without rerendering itself", async () => {
+  const presentation = await mount(source);
+  const report = vi.fn();
+  presentation.onIntrinsicDimensions = report;
+  await presentation.updateComplete;
+  const native = nativeImage(presentation);
+  const update = vi.spyOn(presentation, "requestUpdate");
+  loadIntrinsicDimensions(native, 1200, 800);
+  expect(report).toHaveBeenCalledExactlyOnceWith(source, { width: 1200, height: 800 });
+  expect(update).not.toHaveBeenCalled();
+  expect(nativeImage(presentation)).toBe(native);
+
+  native.dispatchEvent(new Event("error"));
+  loadIntrinsicDimensions(native, 0, 800);
+  loadIntrinsicDimensions(native, 1200, 0);
+  expect(report).toHaveBeenCalledOnce();
+
+  presentation.source = "https://example.test/next.png";
+  // An old DOM load must not report geometry under a newly selected source.
+  loadIntrinsicDimensions(native, 1200, 800);
+  expect(report).toHaveBeenCalledOnce();
+  await presentation.updateComplete;
+  presentation.source = undefined;
+  await presentation.updateComplete;
+  loadIntrinsicDimensions(native, 1200, 800);
+  expect(report).toHaveBeenCalledOnce();
 });
 
 it("opens zoom with click, Enter and Space without waiting for a native load event", async () => {

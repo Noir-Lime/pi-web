@@ -1,11 +1,13 @@
 // @vitest-environment happy-dom
 import { afterEach, expect, it, vi } from "vitest";
+import { readMarkdownImageDimensions, rememberMarkdownImageDimensions } from "../formatting/markdownImageDimensions";
 import { MarkdownImage } from "./MarkdownImage";
-import { imageButton, nativeImage, settleImage } from "./imagePresentation.testSupport";
+import { imageButton, loadIntrinsicDimensions, nativeImage, settleImage } from "./imagePresentation.testSupport";
 
 const previewUrl = "https://example.test/nested/api/preview?path=private&showImage=1";
 
 afterEach(() => {
+  vi.restoreAllMocks();
   document.body.replaceChildren();
   localStorage.clear();
   vi.useRealTimers();
@@ -22,6 +24,95 @@ async function mountOutside(intentKey?: string, source = previewUrl) {
   const presentation = await settleImage(image);
   return { image, presentation, native: nativeImage(presentation) };
 }
+
+async function mountWorkspace(source = "https://example.test/nested/api/preview?path=screenshot.png") {
+  const image = new MarkdownImage();
+  image.previewUrl = source;
+  document.body.append(image);
+  const presentation = await settleImage(image);
+  return { image, presentation, native: nativeImage(presentation) };
+}
+
+it("learns dimensions from a first load and reuses them before a new image loads", async () => {
+  const first = await mountWorkspace();
+  expect(first.native.hasAttribute("width")).toBe(false);
+  expect(first.native.hasAttribute("height")).toBe(false);
+  loadIntrinsicDimensions(first.native, 640, 480);
+  await settleImage(first.image);
+  expect(readMarkdownImageDimensions(first.image.previewUrl)).toEqual({ width: 640, height: 480 });
+  expect(nativeImage(first.presentation)).toBe(first.native);
+  first.image.remove();
+
+  const returned = await mountWorkspace();
+  expect(returned.native.getAttribute("width")).toBe("640");
+  expect(returned.native.getAttribute("height")).toBe("480");
+  expect(returned.native.src).toBe(returned.image.previewUrl);
+  const hostUpdate = vi.spyOn(returned.image, "requestUpdate");
+  const presentationUpdate = vi.spyOn(returned.presentation, "requestUpdate");
+  loadIntrinsicDimensions(returned.native, 640, 480);
+  await settleImage(returned.image);
+  expect(hostUpdate).not.toHaveBeenCalled();
+  expect(presentationUpdate).not.toHaveBeenCalled();
+});
+
+it("refreshes stale hints and current sizing when a file's intrinsic dimensions change", async () => {
+  rememberMarkdownImageDimensions(previewUrl, { width: 1200, height: 800 });
+  const { image, presentation, native } = await mountWorkspace(previewUrl);
+  expect(native.getAttribute("width")).toBe("1200");
+  expect(native.getAttribute("height")).toBe("800");
+  loadIntrinsicDimensions(native, 400, 1600);
+  await settleImage(image);
+  expect(nativeImage(presentation)).toBe(native);
+  expect(native.getAttribute("width")).toBe("400");
+  expect(native.getAttribute("height")).toBe("1600");
+  expect(readMarkdownImageDimensions(previewUrl)).toEqual({ width: 400, height: 1600 });
+});
+
+it("does not learn geometry from errors, invalid metadata, or a stale source/permission", async () => {
+  const { image, native } = await mountWorkspace(previewUrl);
+  native.dispatchEvent(new Event("error"));
+  loadIntrinsicDimensions(native, 0, 480);
+  expect(readMarkdownImageDimensions(previewUrl)).toBeUndefined();
+  image.previewUrl = "https://example.test/another.png";
+  // Parent props may change before the child's next render; ignore the old load.
+  loadIntrinsicDimensions(native, 640, 480);
+  expect(readMarkdownImageDimensions(previewUrl)).toBeUndefined();
+  expect(readMarkdownImageDimensions(image.previewUrl)).toBeUndefined();
+  await settleImage(image);
+  image.loadingDisabled = true;
+  loadIntrinsicDimensions(native, 640, 480);
+  expect(readMarkdownImageDimensions(image.previewUrl)).toBeUndefined();
+});
+
+it("remembers outside-image geometry without persisting or granting approval", async () => {
+  const first = await mountOutside();
+  imageButton(first.presentation, ".placeholder").click();
+  await settleImage(first.image);
+  loadIntrinsicDimensions(first.native, 1200, 800);
+  await settleImage(first.image);
+  first.image.remove();
+  expect(readMarkdownImageDimensions(previewUrl)).toEqual({ width: 1200, height: 800 });
+
+  const returned = await mountOutside();
+  expect(returned.native.hasAttribute("src")).toBe(false);
+  expect(imageButton(returned.presentation, ".placeholder").hidden).toBe(false);
+  imageButton(returned.presentation, ".placeholder").click();
+  await settleImage(returned.image);
+  expect(returned.native.src).toBe(previewUrl);
+  expect(returned.native.getAttribute("width")).toBe("1200");
+  expect(returned.native.getAttribute("height")).toBe("800");
+});
+
+it("keeps native loading and current sizing usable when persistence is unavailable", async () => {
+  vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("quota exceeded"); });
+  const { image, presentation, native } = await mountWorkspace();
+  loadIntrinsicDimensions(native, 640, 480);
+  await settleImage(image);
+  expect(nativeImage(presentation)).toBe(native);
+  expect(native.src).toBe(image.previewUrl);
+  expect(native.getAttribute("width")).toBe("640");
+  expect(native.getAttribute("height")).toBe("480");
+});
 
 it("assigns workspace sources immediately and lets the browser load them lazily", async () => {
   const image = new MarkdownImage();
