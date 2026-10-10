@@ -386,6 +386,19 @@ Create `.pi-web/tasks.json` in a project:
 
 Open the **Tasks** tab to run a command in a workspace terminal. Tasks can also have a `description`. Review commands before running them, especially in shared repositories. Disabling the plugin hides the tab without changing the project file.
 
+### Workflows
+
+Workflows is a shipped Pi package for PI WEB's opinionated prompts and shortcuts. It currently provides `/worktree` with the free-form hint **Purpose and/or base branch**, plus a **Create Worktree** palette action. The action prepares `/worktree` in an empty Chat prompt for an active conversation; add your description and send it when ready.
+
+```text
+/worktree fix login redirects
+/worktree add search based on origin/main
+```
+
+The prompt asks the agent to create a worktree named for your purpose, using the requested base or the current worktree's HEAD. If you give no purpose or description, the agent asks for one.
+
+PI WEB installs Workflows automatically for the active agent profile at session-daemon startup. Its web plugin is enabled by default. Disable **Workflows** in **Settings → PI WEB plugins**, then reload the browser, to hide the shortcut while keeping `/worktree`. To remove its prompts as well, remove the package in **Settings → Pi packages** and run `/reload` in each idle conversation. Removal is remembered across daemon restarts; reinstall from **Available packages** if you change your mind, then reload idle conversations and the browser.
+
 ### Relays
 
 The shipped Relay package adds `/relay` and `/relay-worktree` to clarify a goal and its boundaries with you, then dispatch after explicit approval. Each fresh session chooses the next useful slice, records progress, and hands off until the finish line is reached or human help is needed. Project instructions and skills govern the work; the development route remains adaptive. The runner requires a fresh-context review of the whole result before completion, with at most three attempts total. Further attempts follow concrete corrections; unresolved blockers after the third stop the relay for human help. These are limits, not three mandatory reviews.
