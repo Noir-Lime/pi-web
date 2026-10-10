@@ -189,9 +189,9 @@ async function createSessionDaemonRuntime() {
     app.log.info({ httpIdleTimeoutMs: appliedHttpIdleTimeout.timeoutMs }, "applied agent profile HTTP idle timeout to the session daemon HTTP stack");
   }
   // Best-effort, non-fatal reconciliation of Pi packages PI WEB ships "out of
-  // the box" (currently just the Relays plugin's @jmfederico/pi-relay
-  // package): installs one for the active agent profile, the same way the
-  // manual Settings UI Install action would, unless it is already configured
+  // the box" (Relays and Workflows): installs each for the active agent
+  // profile, the same way the manual Settings UI Install action would,
+  // unless it is already configured
   // or the profile dismissed it (removed it on purpose) before. Deliberately
   // not awaited: reconciliation catches and logs its own failures internally,
   // and a slow or failed install must never delay or block daemon startup.
