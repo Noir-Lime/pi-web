@@ -388,7 +388,9 @@ New worktrees created by an agent, a terminal, or another local tool can appear 
 
 The initial checkout of a new worktree notifies PI WEB about the project. Connected browsers re-read that project's workspace list without replacing the current conversation or draft. Discovery is event-driven, with no polling or refresh at the end of agent turns.
 
-PI WEB preserves `core.hooksPath` and existing hook scripts: it does not wrap project scripts or install an alternate hook manager. Its stable helper is best-effort; missing helper files or an unavailable runtime/daemon become no-ops rather than blocking Git operations.
+PI WEB preserves `core.hooksPath` and existing hook scripts: it does not wrap project scripts or install an alternate hook manager. All new registrations invoke one helper shipped inside the PI WEB npm package; project-specific notification arguments live in Git configuration, not generated helper files in the data directory. Missing helper files or an unavailable runtime/daemon never fail Git operations.
+
+Removing the PI WEB npm package removes this helper: remaining registrations check for it and become no-ops without launching Node. Native `pi-web uninstall` only removes services, so the package/helper remains and notification attempts still run with a two-second bound. Older generated helpers and their registrations are left untouched.
 
 The Git setting `workspaceDiscoveryHooks` defaults to `true`; see [Git hook opt-out configuration](https://pi-web.dev/config#git-worktree-discovery-hooks) to turn it off globally or for one registered project. All changes to this setting require a manual session-daemon restart, which can interrupt active sessions; a browser reload alone does not update server settings.
 

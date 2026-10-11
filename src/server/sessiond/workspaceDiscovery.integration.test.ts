@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -20,7 +20,7 @@ const run = promisify(execFile);
 const gitEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
 const namedHooks = spawnSync("git", ["-c", "hook.pi-web-test.command=:", "-c", "hook.pi-web-test.event=post-checkout", "hook", "list", "post-checkout"], { env: gitEnv, encoding: "utf8" });
 
-// Real Git hook -> generated helper -> separate CLI process -> isolated IPC
+// Real Git hook -> packaged helper -> separate CLI process -> isolated IPC
 // ingress -> provider policy/authority -> core notification. No model or hosting
 // daemon is started, stopped, or shared with this fixture.
 it.skipIf(process.platform === "win32" || namedHooks.status !== 0 || !namedHooks.stdout.includes("pi-web-test"))(
@@ -36,6 +36,7 @@ it.skipIf(process.platform === "win32" || namedHooks.status !== 0 || !namedHooks
     try {
       await run("git", ["init", "-q", "-b", "main", repository], { env });
       await run("git", ["-C", repository, "-c", "user.name=Discovery", "-c", "user.email=discovery@example.invalid", "commit", "-q", "--allow-empty", "-m", "Initial"], { env });
+      await copyFile(new URL("../../../pi-web-plugins/git/workspace-discovery-notify.cjs", import.meta.url), join(repository, "workspace-discovery-notify.cjs"));
       await mkdir(join(repository, ".pi-web"));
       // Proves actual project settings override the immutable global base.
       await writeFile(join(repository, ".pi-web", "config.json"), JSON.stringify({ plugins: { git: { settings: { workspaceDiscoveryHooks: true } } } }));
