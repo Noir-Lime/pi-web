@@ -1,4 +1,4 @@
-import type { AuthProviderOption, CommandOption, CommandResult, ExtensionDialogAnswer, ExtensionDialogCloseReason, Machine, MachineHealth, MachineRuntime, OAuthFlowState, PendingAskUser, PendingExtensionDialog, PiWebStatusResponse, Project, QueuedSessionMessage, SessionActivity, SessionInfo, SessionModelCatalogEntry, SessionStatus, SessionTreeSnapshot, TerminalCommandRun, Workspace } from "./api";
+import type { AuthProviderOption, CommandOption, CommandResult, ExtensionDialogAnswer, ExtensionDialogCloseReason, Machine, MachineHealth, MachineRuntime, OAuthFlowState, PendingExtensionDialog, PiWebStatusResponse, Project, QueuedSessionMessage, SessionActivity, SessionInfo, SessionModelCatalogEntry, SessionStatus, SessionTreeSnapshot, TerminalCommandRun, Workspace } from "./api";
 import type { ChatLine } from "./components/shared";
 import type { MachineStatusSnapshot } from "../../shared/machineStatus";
 import type { QualifiedContributionId } from "./plugins/ids";
@@ -35,11 +35,6 @@ export interface AppState {
   selectedSession: SessionInfo | undefined;
   status: SessionStatus | undefined;
   activity: SessionActivity | undefined;
-  /**
-   * The selected session's open `ask_user` question set, derived from the
-   * daemon-owned {@link SessionStatus.pendingAsk} plus live ask events.
-   */
-  pendingAsk: PendingAskUser | undefined;
   /**
    * The selected session's open extension dialogs, derived from the
    * daemon-owned {@link SessionStatus.pendingDialogs} plus live dialog events.
@@ -147,7 +142,6 @@ export function initialAppState(): AppState {
     selectedSession: undefined,
     status: undefined,
     activity: undefined,
-    pendingAsk: undefined,
     pendingDialogs: [],
     closedDialogs: [],
     availableThinkingLevels: [],

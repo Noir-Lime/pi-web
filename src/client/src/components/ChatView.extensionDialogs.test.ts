@@ -54,13 +54,14 @@ describe("ChatView open extension dialogs", () => {
     const view = await mountView();
     const { metrics, write } = controlledChatViewport(view);
     flush();
-    view.pendingAsk = { askId: "ask", askedAt: "2026-07-20T10:00:00.000Z", questions: [{ id: "q", question: "Question?", options: [], multiple: false }] };
+    view.onSubmitAsk = vi.fn();
+    view.messages = [{ role: "tool", parts: [{ type: "askUserQuestion", ask: { askId: "ask", askedAt: "2026-07-20T10:00:00.000Z", questions: [{ id: "q", question: "Question?", options: [], multiple: false }] } }] }];
     await view.updateComplete; flush();
     view.renderRoot.querySelector<HTMLButtonElement>('[aria-label="Jump to end"]')?.click();
     write.mockClear(); metrics.height = 3200;
     view.pendingDialogs = [openDialog("new-dialog", "Confirm?")];
     await view.updateComplete;
-    const ask = requiredElement(view.renderRoot.querySelector(".chat > ask-user-card"), "existing ask");
+    const ask = requiredElement(view.renderRoot.querySelector(".chat ask-user-card.open-question-card"), "existing ask");
     const dialog = requiredElement(view.renderRoot.querySelector(".open-dialog-card"), "new dialog");
     vi.spyOn(ask, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 330, 600, 100));
     vi.spyOn(dialog, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 700, 600, 600));

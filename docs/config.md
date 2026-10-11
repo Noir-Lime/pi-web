@@ -387,11 +387,11 @@ Use **Settings → Session daemon → Allow agents to ask questions** to change 
 
 Agents can post a form with 1–20 questions, with free-text answers or up to 12 choices per question. Some questions allow multiple selections. A **Custom** free-text answer is always available, and you may leave any question unanswered.
 
-Calling `ask_user` posts the whole set as one browser form and ends the current agent run instead of waiting for the user. The open form is owned by the session daemon, so it survives a browser disconnect, browser reload, or web/API restart while that daemon keeps running. When the user submits, the answers arrive as a follow-up that wakes the session; each question is reported with its selected option values or free text, or explicitly as unanswered.
+Calling `ask_user` records the whole question set in the conversation and ends the current agent run instead of waiting for the user. A question form is open only when it is the last conversation entry on the active branch. It can be rendered again from saved history after browser, web/API, or session-daemon restarts.
 
-PI WEB confirms a partial submission before sending it and names the unanswered questions. Only one ask can be open per session: a later `ask_user` call supersedes the earlier one, reports that fact and its unanswered questions to the model, and turns the earlier card into a read-only transcript record. Submitted and cancelled asks likewise remain readable in the transcript.
+Answering or skipping records a response and wakes the agent; each question is reported with its selected option values or free text, or explicitly as unanswered. PI WEB confirms partial submissions and names the unanswered questions. Later conversation entries—including an ordinary chat message or another question set—close earlier forms without removing them. Closed forms stay collapsed and read-only in their original positions; expand them to review the questions, choices, and recorded answers.
 
-Sending an ordinary chat message while a form is open voids the form: the card closes as cancelled and the model is told its questions went unanswered as part of the turn the message itself starts.
+Returning the active branch to a question reopens its form if it is again the last entry. Archived conversations remain read-only. Late or repeated human responses are recorded rather than discarded because the form has already closed.
 
 Restart the session daemon after changing `askUser` or after upgrading PI WEB to a version that introduces this tool. For the systemd user service, run `systemctl --user restart pi-web-sessiond`.
 
