@@ -61,7 +61,7 @@ Process restarts depend on the key:
 - `pathAccess`: applies on the next request; existing file views may need a browser refresh.
 - `uploads.defaultFolder`: applies to newly opened Files upload dialogs and new direct drag/drop batches after config/workspace refresh.
 - `attachments.defaultFolder`: applies to new prompt-attachment saves after config/workspace refresh.
-- `plugins`: browser-only changes apply after a browser-tab reload. Any enablement, settings, package-source, or package-revision change affecting a `serverModule` requires a manual session-daemon restart, then a browser reload for its paired UI.
+- `plugins`: browser-only changes apply after a browser-tab reload. Any enablement, global or project settings, package-source, or package-revision change affecting a `serverModule` requires a manual session-daemon restart, then a browser reload for its paired UI. Server-plugin settings are fixed snapshots, not live config; see [Project plugin settings](#project-plugin-settings).
 - `serverPlugins.safeStart`: persistent offline recovery state applied before server-plugin discovery/import on the next sessiond start; use the `pi-web plugins safe-start ...` CLI rather than hand-editing it.
 - Pi package install/remove/update: not a PI WEB config key; after a mutation, type `/reload` in each idle PI WEB session on the target machine to refresh ordinary Pi resources such as extensions, skills, prompt templates, themes, and context/system prompt files. For a PI WEB package with `serverModule`, manually restart `pi-web-sessiond.service`, then reload the browser. If a global Pi extension adds or removes a model provider, or changes a provider's connection settings, the same manual sessiond restart is required; `/reload` cannot change either startup snapshot. A known Pi model provider refreshing only its own model list is applied without a restart. See [Pi extension provider baseline](#pi-extension-provider-baseline).
 - `shortcuts`: saved settings apply in the browser after config refresh/save.
@@ -123,7 +123,9 @@ Project-local `pathAccess.allowedPaths` entries are merged after the global list
 
 Project-local `uploads.defaultFolder` overrides the global upload destination for workspaces in that project, and project-local `attachments.defaultFolder` overrides the global prompt-attachment destination the same way. These defaults also apply when accessing the project through Fleet.
 
-Plugins may own separate project files, such as `.pi-web/tasks.json` for the built-in Workspace Tasks plugin.
+Project-local `plugins.<id>.settings` supplies overrides for server plugins that support project settings, including Git. Only settings are allowed here: `plugins.<id>.enabled` is not supported; plugin enablement stays global. See [Project plugin settings](#project-plugin-settings) for merge and restart rules.
+
+Plugins may also own separate project files, such as `.pi-web/tasks.json` for the built-in Workspace Tasks plugin.
 
 PI WEB also honors one optional project hook; see [Worktree pre-remove hook](#worktree-pre-remove-hook).
 
@@ -187,7 +189,9 @@ Rows with JSON key `—` are runtime-only environment variables, not config-file
 | Agent can post question forms | `askUser` | `PI_WEB_ASK_USER` | Global/session daemon | Not supported locally | Restart session daemon on that machine |
 | Extension dialog auto-cancel timeout | `extensionDialogsTimeoutMs` | — | Global/session daemon | Not supported locally | Restart session daemon on that machine |
 | Session environment facts | `environmentFacts` | `PI_WEB_ENVIRONMENT_FACTS` | Global/session daemon | Not supported locally | Restart session daemon on that machine |
-| PI WEB plugin desired enablement/settings | `plugins.<id>.enabled`, `plugins.<id>.settings` | — | Global + sessiond startup snapshot for server entries | Not core local config; plugins may read their own project files | Browser-only: reload tab. Server-backed: manually restart sessiond, then reload tab |
+| PI WEB plugin desired enablement | `plugins.<id>.enabled` | — | Global | Not supported locally | Browser-only: reload tab. Server-backed: manually restart sessiond, then reload tab |
+| PI WEB plugin settings | `plugins.<id>.settings` | — | Global + project for server plugins supporting project settings | **Merges top-level setting keys** over global settings; no project enablement | Browser-only global settings: reload tab. Server-backed global/project settings: manually restart sessiond, then reload tab |
+| Git worktree discovery hooks | `plugins.git.settings.workspaceDiscoveryHooks` | — | Global + project | Project boolean overrides global; default `true` | Manually restart session daemon; browser reload alone does not apply changes |
 | Server-plugin safe start | `serverPlugins.safeStart` | — | Global/offline recovery | Not supported locally; manage with `pi-web plugins safe-start ...` | Applied before discovery/import on next sessiond start |
 | Default browser theme | `defaultTheme.themeId`, `defaultTheme.auto` | — | Gateway global | Not supported locally; device choices take precedence | Settings save / browser config refresh; no restart |
 | Keyboard shortcuts | `shortcuts.<actionId>` | — | Global | Not supported locally | Applies after settings save/config refresh |
@@ -413,7 +417,35 @@ The `plugins` key controls desired enablement and JSON settings for PI WEB brows
 }
 ```
 
-Plugins are enabled by default unless their package metadata declares `defaultEnabled: false`, as Captain's Log does. Explicit `plugins.<id>.enabled` config overrides the package default. `plugins.<id>.enabled: false` hides a browser-only entry on the next page load. For a server-backed entry, desired disablement takes effect on the next sessiond start; its paired browser entry continues to follow the still-active server entry until that restart. The bundled `pi-web.terminal` plugin is required during normal startup: ordinary config cannot disable it, and Settings renders it non-editable. Server settings take effect at daemon startup; diagnostics do not expose their values.
+Plugins are enabled by default unless their package metadata declares `defaultEnabled: false`, as Captain's Log does. Explicit `plugins.<id>.enabled` config overrides the package default. `plugins.<id>.enabled: false` hides a browser-only entry on the next page load. For a server-backed entry, desired disablement takes effect on the next sessiond start; its paired browser entry continues to follow the still-active server entry until that restart. The bundled `pi-web.terminal` plugin is required during normal startup: ordinary config cannot disable it, and Settings renders it non-editable. Global server settings are captured at daemon startup; diagnostics do not expose their values.
+
+#### Project plugin settings
+
+Server plugins that support project settings can use `plugins.<id>.settings` from `<project>/.pi-web/config.json`. Each project's **top-level setting keys** override that plugin's global settings; nested objects are replaced, not deep-merged. Omitted keys keep their global values. Project config permits settings only, not `plugins.<id>.enabled` or project-level disablement.
+
+PI WEB reads this file at the **registered project's path**, not from an override file in an arbitrary newly created worktree. The session daemon snapshots project plugin settings at startup for existing registered projects and at first use for newly registered projects. These snapshots, including an absent config file, stay fixed until a manual session-daemon restart. Global server settings remain the same startup snapshot; reading a project or workspace list does not reload either settings scope.
+
+After editing global or project server-plugin settings, manually restart the session daemon on that machine, then reload the browser. An ordinary browser reload, web/API restart, or Pi's `/reload` alone does not update server settings. Restarting the daemon can interrupt active sessions and terminals; inspect active work first and restart from outside the sessions it hosts.
+
+#### Git worktree discovery hooks
+
+The Git provider owns the boolean `plugins.git.settings.workspaceDiscoveryHooks`, which defaults to `true`. On Git builds supporting native config-based named hooks (introduced in Git 2.54), it installs and repairs its discovery hook automatically while preserving `core.hooksPath` and existing hook scripts. See [Automatic Git worktree discovery](https://pi-web.dev/plugins#automatic-git-worktree-discovery) for notification behavior and catch-up paths.
+
+To opt out, merge this into the global config selected by `PI_WEB_CONFIG` (or its default path) for the machine, or into `<project>/.pi-web/config.json` at the registered project's path for just that project:
+
+```json
+{
+  "plugins": {
+    "git": {
+      "settings": {
+        "workspaceDiscoveryHooks": false
+      }
+    }
+  }
+}
+```
+
+A project value overrides the global value, so `true` can enable hooks for one project when the global value is `false`. Every change to this setting requires a **manual session-daemon restart**; a browser reload alone is insufficient. This opts out of the discovery hook, not the Git plugin or ordinary workspace discovery.
 
 #### Desired versus active plugin state
 

@@ -12,7 +12,7 @@ const WORKSPACE_TOPOLOGY_REFRESH_DEBOUNCE_MS = 50;
 const WORKSPACE_SELECTION_SCOPE = ["machine", "project", "workspace", "session"] as const;
 
 export interface WorkspaceControllerDependencies {
-  api?: Pick<typeof defaultApi, "sessions" | "workspaces">;
+  api?: Pick<typeof defaultApi, "sessions" | "workspaces" | "workspaceResolution">;
   navigateToWorkspace?: (workspace: Workspace | undefined, options?: NavigationDestinationOptions) => Promise<boolean>;
   captureNavigation?: () => NavigationSelection;
   beginNavigationOperation?: (scope: readonly NavigationScope[]) => NavigationFreshness;
@@ -28,7 +28,7 @@ interface WorkspaceMutationGuard {
 type WorkspaceSelectionTarget = RouteTarget & WorkspaceMutationGuard;
 
 export class WorkspaceController {
-  private readonly api: Pick<typeof defaultApi, "sessions" | "workspaces">;
+  private readonly api: Pick<typeof defaultApi, "sessions" | "workspaces" | "workspaceResolution">;
   private readonly navigateToWorkspace: WorkspaceControllerDependencies["navigateToWorkspace"];
   private readonly captureNavigation: WorkspaceControllerDependencies["captureNavigation"];
   private readonly beginNavigationOperation: WorkspaceControllerDependencies["beginNavigationOperation"];
@@ -178,10 +178,15 @@ export class WorkspaceController {
     // just-created worktree disappear again.
     await this.topologyRefreshes.request(machineProjectKey(machineId, project.id), async () => {
       try {
-        const workspaces = await this.api.workspaces(project.id, machineId);
+        const resolution = await this.api.workspaceResolution(project.id, machineId);
         const current = this.getState();
         if (selectedMachineId(current) !== machineId || current.selectedProject?.id !== project.id) return;
-        this.applyProjectWorkspaces(project.id, workspaces);
+        // A provider outage is not evidence of removal. Automatic hints and
+        // reconnects must not replace a previously healthy topology with fallback.
+        if (resolution.status === "degraded") {
+          throw new Error(resolution.diagnostics.map(({ message }) => message).join("; ") || "Workspace authority is degraded");
+        }
+        this.applyProjectWorkspaces(project.id, [...resolution.workspaces]);
       } catch (error) {
         this.onBackgroundError(`Failed to refresh workspaces for project ${project.id} on ${machineId}`, error);
       }
