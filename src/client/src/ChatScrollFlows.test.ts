@@ -665,6 +665,42 @@ describe("automatic history", () => {
     expect(f.writeTop).not.toHaveBeenCalled();
   });
 
+  it("loads once per visit to the top, even when a page adds no visible height", () => {
+    const f = fixture({ ...MANUAL_CHAT_BEHAVIORS, automaticHistory: true });
+    f.state.hasMore = true;
+    f.state.top = 0;
+    f.flows.onScroll();
+    f.frames.flush();
+    expect(f.host.requestEarlier).toHaveBeenCalledOnce();
+    f.state.loading = false;
+    f.update({ historyChanged: true });
+    f.flows.onScroll();
+    f.flows.onViewportResize();
+    f.frames.flush();
+    expect(f.host.requestEarlier).toHaveBeenCalledOnce();
+    f.state.top = 100;
+    f.flows.onScroll();
+    f.state.top = 0;
+    f.flows.onScroll();
+    f.frames.flush();
+    expect(f.host.requestEarlier).toHaveBeenCalledTimes(2);
+  });
+
+  it("allows automatic loading again after switching sessions", () => {
+    const f = fixture({ ...MANUAL_CHAT_BEHAVIORS, automaticHistory: true });
+    f.state.hasMore = true;
+    f.state.top = 0;
+    f.start();
+    f.frames.flush();
+    expect(f.host.requestEarlier).toHaveBeenCalledOnce();
+    f.state.sessionId = "s2";
+    f.state.loading = false;
+    f.flows.beforeRender({ sessionChanged: true, previousSessionId: "s1", prepend: false });
+    f.update({ sessionChanged: true });
+    f.frames.flush();
+    expect(f.host.requestEarlier).toHaveBeenCalledTimes(2);
+  });
+
   it("leaves the in-flight guard to the host and never prefetches for viewport size", () => {
     const f = fixture({ ...MANUAL_CHAT_BEHAVIORS, automaticHistory: true });
     f.state.hasMore = true;
@@ -686,35 +722,92 @@ describe("automatic history", () => {
 });
 
 describe("prepend and cleanup", () => {
-  it("corrects exactly once from pre-render height/top, with no late-layout settling", () => {
+  it("preserves the visible message through child rendering, independently of tail growth", () => {
     const f = fixture({ ...MANUAL_CHAT_BEHAVIORS, anchorPrepends: true });
     f.start();
     f.state.top = 200;
+    f.state.anchors = [f.element(180, "reading")];
     f.flows.beforeRender({ sessionChanged: false, prepend: true });
     f.state.height = 1300;
-    f.state.top = 200;
+    f.state.anchors = [f.element(480, "reading")];
     f.update({ historyChanged: true });
     expect(f.writeTop).not.toHaveBeenCalled();
     expect(f.frames.pending).toBe(1);
-    f.state.height += 100; // Tail growth after the prepend is not part of its adjustment.
+    // Prepending child content adds another 50px before the frame; a live
+    // response adds 100px below the message. Only the former moves our anchor.
+    f.state.height += 150;
+    f.state.anchors = [f.element(530, "reading")];
     f.frames.flush();
-    expect(f.state.top).toBe(500);
+    expect(f.state.top).toBe(550);
+    expect(f.state.anchors[0]?.getBoundingClientRect().top).toBe(80);
     expect(f.writeTop).toHaveBeenCalledOnce();
     expect(f.frames.pending).toBe(0);
-    f.state.height = 1500;
+    f.state.height += 100;
+    f.flows.onContentLayoutChanged();
     f.frames.flush();
-    expect(f.state.top).toBe(500);
     expect(f.writeTop).toHaveBeenCalledOnce();
-    expect(f.host.getAnchors).not.toHaveBeenCalled();
+    expect(f.storage.setItem).not.toHaveBeenCalled();
   });
 
-  it("does not overwrite native motion after capturing a prepend", () => {
+  it("finishes prepend correction before considering another automatic history request", () => {
+    const f = fixture({ ...MANUAL_CHAT_BEHAVIORS, anchorPrepends: true, automaticHistory: true });
+    f.state.top = 0;
+    f.state.hasMore = true;
+    f.state.loading = true;
+    f.state.anchors = [f.element(10, "reading")];
+    f.start();
+    f.flows.beforeRender({ sessionChanged: false, prepend: true });
+    f.state.loading = false;
+    f.state.height += 300;
+    f.state.anchors = [f.element(310, "reading")];
+    f.update({ historyChanged: true });
+    f.flows.onScroll();
+    f.flows.onViewportResize();
+    expect(f.frames.pending).toBe(1);
+    f.frames.flush();
+    expect(f.state.top).toBe(300);
+    expect(f.host.requestEarlier).not.toHaveBeenCalled();
+    expect(f.frames.pending).toBe(0);
+  });
+
+  it("does not double-adjust a viewport already anchored by the browser", () => {
+    const f = fixture({ ...MANUAL_CHAT_BEHAVIORS, anchorPrepends: true });
+    f.start();
+    f.state.top = 200;
+    f.state.anchors = [f.element(180, "reading")];
+    f.flows.beforeRender({ sessionChanged: false, prepend: true });
+    f.state.height += 300;
+    f.state.anchors = [f.element(480, "reading")];
+    f.update({ historyChanged: true });
+    f.state.top = 500;
+    f.frames.flush();
+    expect(f.state.top).toBe(500);
+  });
+
+  it("does not reclaim the viewport after user interaction", () => {
     const f = fixture({ ...MANUAL_CHAT_BEHAVIORS, anchorPrepends: true });
     f.start(); f.state.top = 200;
+    f.state.anchors = [f.element(180, "reading")];
     f.flows.beforeRender({ sessionChanged: false, prepend: true });
-    f.state.height = 1300; f.update({ historyChanged: true });
+    f.state.height = 1300;
+    f.state.anchors = [f.element(480, "reading")];
+    f.update({ historyChanged: true });
+    f.flows.onInteraction();
     f.state.top = 160; f.frames.flush();
     expect(f.writeTop).not.toHaveBeenCalled();
+  });
+
+  it("does not jump elsewhere when the captured message disappears", () => {
+    const f = fixture({ ...MANUAL_CHAT_BEHAVIORS, anchorPrepends: true });
+    f.start(); f.state.top = 200;
+    f.state.anchors = [f.element(180, "reading")];
+    f.flows.beforeRender({ sessionChanged: false, prepend: true });
+    f.state.height += 300;
+    f.state.anchors = [];
+    f.update({ historyChanged: true });
+    f.frames.flush();
+    expect(f.writeTop).not.toHaveBeenCalled();
+    expect(f.frames.pending).toBe(0);
   });
 
   type Feature = "rememberPosition" | "followTail" | "automaticHistory" | "anchorPrepends";
@@ -726,6 +819,7 @@ describe("prepend and cleanup", () => {
     if (feature === "rememberPosition") f.storage.seed("s1", { mode: "bottom" });
     f.start();
     if (feature === "anchorPrepends") {
+      f.state.anchors = [f.element(0, "reading")];
       f.flows.beforeRender({ sessionChanged: false, prepend: true });
       f.state.height += 200;
       f.update({ historyChanged: true });

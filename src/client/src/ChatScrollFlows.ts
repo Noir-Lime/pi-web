@@ -1,5 +1,5 @@
 import type { ChatBehaviors } from "./chatBehaviors";
-import { ChatScrollController, type ChatScrollPosition, type ChatScrollScheduler, type ChatScrollStorage } from "./chatScrollPosition";
+import { captureScrollPosition, findVisibleScrollAnchor, ChatScrollController, type ChatAnchorScrollPosition, type ChatScrollPosition, type ChatScrollScheduler, type ChatScrollStorage } from "./chatScrollPosition";
 
 export interface ChatScrollFlowsHost {
   getScroller(): HTMLDivElement | undefined;
@@ -256,19 +256,36 @@ class PositionFlow {
 
 class HistoryFlow {
   private frame: number | undefined;
+  private requestedAtTop = false;
 
   constructor(private readonly host: ChatScrollFlowsHost, private readonly frames: ChatScrollFrameScheduler) {}
 
   schedule(): void {
-    if (!this.host.getBehaviors().automaticHistory || this.frame !== undefined || !canLoadEarlier(this.host)) return;
+    if (!this.host.getBehaviors().automaticHistory) return;
     const scroller = this.host.getScroller();
-    if (scroller === undefined || scroller.scrollTop > 64) return;
+    if (scroller === undefined) return;
+    if (scroller.scrollTop > 64) {
+      this.requestedAtTop = false;
+      this.cancel();
+      return;
+    }
+    // A page can merge into a collapsed group without adding visible height.
+    // Loading again requires leaving and re-entering the top region, not a render.
+    if (this.requestedAtTop || this.frame !== undefined || !canLoadEarlier(this.host)) return;
     this.frame = this.frames.request(() => {
       this.frame = undefined;
       if (!this.host.getBehaviors().automaticHistory || !canLoadEarlier(this.host)) return;
       const scroller = this.host.getScroller();
-      if (scroller !== undefined && scroller.scrollTop <= 64) this.host.requestEarlier();
+      if (scroller !== undefined && scroller.scrollTop <= 64) {
+        this.requestedAtTop = true;
+        this.host.requestEarlier();
+      }
     });
+  }
+
+  reset(): void {
+    this.cancel();
+    this.requestedAtTop = false;
   }
 
   cancel(): void {
@@ -278,16 +295,27 @@ class HistoryFlow {
 }
 
 class PrependFlow {
-  private snapshot: { height: number; top: number } | undefined;
+  private snapshot: ChatAnchorScrollPosition | undefined;
   private frame: number | undefined;
 
-  constructor(private readonly host: ChatScrollFlowsHost, private readonly frames: ChatScrollFrameScheduler, private readonly onCorrected: () => void) {}
+  constructor(
+    private readonly host: ChatScrollFlowsHost,
+    private readonly frames: ChatScrollFrameScheduler,
+    private readonly controller: ChatScrollController,
+    private readonly onCorrected: () => void,
+  ) {}
+
+  get pending(): boolean {
+    return this.snapshot !== undefined || this.frame !== undefined;
+  }
 
   capture(): void {
     if (!this.host.getBehaviors().anchorPrepends) return;
     this.cancel();
     const scroller = this.host.getScroller();
-    if (scroller !== undefined) this.snapshot = { height: scroller.scrollHeight, top: scroller.scrollTop };
+    if (scroller === undefined) return;
+    const anchor = findVisibleScrollAnchor(scroller, this.host.getAnchors());
+    if (anchor !== undefined) this.snapshot = captureScrollPosition(scroller, anchor);
   }
 
   apply(): boolean {
@@ -296,16 +324,13 @@ class PrependFlow {
     const snapshot = this.snapshot;
     if (snapshot === undefined) return false;
     this.snapshot = undefined;
-    const scroller = this.host.getScroller();
-    if (scroller === undefined) return false;
-    const target = snapshot.top + scroller.scrollHeight - snapshot.height;
+    // Child Lit elements finish their queued renders before this frame. Measure
+    // the message then, not total height (which also includes live tail growth).
     this.frame = this.frames.request(() => {
       this.frame = undefined;
       if (!this.host.getBehaviors().anchorPrepends) return;
-      const scroller = this.host.getScroller();
-      if (scroller?.scrollTop !== snapshot.top) return;
-      scroller.scrollTop = target;
-      this.onCorrected();
+      const result = this.controller.restoreExplicitPosition(snapshot, this.host.getScroller(), this.host.getAnchors(), { fallbackToBottom: false });
+      if (result.status === "restored") this.onCorrected();
     });
     return true;
   }
@@ -331,10 +356,14 @@ export class ChatScrollFlows {
     frames: ChatScrollFrameScheduler = browserFrames,
     positionOptions: ChatScrollPositionOptions = {},
   ) {
+    const controller = new ChatScrollController(positionOptions.storage, positionOptions.saveScheduler);
     this.tail = new TailFlow(host, frames);
-    this.position = new PositionFlow(host, frames, new ChatScrollController(positionOptions.storage, positionOptions.saveScheduler), () => { this.tail.syncFollowingAfterNavigation(); }, () => { this.tail.pause(); });
+    this.position = new PositionFlow(host, frames, controller, () => { this.tail.syncFollowingAfterNavigation(); }, () => { this.tail.pause(); });
     this.history = new HistoryFlow(host, frames);
-    this.prepend = new PrependFlow(host, frames, () => { this.tail.recordScrollBaseline(); });
+    this.prepend = new PrependFlow(host, frames, controller, () => {
+      this.tail.recordScrollBaseline();
+      this.history.schedule();
+    });
   }
 
   get followingLive(): boolean {
@@ -347,9 +376,10 @@ export class ChatScrollFlows {
       if (typeof change.previousSessionId === "string") this.position.save(change.previousSessionId);
       this.position.reset();
       this.tail.reset();
-      this.history.cancel();
+      this.history.reset();
       this.prepend.cancel();
     } else if (change.prepend && !this.position.restoring) {
+      this.history.cancel();
       this.tail.cancel();
       this.prepend.capture();
     }
@@ -365,14 +395,14 @@ export class ChatScrollFlows {
     } else if (!this.prepend.apply() && (change.contentChanged || change.openedForm !== false)) {
       this.tail.schedule(change.openedForm);
     }
-    if (!this.position.restoring) this.history.schedule();
+    if (!this.position.restoring && !this.prepend.pending) this.history.schedule();
   }
 
   onScroll(): void {
     if (this.disposed) return;
     if (!this.position.restoring) this.tail.onScroll();
     this.position.scheduleSave();
-    if (!this.position.restoring) this.history.schedule();
+    if (!this.position.restoring && !this.prepend.pending) this.history.schedule();
   }
 
   onInteraction(): void {
@@ -391,7 +421,7 @@ export class ChatScrollFlows {
   }
 
   onContentLayoutChanged(): void {
-    if (this.disposed || this.position.restoring) return;
+    if (this.disposed || this.position.restoring || this.prepend.pending) return;
     this.tail.schedule();
   }
 
@@ -399,8 +429,10 @@ export class ChatScrollFlows {
     if (this.disposed) return;
     if (this.position.restoring) this.position.retry(false);
     else {
-      this.tail.schedule();
-      this.history.schedule();
+      if (!this.prepend.pending) {
+        this.tail.schedule();
+        this.history.schedule();
+      }
     }
   }
 
@@ -409,7 +441,7 @@ export class ChatScrollFlows {
     const behaviors = this.host.getBehaviors();
     this.tail.configure();
     if (!behaviors.rememberPosition) this.position.reset();
-    if (!behaviors.automaticHistory) this.history.cancel();
+    if (!behaviors.automaticHistory) this.history.reset();
     if (!behaviors.anchorPrepends) this.prepend.cancel();
   }
 

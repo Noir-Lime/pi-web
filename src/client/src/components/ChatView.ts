@@ -99,19 +99,28 @@ export function chatToolOutputLabel(toolName?: string): string {
   return toolName === undefined || toolName === "" ? "tool output" : `${toolName} output`;
 }
 
-/** The stable scroll-anchor/render key for a top-level message at `index`. */
-export function chatMessageAnchorKey(index: number): string {
-  return `m:${String(index)}`;
+function chatLineIdentity(index: number, message?: ChatLine): string {
+  if (message?.entryId === undefined) return String(index);
+  // Page offsets count raw entries, whereas display indexes count normalized
+  // lines. Only durable entry identity survives coalescing during a prepend.
+  // Skill invocations can also produce a user-text line from the same entry.
+  const slice = message.parts.some((part) => part.type === "skillInvocation") ? "skill-invocation" : "message";
+  return JSON.stringify([message.entryId, message.role, slice]);
 }
 
-/** The stable scroll-anchor/render key for a collapsed event group starting at `startIndex`. */
-export function chatGroupAnchorKey(startIndex: number): string {
-  return `g:${String(startIndex)}`;
+/** Message identity shared by rendering and scroll restoration. */
+export function chatMessageAnchorKey(index: number, message?: ChatLine): string {
+  return `m:${chatLineIdentity(index, message)}`;
 }
 
-/** The stable scroll-anchor key for an event inside a group at `index`. */
-export function chatEventAnchorKey(index: number): string {
-  return `e:${String(index)}`;
+/** Group render identity belongs to its first member. */
+export function chatGroupAnchorKey(startIndex: number, message?: ChatLine): string {
+  return `g:${chatLineIdentity(startIndex, message)}`;
+}
+
+/** Event identity is separate from the readable slice of the same entry. */
+export function chatEventAnchorKey(index: number, message?: ChatLine): string {
+  return `e:${chatLineIdentity(index, message)}`;
 }
 
 /** The CSS class list for an event-group `<details>`, distinguishing the live tail. */
@@ -441,7 +450,7 @@ export class ChatView extends LitElement {
           ${this.renderHistoryBoundary()}
           ${keyed(transcriptIdentity, repeat(
             groups,
-            (group) => group.kind === "group" ? this.groupRenderKey(group.startIndex) : this.messageAnchorKey(group.index),
+            (group) => group.kind === "group" ? this.groupRenderKey(group) : this.messageAnchorKey(group.index, group.message),
             (group, index) => {
               if (group.kind === "group") return this.renderMessageGroup(group, this.isLiveTailGroup(groups, index), entryActionHeaders);
               if (group.kind === "tool-image") return this.renderToolImageOutput(group.message, group.index, entryActionHeaders, group.toolName);
@@ -837,7 +846,7 @@ export class ChatView extends LitElement {
     const shellClass = toolOnly ? "msg tool-execution-shell" : "msg ask-user-record-shell";
     const question = message.parts.find((part) => part.type === "askUserQuestion");
     return html`
-      <article class=${hasHeader ? `msg ${message.role}` : shellClass} data-index=${index} data-scroll-anchor-id=${question === undefined ? this.messageAnchorKey(index) : `ask:${question.ask.askId}`}>
+      <article class=${hasHeader ? `msg ${message.role}` : shellClass} data-index=${index} data-scroll-anchor-id=${question === undefined ? this.messageAnchorKey(index, message) : `ask:${question.ask.askId}`}>
         ${hasHeader ? this.renderMessageHeader(message, String(index), index, entryActionHeaders) : null}
         ${message.parts.map((part, partIndex) => this.renderPart(part, message, index, partIndex))}
       </article>
@@ -847,7 +856,7 @@ export class ChatView extends LitElement {
   private renderToolImageOutput(message: ChatLine, index: number, entryActionHeaders: ReadonlySet<ChatLine>, toolName?: string) {
     const label = chatToolOutputLabel(toolName);
     return html`
-      <article class="msg tool-image-output" data-index=${index} data-scroll-anchor-id=${this.messageAnchorKey(index)}>
+      <article class="msg tool-image-output" data-index=${index} data-scroll-anchor-id=${this.messageAnchorKey(index, message)}>
         ${this.renderMessageHeader(message, String(index), index, entryActionHeaders, label)}
         ${message.parts.map((part, partIndex) => this.renderPart(part, message, index, partIndex))}
       </article>
@@ -859,11 +868,11 @@ export class ChatView extends LitElement {
   }
 
   private renderMessageGroup(group: Extract<ChatGroup, { kind: "group" }>, defaultOpen: boolean, entryActionHeaders: ReadonlySet<ChatLine> = new Set()) {
-    const { messages, startIndex, endIndex } = group;
-    const disclosureKey = this.groupDisclosureKey(startIndex, endIndex, defaultOpen);
+    const { messages, startIndex } = group;
+    const disclosureKey = this.groupDisclosureKey(group, defaultOpen);
     const open = this.behaviors.rememberDisclosures ? this.disclosures.isOpen(disclosureKey, defaultOpen) : defaultOpen;
     return html`
-      <details class=${chatMessageGroupClassName(defaultOpen)} data-index=${startIndex} data-scroll-anchor-id=${this.groupAnchorKey(startIndex)} ?open=${open} @toggle=${this.behaviors.rememberDisclosures ? (event: Event) => { this.onGroupToggle(disclosureKey, event, defaultOpen); } : undefined}>
+      <details class=${chatMessageGroupClassName(defaultOpen)} data-index=${startIndex} data-scroll-anchor-id=${this.groupAnchorKey(group, defaultOpen)} ?open=${open} @toggle=${this.behaviors.rememberDisclosures ? (event: Event) => { this.onGroupToggle(disclosureKey, event, defaultOpen); } : undefined}>
         <summary>
           <b class="label">${chatMessageGroupLabel(defaultOpen)}</b>
           <span>${summarizeChatGroup(messages.map((event) => event.message))}</span>
@@ -879,7 +888,7 @@ export class ChatView extends LitElement {
         ${messages.map(({ message, index }, offset) => {
           const toolOnly = this.isToolExecutionOnlyMessage(message);
           return html`
-            <section class=${toolOnly ? "group-msg tool-execution-shell" : `group-msg ${message.role}`} data-index=${index} data-scroll-anchor-id=${this.eventAnchorKey(index)}>
+            <section class=${toolOnly ? "group-msg tool-execution-shell" : `group-msg ${message.role}`} data-index=${index} data-scroll-anchor-id=${this.eventAnchorKey(index, message)}>
               ${chatMessageHasHeader(message) ? this.renderMessageHeader(message, `${String(startIndex)}:${String(offset)}`, index, entryActionHeaders) : null}
               ${message.parts.map((part, partIndex) => this.renderPart(part, message, index, partIndex))}
             </section>
@@ -1095,24 +1104,28 @@ export class ChatView extends LitElement {
     return Array.from(this.renderRoot.querySelectorAll<HTMLElement>("[data-scroll-anchor-id]"));
   }
 
-  private groupDisclosureKey(startIndex: number, endIndex: number, defaultOpen: boolean): string {
-    return defaultOpen ? `${this.sessionId}:live:${String(startIndex)}` : `${this.sessionId}:${String(endIndex)}`;
+  private groupDisclosureKey(group: Extract<ChatGroup, { kind: "group" }>, defaultOpen: boolean): string {
+    return defaultOpen
+      ? `${this.sessionId}:live:${chatLineIdentity(group.startIndex, group.messages[0]?.message)}`
+      : `${this.sessionId}:${chatLineIdentity(group.endIndex, group.messages.at(-1)?.message)}`;
   }
 
-  private messageAnchorKey(index: number): string {
-    return chatMessageAnchorKey(index);
+  private messageAnchorKey(index: number, message: ChatLine): string {
+    return chatMessageAnchorKey(index, message);
   }
 
-  private groupRenderKey(startIndex: number): string {
-    return chatGroupAnchorKey(startIndex);
+  private groupRenderKey(group: Extract<ChatGroup, { kind: "group" }>): string {
+    return chatGroupAnchorKey(group.startIndex, group.messages[0]?.message);
   }
 
-  private groupAnchorKey(startIndex: number): string {
-    return chatGroupAnchorKey(startIndex);
+  private groupAnchorKey(group: Extract<ChatGroup, { kind: "group" }>, live: boolean): string {
+    // Historical groups can absorb earlier events without changing their end;
+    // live groups grow at the other end, so retain their first member's identity.
+    return live ? this.groupRenderKey(group) : `g-end:${chatLineIdentity(group.endIndex, group.messages.at(-1)?.message)}`;
   }
 
-  private eventAnchorKey(index: number): string {
-    return chatEventAnchorKey(index);
+  private eventAnchorKey(index: number, message: ChatLine): string {
+    return chatEventAnchorKey(index, message);
   }
 
   static override styles = chatStyles;

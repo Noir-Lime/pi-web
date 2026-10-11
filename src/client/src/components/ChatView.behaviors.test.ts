@@ -4,6 +4,7 @@ import { DEFAULT_CHAT_BEHAVIORS, type ChatBehaviors } from "../chatBehaviors";
 import { PLAIN_CODE_BLOCK_POLICY } from "../formatting/codeBlockPolicy";
 import { MANUAL_CHAT_BEHAVIORS } from "../chatBehaviors.testSupport";
 import { groupStorageKey } from "../chatDisclosure";
+import { transcriptViewFromHistory } from "../chatTranscriptStore";
 import { ChatView } from "./ChatView";
 import { controlledChatViewport } from "./chatScroll.testSupport";
 import type { ChatLine } from "./shared";
@@ -137,6 +138,91 @@ describe("composable normal chat", () => {
     expect(metrics.top).toBe(400);
     expect(frames.size).toBe(0);
     expect(required(view.renderRoot, '[aria-label="Jump to end"]').classList.contains("following")).toBe(false);
+  });
+
+  it("anchors an actual history prepend to the message being read", async () => {
+    const view = await mount({ ...MANUAL_CHAT_BEHAVIORS, anchorPrepends: true });
+    view.messageStart = 100;
+    await view.updateComplete;
+    const { chat, write } = scrollingViewport(view, 10);
+    chat.getBoundingClientRect = () => new DOMRect(0, 100, 600, 300);
+    const reading = required(view.renderRoot, 'article[data-index="102"]');
+    let messageTop = 0;
+    // Controlled geometry at the DOM boundary; happy-dom does not lay out text.
+    reading.getBoundingClientRect = () => new DOMRect(0, 100 + messageTop - chat.scrollTop, 600, 100);
+
+    view.messages = [{ role: "user", parts: [{ type: "text", text: "Earlier message" }] }, ...messages];
+    view.messageStart = 99;
+    await view.updateComplete;
+    expect(required(view.renderRoot, 'article[data-index="102"]')).toBe(reading);
+    expect(write).not.toHaveBeenCalled();
+    messageTop = 300;
+    flushFrames();
+    expect(write).toHaveBeenCalledExactlyOnceWith(310);
+    expect(reading.getBoundingClientRect().top).toBe(90);
+  });
+
+  it("preserves entry identity when raw pages normalize to fewer displayed messages", async () => {
+    const raw = [
+      { entryId: "reading-entry", role: "user", content: "The message being read" },
+      { entryId: "empty-entry", role: "assistant", content: "" },
+    ];
+    const initial = transcriptViewFromHistory({ messages: raw, start: 100, total: 102 });
+    const view = await mount({ ...MANUAL_CHAT_BEHAVIORS, anchorPrepends: true });
+    view.messages = initial.messages;
+    view.messageStart = initial.messagePageStart;
+    await view.updateComplete;
+    const { chat, write } = scrollingViewport(view, 10);
+    chat.getBoundingClientRect = () => new DOMRect(0, 100, 600, 300);
+    const reading = required(view.renderRoot, 'article[data-index="100"]');
+    const anchorId = reading.dataset["scrollAnchorId"];
+    let messageTop = 0;
+    reading.getBoundingClientRect = () => new DOMRect(0, 100 + messageTop - chat.scrollTop, 600, 100);
+
+    const prepended = transcriptViewFromHistory({
+      start: 97, total: 102,
+      messages: [
+        { entryId: "call-entry", role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "file.ts" } }] },
+        { entryId: "result-entry", role: "toolResult", toolCallId: "call-1", toolName: "read", content: "File contents" },
+        { entryId: "older-entry", role: "user", content: "Earlier question" },
+        ...raw,
+      ],
+    });
+    // Three raw entries become only two extra displayed messages.
+    expect(prepended.messages.length - initial.messages.length).toBe(2);
+    view.messages = prepended.messages;
+    view.messageStart = prepended.messagePageStart;
+    await view.updateComplete;
+    expect(required(view.renderRoot, 'article[data-index="99"]')).toBe(reading);
+    expect(reading.dataset["scrollAnchorId"]).toBe(anchorId);
+    messageTop = 300;
+    flushFrames();
+    expect(write).toHaveBeenCalledExactlyOnceWith(310);
+    expect(reading.getBoundingClientRect().top).toBe(90);
+  });
+
+  it("preserves a collapsed first group when earlier events merge into it", async () => {
+    const view = await mount({ ...MANUAL_CHAT_BEHAVIORS, anchorPrepends: true });
+    view.messageStart = 100;
+    await view.updateComplete;
+    const { chat, write } = scrollingViewport(view, 20);
+    chat.getBoundingClientRect = () => new DOMRect(0, 100, 600, 300);
+    const oldGroup = required(view.renderRoot, ".event-group");
+    oldGroup.getBoundingClientRect = () => new DOMRect(0, 110, 600, 50);
+    // Older events merge with the two technical entries at indexes 100–101.
+    view.messages = [
+      { role: "user", parts: [{ type: "text", text: "Earlier question" }] },
+      { role: "assistant", parts: [{ type: "thinking", text: "Earlier thinking" }] },
+      ...messages,
+    ];
+    view.messageStart = 98;
+    await view.updateComplete;
+    const mergedGroup = required(view.renderRoot, ".event-group");
+    expect(mergedGroup).not.toBe(oldGroup);
+    mergedGroup.getBoundingClientRect = () => new DOMRect(0, 430 - chat.scrollTop, 600, 50);
+    flushFrames();
+    expect(write).toHaveBeenCalledExactlyOnceWith(320);
+    expect(mergedGroup.getBoundingClientRect().top).toBe(110);
   });
 
   it("can disable every scroll/disclosure effect while keeping manual navigation", async () => {

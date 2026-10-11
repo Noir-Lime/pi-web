@@ -202,7 +202,10 @@ describe("plugin-defined transcript message actions", () => {
     expect(groups).toHaveLength(1);
     const sections = Array.from(groups[0]?.querySelectorAll<HTMLElement>("section.group-msg") ?? []);
     expect(sections.map((section) => section.dataset["index"])).toEqual(["20", "23"]);
-    expect(sections.map((section) => section.dataset["scrollAnchorId"])).toEqual(["e:20", "e:23"]);
+    expect(sections.map((section) => section.dataset["scrollAnchorId"])).toEqual([
+      'e:["first","assistant","message"]',
+      'e:["last","assistant","message"]',
+    ]);
     const action = sections[1]?.querySelector<HTMLButtonElement>('button[title="Inspect entry"]');
     if (action === null || action === undefined) throw new Error("Missing last entry action");
     action.click();

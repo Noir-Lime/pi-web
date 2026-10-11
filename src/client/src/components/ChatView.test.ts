@@ -10,6 +10,7 @@ import {
   ChatView,
   chatEventAnchorKey,
   chatGroupAnchorKey,
+  chatMessageAnchorKey,
   chatMessageGroupClassName,
   chatMessageGroupLabel,
   chatMessageMetadataLabel,
@@ -18,6 +19,7 @@ import {
   chatSessionWarningRows,
 } from "./ChatView";
 import { templateEventHandlerAfterMarker, templateEventHandlerNearMarker } from "../templateInspection.testSupport";
+import type { ChatLine } from "./shared";
 
 describe("chatQueuedMessageSections", () => {
   it("labels client-side pending-start sends separately from server queued messages", () => {
@@ -272,6 +274,17 @@ describe("chat event-group content seams", () => {
     expect(chatGroupAnchorKey(40)).toBe("g:40");
     expect(chatEventAnchorKey(40)).toBe("e:40");
     expect(chatEventAnchorKey(41)).toBe("e:41");
+  });
+
+  it("keeps durable entry keys independent of normalized indexes and separates entry slices", () => {
+    const reply: ChatLine = { entryId: "entry-1", role: "user", parts: [{ type: "text", text: "Question" }] };
+    const invocation: ChatLine = { ...reply, parts: [{ type: "skillInvocation", name: "testing", location: "SKILL.md", content: "Instructions" }] };
+    for (const key of [chatMessageAnchorKey, chatEventAnchorKey, chatGroupAnchorKey]) {
+      expect(key(495, reply)).toBe(key(453, reply));
+      expect(key(495, reply)).not.toBe(key(495, invocation));
+      expect(key(495, reply)).not.toBe(key(495, { ...reply, entryId: "entry-2" }));
+    }
+    expect(chatMessageAnchorKey(495, reply)).not.toBe(chatEventAnchorKey(495, reply));
   });
 
   it("distinguishes the live tail group by class and disclosure label", () => {
