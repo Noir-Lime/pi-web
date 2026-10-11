@@ -493,7 +493,7 @@ describe("application rendering boundaries", () => {
     const initialFormatted = app.shadowRoot?.querySelector("chat-view")?.shadowRoot?.querySelector("formatted-text");
     if (order === "after") {
       expect(initialFormatted).toBeInstanceOf(FormattedText);
-      expect(initialFormatted?.shadowRoot?.querySelector("pre")?.textContent).toContain("graph TD");
+      expect(initialFormatted?.shadowRoot?.querySelector(".formatted")?.textContent).toContain("graph TD");
       expect(initialFormatted?.shadowRoot?.querySelector("pi-web-content-renderer")).toBeNull();
     }
 

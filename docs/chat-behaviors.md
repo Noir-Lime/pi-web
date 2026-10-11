@@ -1,13 +1,14 @@
 # Composing chat behavior
 
-Normal chat follows progress at the tail, remembers reading positions, loads earlier messages near the top, and offers explicit top/end navigation. Images use native `loading="lazy"` and `decoding="async"`.
+Normal chat follows progress at the tail, remembers reading positions, loads earlier messages near the top, and offers explicit top/end navigation. Images use native `loading="lazy"` and `decoding="async"`. Markdown code blocks currently preserve long lines with native horizontal scrolling, with copy controls in their own row above the source. Normal-flow Copy and native horizontal scrolling were confirmed smooth on the affected iPad. Plugin inspection and eligible Render/Raw controls are restored, and the original affected message remained smooth on the iPad after restoration. Built-in Mermaid remains click-to-render. Inline code, other Markdown, tool-output views, and Files previews are unchanged.
 
 ## Ownership
 
-- `PluginRegistry` owns renderer eligibility and a cached chat rendering view per machine. Its identity changes only when the eligible renderer set changes. `PiWebApp` passes that view through `ChatView` to `FormattedText` as an ordinary reactive input, so late plugin loading reveals diagram controls without navigation or transcript remounting. Initial loading and later updates use the same flow; Mermaid previews remain manually activated.
+- When `codeBlocks.previews` is enabled, `PluginRegistry` owns renderer eligibility and a cached chat rendering view per machine. Its identity changes only when the eligible renderer set changes. `PiWebApp` passes that view through `ChatView` to `FormattedText` as an ordinary reactive input, so late plugin loading reveals diagram controls without navigation or transcript remounting. Initial loading and later updates use the same flow; Mermaid previews remain manually activated.
 - `ChatView` renders the transcript, tool actions, forms, and native disclosures. It captures native transcript disclosure toggles and reports layout changes to `ChatScrollFlows`, independently of remembering disclosure choices. Closed groups keep their body DOM; recording a disclosure choice does not rebuild it. Effectful plugin renderers suspend their work while an ancestor disclosure is closed.
 - `ChatScrollFlows` composes position memory, tail-follow, earlier-history loading, and one-shot prepend anchoring. Each owns and cancels its pending work independently.
-- `chatBehaviors.ts` declares the capabilities injected through `PiWebApp.chatBehaviors` → `ChatView.behaviors`. All are enabled by default. This is an internal composition seam, not user-editable configuration or a diagnostic UI.
+- `chatBehaviors.ts` declares the capabilities injected through `PiWebApp.chatBehaviors` → `ChatView.behaviors`. Scroll, image, disclosure, and visual-effects capabilities are enabled by default. Its `codeBlocks` policy enables code presentation, horizontal overflow, normal-flow copy controls, and plugin previews independently; `PLAIN_CODE_BLOCK_POLICY` in `formatting/codeBlockPolicy.ts` remains the known-good rollback baseline. This is an internal composition seam, not user-editable configuration or a diagnostic UI.
+- `formatting/markdown.ts` owns sanitized block markup and optional copy controls together. Copy controls occupy normal flow before the source, without absolute positioning, stacking levels, or reserved source padding. `FormattedText` applies wrap/scroll presentation and delegates clipboard clicks; it never scans or reparents code blocks after rendering. Preview inspection is a separate optional adapter. It uses the same granular update path whether or not a renderer matches, preserving unchanged source blocks and preview hosts as trailing prose streams. A matched preview replaces the entire source block, and its Raw view inherits the same source presentation, overflow, and copy policy. `ContentRendererHost` retains ownership of preview activation, failure, cancellation, and disclosure suspension. The public plugin capability and Files defaults are unchanged.
 - Native images own fetching/decoding. Attachment and tool-image references include display-oriented dimensions when their headers are readable, reserving their responsive footprint before position restoration without image-load scroll corrections. Older machines and unreadable headers retain native intrinsic sizing.
 - Filesystem and external HTTP(S) Markdown images reuse browser-learned dimensions from one localStorage cache of up to 128 resolved image URLs, with no TTL. Successful native loads refresh the hints; changed images may still shift layout, while unseen images and unavailable storage retain native sizing. External images remain ordinary lazy-loaded native images with their existing links. Hints reserve responsive space before position restoration without additional requests or image-load scroll corrections. Outside-workspace Markdown images retain separate, transient approval: persisted dimensions never authorize loading, and sources remain unset until approved, whether visible or hidden.
 
@@ -37,7 +38,34 @@ To enable or disable a capability for a requested change, edit its value in `DEF
 | `automaticHistory` | Request earlier history near the top |
 | `anchorPrepends` | Make one adjustment after earlier messages are inserted |
 | `loadImages` | Assign authorized native chat image sources |
+| `codeBlocks.presentation` | `plain` keeps literal text; `code` uses native code markup and styling |
+| `codeBlocks.overflow` | `wrap` stays in normal flow; `scroll` gives source text a horizontal scroll region |
+| `codeBlocks.copy` | Include clipboard controls independently of presentation or previews |
+| `codeBlocks.previews` | Allow plugin fence inspection and eligible previews independently of source presentation |
 | `rememberDisclosures` | Retain open/closed group choices |
 | `visualEffects` | Apply chat sticky headers and decorative effects |
+
+### Code-block restoration results
+
+The current chat policy is:
+
+```ts
+codeBlocks: {
+  presentation: "code",
+  overflow: "scroll",
+  copy: true,
+  previews: true,
+}
+```
+
+The plain-text baseline, contained refactor, and wrapped-code presentation were confirmed stall-free on the affected iPad. Enabling the overlay copy-control variant brought the stalls back before any Copy click. Disabling it restored smooth scrolling again. This implicates the presence or presentation of the controls; a clipboard action is not required to trigger the symptom. It does not establish which individual markup or CSS change caused it.
+
+The same copy action with a normal-flow control above the source was confirmed smooth on the affected iPad, both before and after copying. This variant has no positioned wrapper, absolute button, stacking level, or reserved source padding. Keep that presentation; the result points to the previous overlay variant rather than copying itself, without identifying a single CSS rule.
+
+Native horizontal code scrolling was then confirmed smooth on the affected iPad, including vertical chat scrolling after sideways code scrolling. Finally, plugin inspection was restored with horizontal scrolling and normal-flow Copy unchanged. The original affected message remained smooth after reloading. Its ordinary plain-text fences have no eligible renderer and correctly show only their Copy icon, not Render/Raw controls.
+
+An eligible built-in Mermaid preview was separately verified through Render → Raw in Chromium, including cancellation and copied source text with a stubbed clipboard. Actual diagram activation has not been verified on the affected iPad. Built-in Mermaid remains manual; contributions explicitly declaring automatic rendering retain that policy. Set `previews: false` to return to the earlier verified code-and-Copy baseline. Source overflow policy does not constrain a plugin's rendered graphics.
+
+Keep the affected iPad message as the acceptance check between steps; DOM tests and desktop browser measurements do not establish whether Safari's scrolling stall has returned. For rollback, set `DEFAULT_CHAT_BEHAVIORS.codeBlocks` to `PLAIN_CODE_BLOCK_POLICY`. No URL switches, ambient storage, observers, or gesture handlers are needed for these controls.
 
 Implement and verify one UX enhancement at a time. Preserve the cancellation, authorization, and native-DOM contracts covered by the flow/component tests. For verification conventions, see [development checks](development-checks.md).

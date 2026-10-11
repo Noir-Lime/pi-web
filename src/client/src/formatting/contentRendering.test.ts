@@ -9,6 +9,7 @@ import { writeClipboardText } from "../clipboard";
 import { PluginRegistry } from "../plugins/registry";
 import { renderWorkspaceMarkdownHtml } from "../../../../pi-web-plugins/files/workspaceMarkdown";
 import { createContentRenderingCapability, MAX_CONTENT_RENDERER_LENGTH } from "./contentRendering";
+import { PLAIN_CODE_BLOCK_POLICY } from "./codeBlockPolicy";
 
 vi.mock("../clipboard", () => ({ writeClipboardText: vi.fn().mockResolvedValue(true) }));
 
@@ -261,10 +262,11 @@ describe("shared content rendering", () => {
     expect(second.shadowRoot?.querySelector('[role="status"]')?.textContent).toBe("Copied source");
   });
 
-  it("does not expose intent memory through public Markdown even to untyped callers", async () => {
+  it("does not expose chat intent or source policy through public Markdown even to untyped callers", async () => {
     const capability = createContentRenderingCapability(() => [{ id: "manual", label: "Manual", renderer: { ...renderer(), renderMode: "manual" } }]);
     const request = { machineId: "local", text: "```diagram\nsource\n```", toSafeHtml: renderWorkspaceMarkdownHtml };
     Reflect.set(request, "intentKey", "untyped-public-memory");
+    Reflect.set(request, "codeBlocks", PLAIN_CODE_BLOCK_POLICY);
     const root = document.createElement("div");
     document.body.append(root);
     const mountHost = async () => {
@@ -276,6 +278,8 @@ describe("shared content rendering", () => {
     };
     const first = await mountHost();
     expect(first.intentKey).toBeUndefined();
+    expect(first.codeBlocks).toBeUndefined();
+    expect(first.renderRoot.querySelector(".copy")).not.toBeNull();
     button(first, "Render").click();
     await first.updateComplete;
     expect(first.renderRoot.querySelector(".diagram")).not.toBeNull();

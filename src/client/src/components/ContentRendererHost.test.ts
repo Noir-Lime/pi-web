@@ -32,6 +32,43 @@ function button(host: ContentRendererHost, label: string): HTMLButtonElement {
   return found;
 }
 
+it("attaches source-policy modifiers only to raw source, never to preview content or its ancestors", async () => {
+  const draw = vi.fn<ContentRendererContribution["render"]>(() => html`
+    <pre class="renderer-owned-code">Preview code</pre>
+    <div class="plain-code-block">Preview text</div>
+  `);
+  const host = automaticHost(draw);
+  host.codeBlocks = { presentation: "code", overflow: "wrap", copy: true };
+  document.body.append(host);
+  await host.updateComplete;
+  const preview = host.renderRoot.querySelector(".preview");
+  expect(preview).not.toBeNull();
+  const previewCode = preview?.querySelector("pre");
+  const previewText = preview?.querySelector(".plain-code-block");
+
+  for (const overflow of ["wrap", "scroll"] as const) {
+    host.codeBlocks = { presentation: "code", overflow, copy: true };
+    await host.updateComplete;
+    expect(host.renderRoot.querySelector(".source-wrap, .source-scroll")).toBeNull();
+    expect(host.renderRoot.querySelector(".preview")).toBe(preview);
+    expect(preview?.querySelector("pre")).toBe(previewCode);
+    expect(preview?.querySelector(".plain-code-block")).toBe(previewText);
+    expect(draw).toHaveBeenCalledOnce();
+    expect(draw.mock.calls[0]?.[0].signal.aborted).toBe(false);
+  }
+
+  button(host, "Raw").click();
+  await host.updateComplete;
+  expect(host.renderRoot.querySelector("#content > pre.source-scroll")?.textContent).toBe("source");
+  expect(host.renderRoot.querySelector(".preview")).toBeNull();
+  expect(draw.mock.calls[0]?.[0].signal.aborted).toBe(true);
+
+  host.codeBlocks = { presentation: "plain", overflow: "wrap", copy: true };
+  await host.updateComplete;
+  expect(host.renderRoot.querySelector("#content > .plain-code-block.source-wrap")?.textContent).toBe("source");
+  expect(host.renderRoot.querySelector("#content")?.className).toBe("");
+});
+
 describe("content renderer disclosure lifecycle", () => {
   it("retains a closed group's body without starting automatic work, and aborts/restarts only its renderer on toggles", async () => {
     const draw = vi.fn<ContentRendererContribution["render"]>(() => html`<b>Preview</b>`);

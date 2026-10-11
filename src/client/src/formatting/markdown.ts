@@ -1,23 +1,40 @@
-import { marked } from "marked";
+import { marked, type Renderer } from "marked";
+import { DEFAULT_CODE_BLOCK_POLICY, type CodeBlockPolicy } from "./codeBlockPolicy";
 import { replaceLocalMarkdownImages } from "./markdownImages";
 import { workspaceFilePreviewUrl } from "../api/urls";
 import { resolveAppUrl } from "../appUrl";
 import { workspaceMarkdownFilePath, type MarkdownWorkspaceContext } from "./workspaceLinks";
 
-const renderer = new marked.Renderer();
-renderer.html = ({ text }) => escapeHtml(text);
+const nativeCodeRenderer = new marked.Renderer();
+
+function markdownRenderer(codeBlocks: CodeBlockPolicy): Renderer {
+  const renderer = new marked.Renderer();
+  renderer.html = ({ text }) => escapeHtml(text);
+  renderer.code = (token) => {
+    const block = codeBlocks.presentation === "code"
+      ? nativeCodeRenderer.code(token)
+      : `<div class="plain-code-block">${escapeHtml(token.text)}\n</div>\n`;
+    // Controls belong to the generated markup, not a post-render DOM rewrite.
+    // Put Copy before the source so it occupies its own normal-flow row.
+    return codeBlocks.copy
+      ? `<div class="code-block-wrapper"><button type="button" class="code-copy-button" title="Copy code block" aria-label="Copy code block"><span aria-hidden="true">⧉</span></button>${block}</div>\n`
+      : block;
+  };
+  return renderer;
+}
 
 const MAX_MARKDOWN_CACHE_ENTRIES = 300;
 const markdownHtmlCache = new Map<string, string>();
 
-export function toSafeMarkdownHtml(text: string, workspace?: MarkdownWorkspaceContext, imageIntentKey?: string, imagesEnabled = true): string {
+export function toSafeMarkdownHtml(text: string, workspace?: MarkdownWorkspaceContext, imageIntentKey?: string, imagesEnabled = true, codeBlocks: CodeBlockPolicy = DEFAULT_CODE_BLOCK_POLICY): string {
+  // Overflow is applied at the component boundary; preview policy does not alter HTML.
   // Only workspace links depend on the effective application base, not route/query changes.
-  const key = JSON.stringify([text, imagesEnabled, workspace === undefined ? null : [
+  const key = JSON.stringify([text, imagesEnabled, codeBlocks.presentation, codeBlocks.copy, workspace === undefined ? null : [
     workspace.machineId, workspace.projectId, workspace.workspaceId, workspace.root, resolveAppUrl(""), imageIntentKey,
   ]]);
   const cached = markdownHtmlCache.get(key);
   if (cached !== undefined) return cached;
-  const html = marked.parse(text, { async: false, breaks: true, gfm: true, renderer });
+  const html = marked.parse(text, { async: false, breaks: true, gfm: true, renderer: markdownRenderer(codeBlocks) });
   const safeHtml = sanitizeHtml(html, workspace, imageIntentKey, imagesEnabled);
   markdownHtmlCache.set(key, safeHtml);
   if (markdownHtmlCache.size > MAX_MARKDOWN_CACHE_ENTRIES) {
