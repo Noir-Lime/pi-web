@@ -111,16 +111,41 @@ describe("plain Markdown code blocks", () => {
     const policy = { ...PLAIN_CODE_BLOCK_POLICY, presentation };
     const root = document.createElement("div");
     root.innerHTML = toSafeMarkdownHtml(text, undefined, undefined, true, policy);
-    expect(root.querySelector("button, .code-block-wrapper")).toBeNull();
+    expect(root.querySelector("button")).toBeNull();
+    expect(root.querySelectorAll(".code-block-frame")).toHaveLength(presentation === "code" ? 1 : 0);
     root.innerHTML = toSafeMarkdownHtml(text, undefined, undefined, true, { ...policy, copy: true });
     expect(root.querySelectorAll(".code-block-wrapper")).toHaveLength(1);
     expect(root.querySelectorAll('button[aria-label="Copy code block"]')).toHaveLength(1);
     const copy = root.querySelector(".code-copy-button");
-    expect(copy?.parentElement?.firstElementChild).toBe(copy);
-    expect(copy?.nextElementSibling?.tagName).toBe(presentation === "code" ? "PRE" : "DIV");
+    expect(copy?.parentElement?.classList.contains("code-block-header")).toBe(true);
+    expect(copy?.parentElement?.nextElementSibling?.tagName).toBe(presentation === "code" ? "PRE" : "DIV");
+    expect(copy?.parentElement?.querySelector(".code-block-label")?.textContent).toBe("html");
     expect(root.querySelector(presentation === "code" ? "pre code" : ".plain-code-block")?.textContent).toBe('<img src="x" onerror="bad()"> & literal\n');
     expect(root.querySelector("img, script")).toBeNull();
     expect(toSafeMarkdownHtml(text, undefined, undefined, true, policy)).not.toContain("code-copy-button");
+  });
+
+  it.each([
+    ["```typescript\nsource\n```", "typescript"],
+    ['```bash title="demo"\nsource\n```', "bash"],
+    ["```\nsource\n```", null],
+    ["    source", null],
+    ["```<img\nsource\n```", "<img"],
+  ])("labels the frame with only an inert fence language, or nothing: %s", (text, language) => {
+    const root = document.createElement("div");
+    root.innerHTML = toSafeMarkdownHtml(text);
+    expect(root.querySelector(".code-block-frame > .code-block-header")).not.toBeNull();
+    expect(root.querySelector(".code-block-label")?.textContent ?? null).toBe(language);
+    expect(root.querySelectorAll(".code-block-copy")).toHaveLength(1);
+    expect(root.querySelector("img, script, select")).toBeNull();
+  });
+
+  it("retains the native frame and language label when copying is disabled", () => {
+    const root = document.createElement("div");
+    root.innerHTML = toSafeMarkdownHtml("```typescript\nsource\n```", undefined, undefined, true, { ...DEFAULT_CODE_BLOCK_POLICY, copy: false });
+    expect(root.querySelector(".code-block-frame .code-block-label")?.textContent).toBe("typescript");
+    expect(root.querySelector("button")).toBeNull();
+    expect(root.querySelector("pre code")?.textContent).toBe("source\n");
   });
 
   it("reuses HTML across overflow and preview choices but not presentation or copy choices", () => {

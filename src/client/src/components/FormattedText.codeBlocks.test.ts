@@ -55,7 +55,7 @@ function hostIn(root: ParentNode): ContentRendererHost {
 }
 
 function button(host: ContentRendererHost, label: string): HTMLButtonElement {
-  const found = [...host.renderRoot.querySelectorAll("button")].find((item) => item.textContent.trim() === label);
+  const found = [...host.renderRoot.querySelectorAll("button")].find((item) => item.getAttribute("aria-label") === label || item.textContent.trim() === label);
   if (found === undefined) throw new Error(`Missing ${label} button`);
   return found;
 }
@@ -93,6 +93,9 @@ it.each(["plain", "code"] as const)("preserves unchanged %s source and Copy focu
   const source = view.renderRoot.querySelector<HTMLElement>("pre, .plain-code-block");
   const copy = view.renderRoot.querySelector<HTMLButtonElement>(".code-copy-button");
   if (source === null || copy === null) throw new Error("Expected source and its Copy button");
+  const header = view.renderRoot.querySelector(".code-block-header");
+  const label = header?.querySelector(".code-block-label");
+  expect(label?.textContent).toBe("text");
   copy.focus();
   copy.click();
   await settle(view);
@@ -103,6 +106,9 @@ it.each(["plain", "code"] as const)("preserves unchanged %s source and Copy focu
     await settle(view);
     expect(view.renderRoot.querySelector("pre, .plain-code-block")).toBe(source);
     expect(view.renderRoot.querySelector(".code-copy-button")).toBe(copy);
+    expect(view.renderRoot.querySelector(".code-block-header")).toBe(header);
+    expect(header?.querySelector(".code-block-label")).toBe(label);
+    expect(view.renderRoot.querySelector("pi-web-content-renderer, select")).toBeNull();
     expect(view.shadowRoot?.activeElement).toBe(copy);
     expect(copy.getAttribute("aria-label")).toBe("Copied code block");
     expect(source.textContent).toBe(`${literalSource}\n`);
@@ -156,14 +162,14 @@ it.each(independentPolicies)("restores $label without preview inspection or stal
     expect(root.querySelectorAll("pre")).toHaveLength(policy.presentation === "code" ? 1 : 0);
     expect(root.querySelectorAll("div.plain-code-block")).toHaveLength(policy.presentation === "plain" ? 1 : 0);
     expect(root.querySelector("pre > code, div.plain-code-block")?.textContent).toBe(`${literalSource}\n`);
-    expect(root.querySelectorAll(".code-block-wrapper")).toHaveLength(policy.copy ? 1 : 0);
+    expect(root.querySelectorAll(".code-block-wrapper")).toHaveLength(policy.presentation === "code" || policy.copy ? 1 : 0);
     expect(root.querySelectorAll(".code-copy-button")).toHaveLength(policy.copy ? 1 : 0);
   }
   expect(view.renderRoot.querySelector(".formatted")?.classList.contains("code-blocks-scroll")).toBe(policy.overflow === "scroll");
 
   view.intentKey = "literal-source-new-intent";
   await settle(view);
-  expect(view.renderRoot.querySelectorAll(".code-block-wrapper")).toHaveLength(policy.copy ? 1 : 0);
+  expect(view.renderRoot.querySelectorAll(".code-block-wrapper")).toHaveLength(policy.presentation === "code" || policy.copy ? 1 : 0);
   expect(view.renderRoot.querySelectorAll(".code-copy-button")).toHaveLength(policy.copy ? 1 : 0);
 
   view.codeBlocks = PLAIN_CODE_BLOCK_POLICY;

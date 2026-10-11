@@ -289,7 +289,8 @@ describe("composable normal chat", () => {
     for (const element of formatted) {
       expect(element.codeBlocks).toBe(view.behaviors.codeBlocks);
       expect(element.renderRoot.querySelector("pre code")?.textContent).toBe("first\n  second\n");
-      expect(element.renderRoot.querySelector(".code-block-wrapper, .code-copy-button, .code-blocks-scroll, pi-web-content-renderer")).toBeNull();
+      expect(element.renderRoot.querySelector(".code-block-label")?.textContent).toBe("text");
+      expect(element.renderRoot.querySelector(".code-copy-button, .code-blocks-scroll, pi-web-content-renderer")).toBeNull();
     }
 
     view.behaviors = DEFAULT_CHAT_BEHAVIORS;

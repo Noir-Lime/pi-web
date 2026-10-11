@@ -8,6 +8,7 @@ import { DEFAULT_CODE_BLOCK_POLICY, type CodeBlockPolicy } from "../formatting/c
 import { rememberExternalMarkdownImageDimensions, restoreExternalMarkdownImageDimensions } from "../formatting/externalMarkdownImages";
 import type { MarkdownWorkspaceContext, WorkspaceFileOpenRequest } from "../formatting/workspaceLinks";
 import { formattedTextStyles } from "./shared";
+import { codeBlockFrameStyles } from "./codeBlockFrameStyles";
 
 @customElement("formatted-text")
 export class FormattedText extends LitElement {
@@ -85,5 +86,5 @@ export class FormattedText extends LitElement {
     button.setAttribute("aria-label", label);
   }
 
-  static override styles = formattedTextStyles;
+  static override styles = [formattedTextStyles, codeBlockFrameStyles];
 }

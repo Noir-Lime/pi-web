@@ -14,11 +14,16 @@ function markdownRenderer(codeBlocks: CodeBlockPolicy): Renderer {
     const block = codeBlocks.presentation === "code"
       ? nativeCodeRenderer.code(token)
       : `<div class="plain-code-block">${escapeHtml(token.text)}\n</div>\n`;
-    // Controls belong to the generated markup, not a post-render DOM rewrite.
-    // Put Copy before the source so it occupies its own normal-flow row.
-    return codeBlocks.copy
-      ? `<div class="code-block-wrapper"><button type="button" class="code-copy-button" title="Copy code block" aria-label="Copy code block"><span aria-hidden="true">⧉</span></button>${block}</div>\n`
-      : block;
+    // The literal, copy-free baseline has no frame or controls.
+    if (codeBlocks.presentation === "plain" && !codeBlocks.copy) return block;
+    const language = token.lang?.trim().split(/\s/u)[0] ?? "";
+    const label = language === "" ? "" : `<span class="code-block-label">${escapeHtml(language)}</span>`;
+    const copy = codeBlocks.copy
+      ? '<button type="button" class="code-copy-button code-block-copy" title="Copy code block" aria-label="Copy code block"><span aria-hidden="true">⧉</span></button>'
+      : "";
+    // Generate the normal-flow header before mounting; never reparent source DOM.
+    const header = label === "" && copy === "" ? "" : `<div class="code-block-header" role="group" aria-label="Code block controls">${label}${copy}</div>`;
+    return `<div class="code-block-wrapper code-block-frame">${header}${block}</div>\n`;
   };
   return renderer;
 }

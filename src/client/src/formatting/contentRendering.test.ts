@@ -50,7 +50,7 @@ async function renderPublicMarkdown(content: TemplateResult, root: HTMLElement):
 }
 
 function button(host: ContentRendererHost, label: string): HTMLButtonElement {
-  const found = [...host.renderRoot.querySelectorAll("button")].find((item) => item.textContent.trim() === label);
+  const found = [...host.renderRoot.querySelectorAll("button")].find((item) => item.getAttribute("aria-label") === label || item.textContent.trim() === label);
   if (found === undefined) throw new Error(`Missing ${label} button`);
   return found;
 }
