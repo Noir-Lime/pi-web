@@ -1085,6 +1085,15 @@ describe("API parsers", () => {
     expect(() => parseRealtimeStreamEvent({ type: "models.changed", revision: -1 })).toThrow("safe integer");
   });
 
+  it("rebuilds global workspace invalidations from the validated project id", () => {
+    expect(parseRealtimeStreamEvent({ type: "workspaces.changed", projectId: "project-1", workspaces: [], seq: 3 }))
+      .toEqual({ type: "workspaces.changed", projectId: "project-1" });
+  });
+
+  it.each([undefined, null, "", 7, true, {}, []])("rejects a workspace invalidation with projectId %j", (projectId) => {
+    expect(() => parseRealtimeStreamEvent({ type: "workspaces.changed", projectId })).toThrow("string field: projectId");
+  });
+
   it("rejects malformed, unsafe, over-cap, and oversized notification payloads", () => {
     const inbox = notificationInboxWire();
     expect(() => parseSessionNotificationInboxSnapshot({

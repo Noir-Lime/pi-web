@@ -4,33 +4,38 @@ import { customElement, property } from "lit/decorators.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { writeClipboardText } from "../clipboard";
 import { toSafeMarkdownHtml } from "../formatting/markdown";
+import { DEFAULT_CODE_BLOCK_POLICY, type CodeBlockPolicy } from "../formatting/codeBlockPolicy";
 import { rememberExternalMarkdownImageDimensions, restoreExternalMarkdownImageDimensions } from "../formatting/externalMarkdownImages";
 import type { MarkdownWorkspaceContext, WorkspaceFileOpenRequest } from "../formatting/workspaceLinks";
 import { formattedTextStyles } from "./shared";
+import { codeBlockFrameStyles } from "./codeBlockFrameStyles";
 
 @customElement("formatted-text")
 export class FormattedText extends LitElement {
   @property() text = "";
   @property() intentKey: string | undefined;
   @property({ type: Boolean }) imagesEnabled = true;
+  @property({ attribute: false }) codeBlocks: CodeBlockPolicy = DEFAULT_CODE_BLOCK_POLICY;
   @property({ attribute: false }) contentRendering: ChatContentRendering | undefined;
   @property() machineId = "local";
   @property({ attribute: false }) workspaceContext: MarkdownWorkspaceContext | undefined;
 
   override render() {
-    const content = this.contentRendering?.renderMarkdown({
+    const toSafeHtml = (text: string) => toSafeMarkdownHtml(text, this.workspaceContext, this.intentKey, this.imagesEnabled, this.codeBlocks);
+    // Disabling previews bypasses inspection as well as renderer mounting.
+    const content = (this.codeBlocks.previews ? this.contentRendering?.renderMarkdown({
       text: this.text,
       machineId: this.workspaceContext?.machineId ?? this.machineId,
-      toSafeHtml: (text) => toSafeMarkdownHtml(text, this.workspaceContext, this.intentKey, this.imagesEnabled),
-    }, this.intentKey) ?? unsafeHTML(toSafeMarkdownHtml(this.text, this.workspaceContext, this.intentKey, this.imagesEnabled));
-    return html`<div class="formatted" dir="auto" @load=${this.onImageLoad} @click=${this.onFormattedClick}>${content}</div>`;
+      toSafeHtml,
+    }, this.intentKey, this.codeBlocks) : undefined) ?? unsafeHTML(toSafeHtml(this.text));
+    const className = this.codeBlocks.overflow === "scroll" ? "formatted code-blocks-scroll" : "formatted";
+    return html`<div class=${className} dir="auto" @load=${this.onImageLoad} @click=${this.onFormattedClick}>${content}</div>`;
   }
 
   override updated(): void {
     // HTML is memoized independently of geometry; apply hints on every DOM mount,
     // in this update's microtask before paint or the chat's position-restoration frame.
     restoreExternalMarkdownImageDimensions(this.renderRoot);
-    this.enhanceCodeBlocks();
   }
 
   private readonly onImageLoad = {
@@ -40,27 +45,6 @@ export class FormattedText extends LitElement {
       if (event.target instanceof HTMLImageElement) rememberExternalMarkdownImageDimensions(event.target);
     },
   };
-
-  private enhanceCodeBlocks(): void {
-    this.renderRoot.querySelectorAll("pre").forEach((element) => {
-      if (!(element instanceof HTMLPreElement) || element.parentElement?.classList.contains("code-block-wrapper") === true) return;
-      const code = element.querySelector("code");
-      if (!(code instanceof HTMLElement)) return;
-      const wrapper = document.createElement("div");
-      wrapper.className = "code-block-wrapper";
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "code-copy-button";
-      button.title = "Copy code block";
-      button.setAttribute("aria-label", "Copy code block");
-      const icon = document.createElement("span");
-      icon.setAttribute("aria-hidden", "true");
-      icon.textContent = "⧉";
-      button.append(icon);
-      element.before(wrapper);
-      wrapper.append(element, button);
-    });
-  }
 
   private readonly onFormattedClick = (event: MouseEvent): void => {
     if (!(event.target instanceof Element)) return;
@@ -81,7 +65,7 @@ export class FormattedText extends LitElement {
     if (!(button instanceof HTMLButtonElement)) return;
     const wrapper = button.closest(".code-block-wrapper");
     if (!(wrapper instanceof HTMLElement)) return;
-    const code = wrapper.querySelector("pre code");
+    const code = wrapper.querySelector("pre code, .plain-code-block");
     if (!(code instanceof HTMLElement)) return;
     void this.copyCode(code.textContent, button);
   };
@@ -102,5 +86,5 @@ export class FormattedText extends LitElement {
     button.setAttribute("aria-label", label);
   }
 
-  static override styles = formattedTextStyles;
+  static override styles = [formattedTextStyles, codeBlockFrameStyles];
 }

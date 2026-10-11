@@ -1,12 +1,14 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CHAT_BEHAVIORS, type ChatBehaviors } from "../chatBehaviors";
+import { PLAIN_CODE_BLOCK_POLICY } from "../formatting/codeBlockPolicy";
 import { MANUAL_CHAT_BEHAVIORS } from "../chatBehaviors.testSupport";
 import { groupStorageKey } from "../chatDisclosure";
 import { ChatView } from "./ChatView";
 import { controlledChatViewport } from "./chatScroll.testSupport";
 import type { ChatLine } from "./shared";
 import type { TranscriptImage } from "./TranscriptImage";
+import type { FormattedText } from "./FormattedText";
 import { nativeImage, settleImage } from "./imagePresentation.testSupport";
 
 const messages: ChatLine[] = [
@@ -236,6 +238,70 @@ describe("composable normal chat", () => {
     view.behaviors = DEFAULT_CHAT_BEHAVIORS; await view.updateComplete; await settleImage(image);
     expect(nativeImage(presentation)).toBe(native);
     expect(native.src).toBe("data:image/png;base64,QUJD");
+  });
+
+  it("defaults to horizontally scrolling code with Copy in every Markdown surface and retains independent rollbacks, including closed groups", async () => {
+    const view = await mount();
+    const text = "```text\nfirst\n  second\n```";
+    view.clientQueuedMessages = [{ kind: "followUp", text }];
+    view.messages = [{ role: "assistant", parts: [
+      { type: "text", text },
+      { type: "thinking", text },
+      { type: "skillInvocation", name: "skill", location: "/skill", content: text },
+      { type: "toolResult", toolName: "read", text, isError: false },
+    ] }];
+    await view.updateComplete;
+    expect(view.behaviors.codeBlocks).toEqual({ presentation: "code", overflow: "scroll", copy: true, previews: true });
+    const formatted = [...view.renderRoot.querySelectorAll<FormattedText>("formatted-text")];
+    expect(formatted).toHaveLength(5);
+    await Promise.all(formatted.map((element) => element.updateComplete));
+    for (const element of formatted) {
+      expect(element.codeBlocks).toBe(view.behaviors.codeBlocks);
+      expect(element.renderRoot.querySelector("pre code")?.textContent).toBe("first\n  second\n");
+      expect(element.renderRoot.querySelectorAll(".code-block-wrapper")).toHaveLength(1);
+      expect(element.renderRoot.querySelectorAll(".code-copy-button")).toHaveLength(1);
+      expect(element.renderRoot.querySelector(".plain-code-block, pi-web-content-renderer")).toBeNull();
+      expect(element.renderRoot.querySelector(".formatted")?.classList.contains("code-blocks-scroll")).toBe(true);
+    }
+
+    const copyButtons = formatted.map((element) => element.renderRoot.querySelector(".code-copy-button"));
+    view.behaviors = { ...view.behaviors, codeBlocks: { ...view.behaviors.codeBlocks, overflow: "wrap" } };
+    await view.updateComplete;
+    await Promise.all(formatted.map((element) => element.updateComplete));
+    formatted.forEach((element, index) => {
+      expect(element.codeBlocks).toBe(view.behaviors.codeBlocks);
+      expect(element.renderRoot.querySelector(".code-blocks-scroll, pi-web-content-renderer")).toBeNull();
+      expect(element.renderRoot.querySelector(".code-copy-button")).toBe(copyButtons[index]);
+    });
+
+    view.behaviors = { ...view.behaviors, codeBlocks: PLAIN_CODE_BLOCK_POLICY };
+    await view.updateComplete;
+    await Promise.all(formatted.map((element) => element.updateComplete));
+    for (const element of formatted) {
+      expect(element.codeBlocks).toBe(PLAIN_CODE_BLOCK_POLICY);
+      expect(element.renderRoot.querySelector(".plain-code-block")?.textContent).toBe("first\n  second\n");
+      expect(element.renderRoot.querySelector("pre, .code-block-wrapper, .code-copy-button, .code-blocks-scroll, pi-web-content-renderer")).toBeNull();
+    }
+
+    view.behaviors = { ...DEFAULT_CHAT_BEHAVIORS, codeBlocks: { ...DEFAULT_CHAT_BEHAVIORS.codeBlocks, overflow: "wrap", copy: false, previews: false } };
+    await view.updateComplete;
+    await Promise.all(formatted.map((element) => element.updateComplete));
+    for (const element of formatted) {
+      expect(element.codeBlocks).toBe(view.behaviors.codeBlocks);
+      expect(element.renderRoot.querySelector("pre code")?.textContent).toBe("first\n  second\n");
+      expect(element.renderRoot.querySelector(".code-block-label")?.textContent).toBe("text");
+      expect(element.renderRoot.querySelector(".code-copy-button, .code-blocks-scroll, pi-web-content-renderer")).toBeNull();
+    }
+
+    view.behaviors = DEFAULT_CHAT_BEHAVIORS;
+    await view.updateComplete;
+    await Promise.all(formatted.map((element) => element.updateComplete));
+    for (const element of formatted) {
+      expect(element.codeBlocks).toBe(view.behaviors.codeBlocks);
+      expect(element.renderRoot.querySelectorAll(".code-copy-button")).toHaveLength(1);
+      expect(element.renderRoot.querySelector("pi-web-content-renderer")).toBeNull();
+      expect(element.renderRoot.querySelector(".formatted")?.classList.contains("code-blocks-scroll")).toBe(true);
+    }
   });
 
   it("applies CSS simplification independently of scrolling capabilities", async () => {

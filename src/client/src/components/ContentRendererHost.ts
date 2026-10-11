@@ -4,6 +4,8 @@ import type { ContentRendererContribution } from "../../../plugin-api";
 import type { ContentRendererChoice } from "../plugins/contentRenderers";
 import { renderIntentMemory } from "../formatting/renderIntentMemory";
 import { writeClipboardText } from "../clipboard";
+import type { CodeBlockSourcePolicy } from "../formatting/codeBlockPolicy";
+import { codeBlockFrameStyles } from "./codeBlockFrameStyles";
 
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   return value !== null && typeof value === "object" && "then" in value && typeof value.then === "function";
@@ -16,6 +18,8 @@ function isTemplateResult(value: unknown): value is TemplateResult {
 /** Owns source access independently of the plugin's rendering success. */
 @customElement("pi-web-content-renderer")
 export class ContentRendererHost extends LitElement {
+  // Chat-private source controls; public plugin consumers retain legacy defaults.
+  @property({ attribute: false }) codeBlocks: CodeBlockSourcePolicy | undefined;
   @property({ type: Boolean, reflect: true, attribute: "external-controls" }) externalControls = false;
   @property() text = "";
   @property() intentKey: string | undefined;
@@ -149,10 +153,14 @@ export class ContentRendererHost extends LitElement {
     const preview = !this.raw && active ? this.renderPreview() : undefined;
     const diagnostic = this.failure;
     const showingRaw = preview === undefined || diagnostic !== undefined;
-    return html`
-      ${this.externalControls ? null : html`<div class="controls" role="group" aria-label="Diagram controls">
-        ${this.choices.length < 2 ? null : html`
-          <select aria-label="Diagram renderer" @change=${(event: Event) => { if (event.target instanceof HTMLSelectElement) this.selectRenderer(event.target.value); }}>
+    const sourceClass = this.codeBlocks?.overflow === "wrap" ? "source-wrap" : "source-scroll";
+    const choice = this.choices.find(({ id }) => id === this.selectedId);
+    return html`<div class=${this.externalControls ? "" : "code-block-frame"}>
+      ${this.externalControls ? null : html`<div class="controls code-block-header" role="group" aria-label="Code block controls">
+        ${this.choices.length < 2
+          ? choice === undefined ? null : html`<span class="code-block-label" title=${choice.label}>${choice.label}</span>`
+          : html`
+          <select class="code-block-label" aria-label="Diagram renderer" @change=${(event: Event) => { if (event.target instanceof HTMLSelectElement) this.selectRenderer(event.target.value); }}>
             ${this.choices.map(({ id, label }) => html`<option value=${id} .selected=${id === this.selectedId}>${label}</option>`)}
           </select>
         `}
@@ -160,32 +168,40 @@ export class ContentRendererHost extends LitElement {
           <button type="button" aria-controls="content" aria-pressed=${!showingRaw} @click=${() => { this.setRaw(false); }}>${this.renderer.renderMode === "automatic" ? "Preview" : "Render"}</button>
           <button type="button" aria-controls="content" aria-pressed=${showingRaw} @click=${() => { this.setRaw(true); }}>Raw</button>
         `}
-        <button class="copy" type="button" @click=${() => { void this.copy(); }}>${this.copyStatus}</button>
-        <span class="sr-only" role="status">${this.copyStatus === "Copy source" ? "" : this.copyStatus}</span>
+        ${this.codeBlocks?.copy === false ? null : html`
+          <button class="copy code-block-copy" type="button" title=${this.copyStatus} aria-label=${this.copyStatus} @click=${() => { void this.copy(); }}><span aria-hidden="true">${this.copyStatus === "Copied source" ? "✓" : "⧉"}</span></button>
+          <span class="sr-only" role="status">${this.copyStatus === "Copy source" ? "" : this.copyStatus}</span>
+        `}
       </div>`}
       <div id="content">
         ${diagnostic === undefined ? null : html`<p role="status">${diagnostic}</p>`}
-        ${showingRaw ? html`<pre tabindex="0" aria-label="Raw source"><code>${this.text}</code></pre>` : html`<div class="preview" tabindex="0" aria-label="Diagram preview">${preview}</div>`}
+        ${showingRaw
+          ? this.codeBlocks?.presentation === "plain"
+            ? html`<div class=${`plain-code-block ${sourceClass}`} tabindex="0" aria-label="Raw source">${this.text}</div>`
+            : html`<pre class=${sourceClass} tabindex="0" aria-label="Raw source"><code>${this.text}</code></pre>`
+          : html`<div class="preview" tabindex="0" aria-label="Diagram preview">${preview}</div>`}
       </div>
-    `;
+    </div>`;
   }
 
-  static override styles = css`
-    /* Keep natural height in flex viewers: shrinking this clipping boundary
-       hides content instead of giving the surrounding viewer a scroll range. */
-    :host { display: block; flex-shrink: 0; margin: 0 0 10px; min-width: 0; border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-bg); overflow: hidden; color: var(--pi-text); }
-    :host([external-controls]) { margin: 0; border: 0; border-radius: 0; }
-    .controls { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--pi-border-muted); background: var(--pi-surface); }
+  static override styles = [codeBlockFrameStyles, css`
+    /* Keep natural height so the surrounding flex viewer owns the scroll range. */
+    :host { display: block; flex-shrink: 0; margin: 0 0 10px; min-width: 0; color: var(--pi-text); }
+    :host([external-controls]) { margin: 0; background: var(--pi-bg); }
+    #content { border-radius: 0 0 7px 7px; }
     select { max-width: 100%; color: var(--pi-text); background: var(--pi-bg); border: 1px solid var(--pi-border); border-radius: 6px; padding: 3px; font: 12px/1.5 system-ui, sans-serif; }
     button { color: var(--pi-muted); background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 3px 8px; font: 12px/1.5 system-ui, sans-serif; cursor: pointer; }
     button:hover { color: var(--pi-text); background: var(--pi-bg); border-color: var(--pi-border-muted); }
     button[aria-pressed="true"] { color: var(--pi-text); background: var(--pi-bg); border-color: var(--pi-border); }
-    .copy { margin-inline-start: auto; }
-    :is(button, select, pre, .preview):focus-visible { outline: 2px solid var(--pi-accent); outline-offset: -2px; }
+    :is(button, select, pre, .plain-code-block, .preview):focus-visible { outline: 2px solid var(--pi-accent); outline-offset: -2px; }
     pre { overflow: auto; white-space: pre; text-align: left; direction: ltr; padding: 12px; margin: 0; }
+    /* Raw-source policy must not restyle elements produced by a plugin preview. */
+    #content > .plain-code-block { padding: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    #content > pre.source-wrap { overflow: visible; white-space: pre-wrap; overflow-wrap: anywhere; }
+    #content > .plain-code-block.source-scroll { overflow: auto; white-space: pre; overflow-wrap: normal; }
     code { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
     .preview { overflow: auto; padding: 12px; }
     p { color: var(--pi-muted); margin: 0; padding: 10px 12px; font: 12px/1.5 system-ui, sans-serif; }
     .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-  `;
+  `];
 }

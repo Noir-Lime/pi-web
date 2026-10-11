@@ -33,9 +33,11 @@ import type {
   ServerPluginLogger,
   ServerPluginNoticeInput,
   ServerPluginStartContext,
+  ServerPluginWorkspaceNotifications,
   ServerPluginNoticeReporterV1,
   ServerPluginNoticeScope,
   WorkspaceProvider,
+  WorkspaceProviderIntegration,
   WorkspaceRemovalPresentation,
   WorkspaceRemovePlan,
 } from "@jmfederico/pi-web/server-plugin-api";
@@ -339,8 +341,11 @@ describe("public server plugin API", () => {
 
   it("keeps host inputs readonly and concrete services out of the declaration surface", async () => {
     expectTypeOf<keyof ServerPluginActivationContext>().toEqualTypeOf<
-      "apiVersion" | "pluginId" | "packageRoot" | "dataDirectory" | "logger" | "settings" | "notices" | "execFile" | "signal" | "lifetimeSignal"
+      "apiVersion" | "pluginId" | "packageRoot" | "dataDirectory" | "logger" | "settings" | "resolveProjectSettings" | "workspaceNotifications" | "notices" | "execFile" | "signal" | "lifetimeSignal"
     >();
+    expectTypeOf<keyof ServerPluginWorkspaceNotifications>().toEqualTypeOf<"command">();
+    expectTypeOf<keyof WorkspaceProviderIntegration>().toEqualTypeOf<"reconcile" | "acceptNotification">();
+    expectTypeOf<ReadonlyKeys<ServerPluginWorkspaceNotifications>>().toEqualTypeOf<"command">();
     expectTypeOf<keyof ServerPluginNoticeReporterV1>().toEqualTypeOf<"version" | "record">();
     expectTypeOf<keyof ServerPluginNoticeInput>().toEqualTypeOf<"severity" | "message" | "scope" | "context">();
     expectTypeOf<keyof PiWebServerPlugin>().toEqualTypeOf<"apiVersion" | "name" | "requires" | "activate">();
@@ -360,7 +365,7 @@ describe("public server plugin API", () => {
     expectTypeOf<keyof ServerPluginActivation>().toEqualTypeOf<"workspaceProvider" | "peer" | "provides" | "start" | "dispose" | "health">();
     expectTypeOf<keyof ServerPluginNoticeScope>().toEqualTypeOf<"projectId" | "workspaceId" | "sessionId">();
     expectTypeOf<keyof WorkspaceProvider>().toEqualTypeOf<
-      "fallback" | "probe" | "list" | "prepareRemove"
+      "fallback" | "probe" | "list" | "prepareRemove" | "integration"
     >();
     expectTypeOf<keyof ServerPluginPeer>().toEqualTypeOf<"request" | "openChannel">();
     // eslint-disable-next-line @typescript-eslint/no-generated-empty-object-type -- Record<never, never> deliberately probes that an empty scope object satisfies the notice-scope contract.

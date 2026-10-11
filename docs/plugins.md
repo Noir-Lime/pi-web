@@ -290,9 +290,11 @@ Browser API v4 remains compatible; older hosts may ignore `messageActions`. Upda
 
 ### Content previews in chat and Files
 
+Chat displays native code blocks with horizontal scrolling and a shared normal-flow frame/header for ordinary code and renderer-backed blocks. The header shows the selected renderer label/chooser, otherwise the fence language when provided, and an icon-only Copy control. Built-in Mermaid remains click-to-render. Files previews retain the behavior described below. Chat's independent source and preview controls are documented in [composing chat behavior](chat-behaviors.md).
+
 Browser plugins can contribute `contentRenderers` with an `id`, `languages` (Markdown fence labels), `fileExtensions` (without a dot), and a synchronous `render(input)` returning a Lit template. Selectors are case-insensitive and match by language OR file extension. `renderMode?: 'manual' | 'automatic'` defaults to `manual`: raw source and a **Render** button appear without calling the renderer. This is the initial policy, not a restriction on explicit user intent; unrelated prose updates retain activation. Authors may explicitly opt into `automatic` and are responsible for efficient activation and asynchronous work. The same renderer serves chat fences, Files Markdown preview fences, and standalone text files. Selection follows the effective machine's plugin availability and portable/machine-specific precedence. When several renderers match, a chooser lets you compare alternatives for each diagram or file, with only the selected renderer mounted. Choices default to alphabetical source plugin ID order (not remote runtime prefixes), then local contribution ID, using locale-independent, case-sensitive code-unit comparison. The chooser labels identify the plugin and contribution. Chat remembers explicit renderer and Raw/Preview choices per code block in this browser tab for 15 minutes from the last explicit choice. Viewing or remounting never extends that deadline; expiry applies on revisit, without removing a visible preview. Entries are bounded to the 128 most recently chosen blocks and scoped by machine, session, message/entry, part, block and exact source. Changed source or an unavailable selected renderer invalidates the choice and restores the deterministic default and its policy. Automatic rendering alone creates no remembered override. DOM is not cached; previews render again on remount. Reloading or closing the tab clears this memory. Files Markdown previews do not use chat intent memory. For standalone files, the plugin policy supplies the initial default only when no browser-local Raw/Preview preference exists. Saved Preview authorizes all file rendering, including manual renderers inside Markdown fences; saved Raw suppresses previews. Per-block Raw and renderer choices remain available within Markdown Preview. URL mode still takes precedence. Defaults are not automatically saved as explicit choices. Built-in file previews retain their existing defaults. There is no plugin order field or sorting UI.
 
-Chat keeps **Raw**, **Preview**, and **Copy source** available in a toolbar on each supported diagram block. Standalone Files previews use the file header's **Raw**/**Preview** controls beside **Download** and follow the saved file-view mode; diagrams within Markdown files retain per-block controls. Incomplete fences stay raw and copyable; closed fences preview before the message finishes. Appending prose does not restart an unchanged completed block. Preview failure shows the source instead. Unknown formats retain normal code rendering.
+When chat previews are enabled, supported diagram blocks offer **Raw** and **Render**/**Preview** controls; the **Copy** icon always copies source, even while showing a preview, and follows the independent chat copy policy. Standalone Files previews use the file header's **Raw**/**Preview** controls beside **Download** and follow the saved file-view mode; diagrams within Markdown files retain per-block controls. Incomplete fences stay raw, with copying controlled by the consumer's source policy; closed fences become eligible for preview before the message finishes. Appending prose does not restart an unchanged completed block. Preview failure shows the source instead. Unknown formats retain the configured source presentation.
 
 `input` contains `text`, an abort `signal`, and `fail(error)`. Render synchronously, own async work in a component, clean up on disconnect or abort, and report asynchronous failures with `fail`. Obsolete failures are ignored. Renderers receive untrusted text: escape or sanitize output, avoid executing source, and do not relax the surrounding Markdown policy. The host skips plugin rendering for truncated input and blocks over 100,000 UTF-16 code units; Files also retains its inline byte-size limit. Ordinary chat Markdown and Files Markdown retain their distinct sanitizers.
 
@@ -320,6 +322,16 @@ Conflicting claims produce a visible error. A provider that claims a project and
 
 Workspace discovery must be available before host session services start. If a package needs both a provider and session-backed features, use two plugin entries in the same package. There is no need to split the distribution into separate packages.
 
+External integrations can send a project-scoped discovery hint through the core CLI on the project's machine:
+
+```sh
+pi-web workspaces notify --project ID --plugin git
+```
+
+`ID` is the registered project ID, not a filesystem path. `--plugin` identifies the workspace provider (`git` here). PI WEB verifies current provider ownership and publishes a hint only when that provider's `workspaceProvider.integration.acceptNotification()` accepts it. Connected browsers then re-read the workspace list; this does not register projects or workspaces.
+
+Providers can opt into external integrations with `workspaceProvider.integration`: `reconcile(project, signal)` maintains their setup after owner selection at startup and catalog access, while `acceptNotification(project, signal)` applies their notification policy. Use activation-context `workspaceNotifications.command(project.id)` for host-attributed, daemon-targeted argv rather than guessing executable paths or transport settings. `resolveProjectSettings(project, signal)` supplies the plugin's merged global/project snapshot when available. Integration failures do not change workspace-discovery authority.
+
 ## Install and manage
 
 Use **Settings → Pi packages** to install, update, or remove a package. Enter its npm, git/URL, or local package source. Use **Settings → PI WEB plugins** to enable or disable its web integration and see whether it is active or needs a restart.
@@ -339,7 +351,7 @@ systemctl --user restart pi-web-sessiond
 
 A browser reload, web/API restart, or Pi's `/reload` does not activate server-plugin changes. Until the daemon restarts, Settings can show different desired and active states. A paired browser entry is withheld when it no longer matches the active server entry, rather than running incompatible code.
 
-Most plugins are enabled by default. Packages can opt out, and Settings can override the default. Plugin settings live in the normal [PI WEB configuration](https://pi-web.dev/config), not inside the package's installed files.
+Most plugins are enabled by default. Packages can opt out, and Settings can override the default. Plugin settings live in the normal [PI WEB configuration](https://pi-web.dev/config), not inside the package's installed files. Enablement stays global; server plugins supporting project settings, including Git, can use `plugins.<id>.settings` overrides in the registered project's `.pi-web/config.json`. See [Project plugin settings](https://pi-web.dev/config#project-plugin-settings) for top-level merge and fixed-snapshot restart rules.
 
 ### Local development
 
@@ -364,11 +376,23 @@ Keep gateways and targets compatible. During this plugin API transition, upgrade
 
 - **Terminal** supplies terminals and command runs. It is required in normal operation; disable it only through emergency safe start.
 - **Files** supplies file browsing, previews, and uploads. Disabling its panel does not remove other plugins' file helpers.
-- **Git** discovers Git workspaces and provides status/diff. Disabling it leaves the project-folder workspace available unless another provider takes over.
+- **Git** discovers Git workspaces and provides status/diff, including [automatic discovery of new worktrees](#automatic-git-worktree-discovery) on supported Git builds. Disabling it leaves the project-folder workspace available unless another provider takes over.
 - **Mermaid** uses the default manual mode: choose **Render** to preview `mermaid` fences and `.mmd`/`.mermaid` text files. Its bundled engine runs locally in an opaque-origin sandbox with network access blocked; no diagram service receives your source. Interactive links and external resources are intentionally unavailable. Disable Mermaid in plugin Settings to keep plain code rendering. Only a browser reload is needed after changing this browser-only plugin.
 - **Info** displays machine and PI WEB status without requiring a workspace, adds workspace details when selected, and provides copyable diagnostics.
 - **Updates** shows update/restart guidance when relevant and offers a manual update check. Guidance and Copy work without a workspace; Run requires a selected workspace with an available Terminal provider on that machine.
 - **Workspace Tasks** turns project commands into runnable buttons.
+
+### Automatic Git worktree discovery
+
+New worktrees created by an agent, a terminal, or another local tool can appear in PI WEB without a browser reload. On Git builds supporting native config-based named hooks (introduced in Git 2.54), the bundled Git provider installs and repairs its own named `post-checkout` hook in local Git config at session-daemon startup and on project/workspace list access.
+
+The initial checkout of a new worktree notifies PI WEB about the project. Connected browsers re-read that project's workspace list without replacing the current conversation or draft. Discovery is event-driven, with no polling or refresh at the end of agent turns.
+
+PI WEB preserves `core.hooksPath` and existing hook scripts: it does not wrap project scripts or install an alternate hook manager. Its stable helper is best-effort; missing helper files or an unavailable runtime/daemon become no-ops rather than blocking Git operations.
+
+The Git setting `workspaceDiscoveryHooks` defaults to `true`; see [Git hook opt-out configuration](https://pi-web.dev/config#git-worktree-discovery-hooks) to turn it off globally or for one registered project. All changes to this setting require a manual session-daemon restart, which can interrupt active sessions; a browser reload alone does not update server settings.
+
+Git builds without native named-hook support are left untouched. `git worktree add --no-checkout` skips the initial hook notification. When hooks are skipped, disabled, or unavailable, ordinary discovery still catches up on browser focus, navigation, manual refresh, and socket reconnect.
 
 ### Workspace Tasks
 
@@ -385,6 +409,19 @@ Create `.pi-web/tasks.json` in a project:
 ```
 
 Open the **Tasks** tab to run a command in a workspace terminal. Tasks can also have a `description`. Review commands before running them, especially in shared repositories. Disabling the plugin hides the tab without changing the project file.
+
+### Workflows
+
+Workflows is a shipped Pi package for PI WEB's opinionated prompts and shortcuts. It currently provides `/worktree` with the free-form hint **Purpose and/or base branch**, plus a **Create Worktree** palette action. The action prepares `/worktree` in an empty Chat prompt for an active conversation; add your description and send it when ready.
+
+```text
+/worktree fix login redirects
+/worktree add search based on origin/main
+```
+
+The prompt asks the agent to create a worktree named for your purpose, using the requested base or the current worktree's HEAD. If you give no purpose or description, the agent asks for one.
+
+PI WEB installs Workflows automatically for the active agent profile at session-daemon startup. Its web plugin is enabled by default. Disable **Workflows** in **Settings → PI WEB plugins**, then reload the browser, to hide the shortcut while keeping `/worktree`. To remove its prompts as well, remove the package in **Settings → Pi packages** and run `/reload` in each idle conversation. Removal is remembered across daemon restarts; reinstall from **Available packages** if you change your mind, then reload idle conversations and the browser.
 
 ### Relays
 

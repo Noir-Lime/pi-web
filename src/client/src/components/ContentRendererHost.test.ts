@@ -4,11 +4,15 @@ import { html } from "lit";
 import type { ContentRendererContribution } from "../../../plugin-api";
 import type { ContentRendererChoice } from "../plugins/contentRenderers";
 import { ContentRendererHost } from "./ContentRendererHost";
+import { writeClipboardText } from "../clipboard";
+
+vi.mock("../clipboard", () => ({ writeClipboardText: vi.fn().mockResolvedValue(true) }));
 
 afterEach(() => {
   document.body.replaceChildren();
   localStorage.clear();
   vi.restoreAllMocks();
+  vi.clearAllMocks();
 });
 
 function hostWith(choices: readonly ContentRendererChoice[]): ContentRendererHost {
@@ -27,10 +31,102 @@ function setDetailsOpen(details: HTMLDetailsElement, open: boolean): void {
 }
 
 function button(host: ContentRendererHost, label: string): HTMLButtonElement {
-  const found = [...host.renderRoot.querySelectorAll("button")].find((item) => item.textContent.trim() === label);
+  const found = [...host.renderRoot.querySelectorAll("button")].find((item) => item.getAttribute("aria-label") === label || item.textContent.trim() === label);
   if (found === undefined) throw new Error(`Missing ${label} button`);
   return found;
 }
+
+it("shows the renderer label and an accessible Copy icon without activating a manual preview", async () => {
+  const draw = vi.fn<ContentRendererContribution["render"]>(() => html`<b>Preview</b>`);
+  const host = hostWith([{ id: "manual", label: "Mermaid / diagram", renderer: { id: "manual", render: draw } }]);
+  document.body.append(host);
+  await host.updateComplete;
+  expect(host.renderRoot.querySelector(".code-block-frame > .code-block-header .code-block-label")?.textContent).toBe("Mermaid / diagram");
+  expect(draw).not.toHaveBeenCalled();
+  const copy = button(host, "Copy source");
+  expect(copy.textContent).toBe("⧉");
+  expect(copy.getAttribute("title")).toBe("Copy source");
+  expect(copy.querySelector('span[aria-hidden="true"]')).not.toBeNull();
+  expect(copy.closest(".code-block-header")?.nextElementSibling?.id).toBe("content");
+  button(host, "Render").click();
+  await host.updateComplete;
+  expect(host.renderRoot.querySelector(".code-block-label")?.textContent).toBe("Mermaid / diagram");
+  expect(host.renderRoot.querySelector("b")?.textContent).toBe("Preview");
+  expect(host.renderRoot.querySelector(".copy")).toBe(copy);
+});
+
+it("copies source from a visible preview and retains accessible success/failure feedback on the icon", async () => {
+  const draw = vi.fn<ContentRendererContribution["render"]>(() => html`<b>Rendered diagram</b>`);
+  const host = automaticHost(draw);
+  document.body.append(host);
+  await host.updateComplete;
+  const copy = button(host, "Copy source");
+  copy.click();
+  await host.updateComplete;
+  await host.updateComplete;
+  expect(writeClipboardText).toHaveBeenCalledWith("source");
+  expect(copy.textContent).toBe("✓");
+  expect(copy.getAttribute("aria-label")).toBe("Copied source");
+  expect(copy.getAttribute("title")).toBe("Copied source");
+  expect(host.renderRoot.querySelector('[role="status"]')?.textContent).toBe("Copied source");
+
+  vi.mocked(writeClipboardText).mockResolvedValueOnce(false);
+  copy.click();
+  await host.updateComplete;
+  await host.updateComplete;
+  expect(copy.textContent).toBe("⧉");
+  expect(copy.getAttribute("aria-label")).toBe("Failed to copy source");
+  expect(copy.getAttribute("title")).toBe("Failed to copy source");
+  expect(host.renderRoot.querySelector('[role="status"]')?.textContent).toBe("Failed to copy source");
+  expect(host.renderRoot.querySelector("b")?.textContent).toBe("Rendered diagram");
+  expect(draw).toHaveBeenCalledOnce();
+});
+
+it("keeps consumer-owned external controls outside the standard embedded frame", async () => {
+  const host = automaticHost(() => html`<b>Preview</b>`);
+  host.externalControls = true;
+  document.body.append(host);
+  await host.updateComplete;
+  expect(host.renderRoot.querySelector(".code-block-frame, .code-block-header, .code-block-copy")).toBeNull();
+  expect(host.renderRoot.querySelector("b")?.textContent).toBe("Preview");
+});
+
+it("attaches source-policy modifiers only to raw source, never to preview content or its ancestors", async () => {
+  const draw = vi.fn<ContentRendererContribution["render"]>(() => html`
+    <pre class="renderer-owned-code">Preview code</pre>
+    <div class="plain-code-block">Preview text</div>
+  `);
+  const host = automaticHost(draw);
+  host.codeBlocks = { presentation: "code", overflow: "wrap", copy: true };
+  document.body.append(host);
+  await host.updateComplete;
+  const preview = host.renderRoot.querySelector(".preview");
+  expect(preview).not.toBeNull();
+  const previewCode = preview?.querySelector("pre");
+  const previewText = preview?.querySelector(".plain-code-block");
+
+  for (const overflow of ["wrap", "scroll"] as const) {
+    host.codeBlocks = { presentation: "code", overflow, copy: true };
+    await host.updateComplete;
+    expect(host.renderRoot.querySelector(".source-wrap, .source-scroll")).toBeNull();
+    expect(host.renderRoot.querySelector(".preview")).toBe(preview);
+    expect(preview?.querySelector("pre")).toBe(previewCode);
+    expect(preview?.querySelector(".plain-code-block")).toBe(previewText);
+    expect(draw).toHaveBeenCalledOnce();
+    expect(draw.mock.calls[0]?.[0].signal.aborted).toBe(false);
+  }
+
+  button(host, "Raw").click();
+  await host.updateComplete;
+  expect(host.renderRoot.querySelector("#content > pre.source-scroll")?.textContent).toBe("source");
+  expect(host.renderRoot.querySelector(".preview")).toBeNull();
+  expect(draw.mock.calls[0]?.[0].signal.aborted).toBe(true);
+
+  host.codeBlocks = { presentation: "plain", overflow: "wrap", copy: true };
+  await host.updateComplete;
+  expect(host.renderRoot.querySelector("#content > .plain-code-block.source-wrap")?.textContent).toBe("source");
+  expect(host.renderRoot.querySelector("#content")?.className).toBe("");
+});
 
 describe("content renderer disclosure lifecycle", () => {
   it("retains a closed group's body without starting automatic work, and aborts/restarts only its renderer on toggles", async () => {
@@ -93,6 +189,8 @@ describe("content renderer disclosure lifecycle", () => {
     chooser.value = "second";
     chooser.dispatchEvent(new Event("change"));
     await host.updateComplete;
+    expect(chooser.closest(".code-block-header")).not.toBeNull();
+    expect(chooser.selectedOptions[0]?.textContent).toBe("Second");
     button(host, "Render").click();
     await host.updateComplete;
     expect(second).toHaveBeenCalledOnce();

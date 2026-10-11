@@ -23,7 +23,9 @@ import type {
   ServerPluginNoticeInput,
   ServerPluginNoticeReporterV1,
   ServerPluginStartContext,
+  ServerPluginWorkspaceNotifications,
   WorkspaceProvider,
+  WorkspaceProviderIntegration,
 } from "../../server-plugin-api.js";
 import type { PiWebPluginScope } from "../../shared/apiTypes.js";
 import {
@@ -130,6 +132,10 @@ export interface CreateServerPluginRuntimeOptions {
   logger: ServerPluginRuntimeLogger;
   importer?: ServerPluginModuleImporter;
   execFile?: ServerPluginExecFile;
+  /** Host-owned project snapshots, bound to the catalog id and activation settings. */
+  projectSettingsResolver?: (pluginId: string, globalSettings: JsonObject, project: ProjectInput, signal: AbortSignal) => Promise<JsonObject>;
+  /** Provider-owned integrations receive an attributed invocation for this daemon, not a guessed host executable path. */
+  workspaceNotificationsFactory?: (pluginId: string) => ServerPluginWorkspaceNotifications;
   lifecycleTimeoutMs?: number;
   /** Core-owned sink; source is host-derived as `plugin:<catalog id>`. */
   noticeSink?: (source: string, input: ServerPluginNoticeInput) => void;
@@ -235,6 +241,8 @@ export class ServerPluginRuntime {
     private readonly logger: ServerPluginRuntimeLogger,
     private readonly importer: ServerPluginModuleImporter,
     private readonly execFile: ServerPluginExecFile,
+    private readonly projectSettingsResolver: CreateServerPluginRuntimeOptions["projectSettingsResolver"],
+    private readonly workspaceNotificationsFactory: CreateServerPluginRuntimeOptions["workspaceNotificationsFactory"],
     private readonly lifecycleTimeoutMs: number,
     private readonly noticeSink: ((source: string, input: ServerPluginNoticeInput) => void) | undefined,
     hostCapabilities: readonly InternalCapabilityProvision[],
@@ -261,6 +269,8 @@ export class ServerPluginRuntime {
       options.logger,
       options.importer ?? importServerPluginModule,
       options.execFile ?? createServerPluginExecFile(),
+      options.projectSettingsResolver,
+      options.workspaceNotificationsFactory,
       positiveInteger(options.lifecycleTimeoutMs, DEFAULT_LIFECYCLE_TIMEOUT_MS, "lifecycleTimeoutMs"),
       options.noticeSink,
       snapshotHostCapabilities(options.hostCapabilities),
@@ -457,6 +467,8 @@ export class ServerPluginRuntime {
       await mkdir(dataDirectory, { recursive: true });
       const scopedLogger = createScopedLogger(entry.id, this.logger);
       noticeReporter = createScopedNoticeReporter(entry.id, this.noticeSink);
+      const resolveProjectSettings = this.projectSettingsResolver?.bind(undefined, entry.id, settings);
+      const workspaceNotifications = this.workspaceNotificationsFactory?.(entry.id);
       const activationValue = await runBounded(entry.id, phase, this.lifecycleTimeoutMs, (signal) => loadedPlugin.activate(Object.freeze({
         apiVersion: 3,
         pluginId: entry.id,
@@ -464,6 +476,8 @@ export class ServerPluginRuntime {
         dataDirectory,
         logger: scopedLogger,
         settings,
+        ...(resolveProjectSettings === undefined ? {} : { resolveProjectSettings }),
+        ...(workspaceNotifications === undefined ? {} : { workspaceNotifications }),
         ...(noticeReporter === undefined ? {} : { notices: noticeReporter.reporter }),
         execFile: this.execFile,
         signal,
@@ -1364,16 +1378,19 @@ function snapshotWorkspaceProvider(value: unknown): WorkspaceProvider {
     probe: value["probe"],
     list: value["list"],
     prepareRemove: value["prepareRemove"],
+    integration: value["integration"],
   };
   if (!isWorkspaceProvider(candidate)) throw new IncompatibleServerPluginError("Server plugin workspaceProvider is invalid");
   const probe = candidate.probe.bind(value);
   const list = candidate.list.bind(value);
   const prepareRemove = candidate.prepareRemove?.bind(value);
+  const integration = snapshotWorkspaceProviderIntegration(candidate.integration);
   return Object.freeze({
     ...(candidate.fallback === undefined ? {} : { fallback: candidate.fallback }),
     probe: (project: ProjectInput, signal: AbortSignal) => probe(project, signal),
     list: (project: ProjectInput, signal: AbortSignal) => list(project, signal),
     ...(prepareRemove === undefined ? {} : { prepareRemove: (context: ProviderRemoveContext) => prepareRemove(context) }),
+    ...(integration === undefined ? {} : { integration }),
   });
 }
 
@@ -1386,7 +1403,22 @@ function isWorkspaceProvider(value: unknown): value is WorkspaceProvider {
   return (fallback === undefined || typeof fallback === "boolean")
     && typeof probe === "function"
     && typeof list === "function"
-    && (prepareRemove === undefined || typeof prepareRemove === "function");
+    && (prepareRemove === undefined || typeof prepareRemove === "function")
+    && (value["integration"] === undefined || isWorkspaceProviderIntegration(value["integration"]));
+}
+
+function isWorkspaceProviderIntegration(value: unknown): value is WorkspaceProviderIntegration {
+  return isRecord(value) && typeof value["reconcile"] === "function" && typeof value["acceptNotification"] === "function";
+}
+
+function snapshotWorkspaceProviderIntegration(value: WorkspaceProviderIntegration | undefined): WorkspaceProviderIntegration | undefined {
+  if (value === undefined) return undefined;
+  const reconcile = value.reconcile.bind(value);
+  const acceptNotification = value.acceptNotification.bind(value);
+  return Object.freeze({
+    reconcile: (project: ProjectInput, signal: AbortSignal) => reconcile(project, signal),
+    acceptNotification: (project: ProjectInput, signal: AbortSignal) => acceptNotification(project, signal),
+  });
 }
 
 function parseHealth(value: unknown): ServerPluginHealth {
