@@ -1,5 +1,5 @@
 import { css, svg, type TemplateResult } from "lit";
-import type { AskUserOutcome } from "../../../shared/apiTypes";
+import type { AskUserOutcome, AskUserRequest } from "../../../shared/apiTypes";
 import type { ImageDimensions, SessionMediaReference } from "../../../shared/sessionMedia";
 import type { SessionWarningSeverity } from "../api";
 
@@ -66,7 +66,10 @@ export type ChatPart =
   | { type: "thinking"; text: string; displayText?: string }
   | { type: "skillInvocation"; name: string; location: string; content: string }
   | { type: "skillRead"; name: string; path: string; toolCallId?: string }
+  | { type: "askUserQuestion"; ask: AskUserRequest }
   | { type: "askUserRecord"; outcome: AskUserOutcome }
+  /** Retain a coalesced result's conversation position without repeating its UI. */
+  | { type: "toolResultBoundary"; toolCallId?: string }
   | { type: "toolCall"; toolCallId?: string; toolName: string; summary: string; args?: unknown }
   | ToolExecutionPart
   | { type: "toolResult"; toolCallId?: string; toolName: string; text: string; isError: boolean; content?: unknown; details?: unknown }
