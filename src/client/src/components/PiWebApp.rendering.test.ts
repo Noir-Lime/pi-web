@@ -12,12 +12,15 @@ import { clearStagedAttachments, saveStagedAttachments } from "../promptAttachme
 import { PromptEditor } from "./PromptEditor";
 import { StatusBar } from "./StatusBar";
 import { PluginRegistry } from "../plugins/registry";
+import type { ExternalPluginLoadResult } from "../plugins/external";
+import type { ContentRendererInput } from "../../../plugin-api";
 import { corePlugin } from "../plugins/core";
 import type { WorkspacePanelContext } from "../plugins/types";
 import { PiWebApp } from "./PiWebApp";
 import { ChatView } from "./ChatView";
 import type { ActionPalette } from "./ActionPalette";
 import { FormattedText } from "./FormattedText";
+import { ContentRendererHost } from "./ContentRendererHost";
 import { WorkspacePanel } from "./WorkspacePanel";
 import { WorkspaceList } from "./WorkspaceList";
 import { ProjectList } from "./ProjectList";
@@ -480,6 +483,60 @@ describe("application rendering boundaries", () => {
     await settle(app);
     expect(render).toHaveBeenCalledOnce();
     expect(chat.messages[0]?.parts[0]).toEqual({ type: "text", text: "new transcript" });
+  });
+
+  it.each(["before", "after"] as const)("updates diagram controls when plugins load %s the transcript without remounting or auto-preview", async (order) => {
+    const app = await mountApp({ selectedWorkspace: workspace, workspaces: [workspace], mainView: "chat" });
+    const messages: AppState["messages"] = [{ role: "assistant", parts: [{ type: "text", text: "```mermaid\ngraph TD; A-->B\n```" }] }];
+    if (order === "after") patchState(app, { selectedSession: session, sessions: [session], messages });
+    await settle(app);
+    const initialFormatted = app.shadowRoot?.querySelector("chat-view")?.shadowRoot?.querySelector("formatted-text");
+    if (order === "after") {
+      expect(initialFormatted).toBeInstanceOf(FormattedText);
+      expect(initialFormatted?.shadowRoot?.querySelector(".formatted")?.textContent).toContain("graph TD");
+      expect(initialFormatted?.shadowRoot?.querySelector("pi-web-content-renderer")).toBeNull();
+    }
+
+    const draw = vi.fn((input: ContentRendererInput) => { void input; return html`<b>Rendered diagram</b>`; });
+    const result: ExternalPluginLoadResult = {
+      terminalMode: "recovery-disabled", declarations: [{ id: "mermaid" }], failures: [],
+      registrations: [{ id: "mermaid", plugin: {
+        apiVersion: 4, name: "Mermaid", activate: () => ({ contributions: { contentRenderers: [{
+          id: "diagram", languages: ["mermaid"], render: draw,
+        }] } }),
+      } }],
+    };
+    const register: unknown = Reflect.get(app, "registerExternalPlugins");
+    if (typeof register !== "function") throw new Error("Expected plugin registration boundary");
+    expect(await register.call(app, "Test plugins", () => Promise.resolve(result))).toBe(true);
+    if (order === "before") patchState(app, { selectedSession: session, sessions: [session], messages });
+    await settle(app);
+
+    const formatted = app.shadowRoot?.querySelector("chat-view")?.shadowRoot?.querySelector("formatted-text");
+    if (!(formatted instanceof FormattedText)) throw new Error("Expected formatted chat text");
+    if (order === "after") expect(formatted).toBe(initialFormatted);
+    const host = formatted.shadowRoot?.querySelector("pi-web-content-renderer");
+    if (!(host instanceof ContentRendererHost)) throw new Error("Expected diagram controls");
+    const renderButton = [...host.shadowRoot?.querySelectorAll("button") ?? []].find((button) => button.textContent === "Render");
+    expect(renderButton).toBeDefined();
+    expect(draw).not.toHaveBeenCalled();
+    renderButton?.click();
+    await settle(app);
+    expect(host.shadowRoot?.querySelector("b")?.textContent).toBe("Rendered diagram");
+    expect(draw).toHaveBeenCalledOnce();
+    const input = draw.mock.calls[0]?.[0];
+    expect(input?.signal.aborted).toBe(false);
+    const markdownRender = vi.spyOn(formatted, "render");
+
+    const registry: unknown = Reflect.get(app, "plugins");
+    if (!(registry instanceof PluginRegistry)) throw new Error("Expected plugin registry");
+    await registry.register({ id: "unrelated", plugin: { apiVersion: 4, name: "Unrelated", activate: () => ({ contributions: {} }) } });
+    patchState(app, { error: "Unrelated shell update" });
+    await settle(app);
+    expect(markdownRender).not.toHaveBeenCalled();
+    expect(formatted.shadowRoot?.querySelector("pi-web-content-renderer")).toBe(host);
+    expect(draw).toHaveBeenCalledOnce();
+    expect(input?.signal.aborted).toBe(false);
   });
 
   it("refreshes guarded surfaces when built-in registration finishes asynchronously", async () => {

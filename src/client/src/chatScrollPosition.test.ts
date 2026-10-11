@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ChatScrollController, captureScrollPosition, chatScrollStorageKey, findFirstVisibleArticle, findVisibleScrollAnchor, type ChatScrollElement, type ChatScrollScheduler, type ChatScrollStorage, type ChatScrollViewport } from "./chatScrollPosition";
+import { ChatScrollController, captureScrollPosition, chatScrollStorageKey, findVisibleScrollAnchor, type ChatScrollElement, type ChatScrollScheduler, type ChatScrollStorage, type ChatScrollViewport } from "./chatScrollPosition";
 
 class MemoryScrollStorage implements ChatScrollStorage {
   readonly values = new Map<string, string>();
@@ -149,12 +149,13 @@ describe("ChatScrollController", () => {
 });
 
 describe("chat scroll helpers", () => {
-  it("finds the first article intersecting the viewport", () => {
-    const scroller = new FakeScroller(0, 1000, 100, 100, 200);
-    const first = new FakeArticle(20, 80, "m:0");
-    const second = new FakeArticle(150, 180, "m:1");
-
-    expect(findFirstVisibleArticle(scroller, [first, second])).toBe(second);
+  it("does not restore to a zero-height anchor retained inside a closed disclosure", () => {
+    const controller = new ChatScrollController(new MemoryScrollStorage(), new ManualScheduler());
+    const scroller = new FakeScroller(200, 1000, 100, 100, 200);
+    const hidden = new FakeArticle(0, 0, "e:4");
+    const position = { mode: "anchor" as const, anchorId: "e:4", offset: -20 };
+    expect(controller.restoreExplicitPosition(position, scroller, [hidden], { fallbackToBottom: false })).toEqual({ status: "missing", position });
+    expect(scroller.scrollTop).toBe(200);
   });
 
   it("finds the visible scroll anchor nearest the viewport top", () => {

@@ -213,16 +213,13 @@ export function findVisibleScrollAnchor<T extends ChatScrollElement>(scroller: C
   return nearestAbove ?? nearestBelow;
 }
 
-export function findFirstVisibleArticle<T extends ChatScrollElement>(scroller: ChatScrollViewport, articles: T[]): T | undefined {
-  const scrollerRect = scroller.getBoundingClientRect();
-  return articles.find((article) => {
-    const rect = article.getBoundingClientRect();
-    return rect.bottom >= scrollerRect.top && rect.top <= scrollerRect.bottom;
-  });
-}
-
 function findAnchorById<T extends ChatScrollElement>(anchors: T[], anchorId: string): T | undefined {
-  return anchors.find((anchor) => anchorIdForElement(anchor) === anchorId);
+  return anchors.find((anchor) => {
+    if (anchorIdForElement(anchor) !== anchorId) return false;
+    // Closed native disclosures retain their body DOM, but not its geometry.
+    const rect = anchor.getBoundingClientRect();
+    return rect.bottom > rect.top;
+  });
 }
 
 function anchorIdForElement(element: ChatScrollElement): string | undefined {
