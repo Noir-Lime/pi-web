@@ -270,10 +270,12 @@ describe("chatMessageMetadataLabel", () => {
 describe("chat event-group content seams", () => {
   // Content/structure decisions have pure seams; native disclosure behavior is
   // covered through the DOM in ChatView.behaviors.test.ts.
-  it("derives stable group and event scroll-anchor keys", () => {
-    expect(chatGroupAnchorKey(40)).toBe("g:40");
-    expect(chatEventAnchorKey(40)).toBe("e:40");
-    expect(chatEventAnchorKey(41)).toBe("e:41");
+  it("never derives scroll-anchor keys from display indexes or empty entry IDs", () => {
+    for (const key of [chatMessageAnchorKey, chatEventAnchorKey, chatGroupAnchorKey]) {
+      expect(key(40)).toBeUndefined();
+      expect(key(41, { role: "assistant", parts: [] })).toBeUndefined();
+      expect(key(42, { entryId: "", role: "assistant", parts: [] })).toBeUndefined();
+    }
   });
 
   it("keeps durable entry keys independent of normalized indexes and separates entry slices", () => {

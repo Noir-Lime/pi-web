@@ -1,4 +1,4 @@
-import { LitElement, html } from "lit";
+import { LitElement, html, nothing } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import { keyed } from "lit/directives/keyed.js";
@@ -100,7 +100,11 @@ export function chatToolOutputLabel(toolName?: string): string {
 }
 
 function chatLineIdentity(index: number, message?: ChatLine): string {
-  if (message?.entryId === undefined) return String(index);
+  return chatLineScrollIdentity(message) ?? String(index);
+}
+
+function chatLineScrollIdentity(message?: ChatLine): string | undefined {
+  if (message?.entryId === undefined || message.entryId === "") return undefined;
   // Page offsets count raw entries, whereas display indexes count normalized
   // lines. Only durable entry identity survives coalescing during a prepend.
   // Skill invocations can also produce a user-text line from the same entry.
@@ -108,19 +112,21 @@ function chatLineIdentity(index: number, message?: ChatLine): string {
   return JSON.stringify([message.entryId, message.role, slice]);
 }
 
-/** Message identity shared by rendering and scroll restoration. */
-export function chatMessageAnchorKey(index: number, message?: ChatLine): string {
-  return `m:${chatLineIdentity(index, message)}`;
+/** Scroll identities never fall back to normalized display indexes. */
+export function chatMessageAnchorKey(_index: number, message?: ChatLine): string | undefined {
+  const identity = chatLineScrollIdentity(message);
+  return identity === undefined ? undefined : `m:${identity}`;
 }
 
-/** Group render identity belongs to its first member. */
-export function chatGroupAnchorKey(startIndex: number, message?: ChatLine): string {
-  return `g:${chatLineIdentity(startIndex, message)}`;
+export function chatGroupAnchorKey(_startIndex: number, message?: ChatLine): string | undefined {
+  const identity = chatLineScrollIdentity(message);
+  return identity === undefined ? undefined : `g:${identity}`;
 }
 
 /** Event identity is separate from the readable slice of the same entry. */
-export function chatEventAnchorKey(index: number, message?: ChatLine): string {
-  return `e:${chatLineIdentity(index, message)}`;
+export function chatEventAnchorKey(_index: number, message?: ChatLine): string | undefined {
+  const identity = chatLineScrollIdentity(message);
+  return identity === undefined ? undefined : `e:${identity}`;
 }
 
 /** The CSS class list for an event-group `<details>`, distinguishing the live tail. */
@@ -450,7 +456,7 @@ export class ChatView extends LitElement {
           ${this.renderHistoryBoundary()}
           ${keyed(transcriptIdentity, repeat(
             groups,
-            (group) => group.kind === "group" ? this.groupRenderKey(group) : this.messageAnchorKey(group.index, group.message),
+            (group) => group.kind === "group" ? this.groupRenderKey(group) : `m:${chatLineIdentity(group.index, group.message)}`,
             (group, index) => {
               if (group.kind === "group") return this.renderMessageGroup(group, this.isLiveTailGroup(groups, index), entryActionHeaders);
               if (group.kind === "tool-image") return this.renderToolImageOutput(group.message, group.index, entryActionHeaders, group.toolName);
@@ -765,7 +771,6 @@ export class ChatView extends LitElement {
         (closed) => html`
           <extension-dialog-card
             class="closed-dialog-card"
-            data-scroll-anchor-id=${`closed-dialog:${closed.dialog.dialogId}`}
             .outcome=${closed}
             .onDismiss=${this.onDismissClosedDialog}
           ></extension-dialog-card>
@@ -774,7 +779,6 @@ export class ChatView extends LitElement {
       ${open === undefined ? null : html`
         <extension-dialog-card
           class="open-dialog-card"
-          data-scroll-anchor-id=${`dialog:${open.dialogId}`}
           .dialog=${open}
           .onAnswer=${this.onAnswerDialog}
           .onCancel=${this.onCancelDialog}
@@ -844,9 +848,8 @@ export class ChatView extends LitElement {
     const toolOnly = this.isToolExecutionOnlyMessage(message);
     const hasHeader = chatMessageHasHeader(message);
     const shellClass = toolOnly ? "msg tool-execution-shell" : "msg ask-user-record-shell";
-    const question = message.parts.find((part) => part.type === "askUserQuestion");
     return html`
-      <article class=${hasHeader ? `msg ${message.role}` : shellClass} data-index=${index} data-scroll-anchor-id=${question === undefined ? this.messageAnchorKey(index, message) : `ask:${question.ask.askId}`}>
+      <article class=${hasHeader ? `msg ${message.role}` : shellClass} data-index=${index} data-scroll-anchor-id=${chatMessageAnchorKey(index, message) ?? nothing}>
         ${hasHeader ? this.renderMessageHeader(message, String(index), index, entryActionHeaders) : null}
         ${message.parts.map((part, partIndex) => this.renderPart(part, message, index, partIndex))}
       </article>
@@ -856,7 +859,7 @@ export class ChatView extends LitElement {
   private renderToolImageOutput(message: ChatLine, index: number, entryActionHeaders: ReadonlySet<ChatLine>, toolName?: string) {
     const label = chatToolOutputLabel(toolName);
     return html`
-      <article class="msg tool-image-output" data-index=${index} data-scroll-anchor-id=${this.messageAnchorKey(index, message)}>
+      <article class="msg tool-image-output" data-index=${index} data-scroll-anchor-id=${chatMessageAnchorKey(index, message) ?? nothing}>
         ${this.renderMessageHeader(message, String(index), index, entryActionHeaders, label)}
         ${message.parts.map((part, partIndex) => this.renderPart(part, message, index, partIndex))}
       </article>
@@ -872,7 +875,7 @@ export class ChatView extends LitElement {
     const disclosureKey = this.groupDisclosureKey(group, defaultOpen);
     const open = this.behaviors.rememberDisclosures ? this.disclosures.isOpen(disclosureKey, defaultOpen) : defaultOpen;
     return html`
-      <details class=${chatMessageGroupClassName(defaultOpen)} data-index=${startIndex} data-scroll-anchor-id=${this.groupAnchorKey(group, defaultOpen)} ?open=${open} @toggle=${this.behaviors.rememberDisclosures ? (event: Event) => { this.onGroupToggle(disclosureKey, event, defaultOpen); } : undefined}>
+      <details class=${chatMessageGroupClassName(defaultOpen)} data-index=${startIndex} data-scroll-anchor-id=${this.groupAnchorKey(group, defaultOpen) ?? nothing} ?open=${open} @toggle=${this.behaviors.rememberDisclosures ? (event: Event) => { this.onGroupToggle(disclosureKey, event, defaultOpen); } : undefined}>
         <summary>
           <b class="label">${chatMessageGroupLabel(defaultOpen)}</b>
           <span>${summarizeChatGroup(messages.map((event) => event.message))}</span>
@@ -888,7 +891,7 @@ export class ChatView extends LitElement {
         ${messages.map(({ message, index }, offset) => {
           const toolOnly = this.isToolExecutionOnlyMessage(message);
           return html`
-            <section class=${toolOnly ? "group-msg tool-execution-shell" : `group-msg ${message.role}`} data-index=${index} data-scroll-anchor-id=${this.eventAnchorKey(index, message)}>
+            <section class=${toolOnly ? "group-msg tool-execution-shell" : `group-msg ${message.role}`} data-index=${index} data-scroll-anchor-id=${chatEventAnchorKey(index, message) ?? nothing}>
               ${chatMessageHasHeader(message) ? this.renderMessageHeader(message, `${String(startIndex)}:${String(offset)}`, index, entryActionHeaders) : null}
               ${message.parts.map((part, partIndex) => this.renderPart(part, message, index, partIndex))}
             </section>
@@ -1110,22 +1113,19 @@ export class ChatView extends LitElement {
       : `${this.sessionId}:${chatLineIdentity(group.endIndex, group.messages.at(-1)?.message)}`;
   }
 
-  private messageAnchorKey(index: number, message: ChatLine): string {
-    return chatMessageAnchorKey(index, message);
-  }
-
   private groupRenderKey(group: Extract<ChatGroup, { kind: "group" }>): string {
-    return chatGroupAnchorKey(group.startIndex, group.messages[0]?.message);
+    return `g:${chatLineIdentity(group.startIndex, group.messages[0]?.message)}`;
   }
 
-  private groupAnchorKey(group: Extract<ChatGroup, { kind: "group" }>, live: boolean): string {
-    // Historical groups can absorb earlier events without changing their end;
-    // live groups grow at the other end, so retain their first member's identity.
-    return live ? this.groupRenderKey(group) : `g-end:${chatLineIdentity(group.endIndex, group.messages.at(-1)?.message)}`;
-  }
-
-  private eventAnchorKey(index: number, message: ChatLine): string {
-    return chatEventAnchorKey(index, message);
+  private groupAnchorKey(group: Extract<ChatGroup, { kind: "group" }>, live: boolean): string | undefined {
+    // Historical groups can absorb earlier events; live groups grow at the end.
+    // Skip transient members rather than persisting their display indexes.
+    const durableIdentities = group.messages
+      .map(({ message }) => chatLineScrollIdentity(message))
+      .filter((identity): identity is string => identity !== undefined);
+    const identity = live ? durableIdentities[0] : durableIdentities.at(-1);
+    if (identity === undefined) return undefined;
+    return live ? `g:${identity}` : `g-end:${identity}`;
   }
 
   static override styles = chatStyles;

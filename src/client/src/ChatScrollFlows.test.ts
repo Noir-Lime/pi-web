@@ -360,17 +360,27 @@ describe("position flow", () => {
     expect(f.writeTop).toHaveBeenCalledOnce();
   });
 
-  it("falls back once when the remembered anchor no longer exists in complete history", () => {
+  it("ends restoration without moving when the remembered anchor is absent from complete history", () => {
     const f = fixture();
     f.state.top = 200;
-    f.storage.seed("s1", { mode: "anchor", anchorId: "removed", offset: 12 });
+    const saved: ChatScrollPosition = { mode: "anchor", anchorId: "removed", offset: 12 };
+    f.storage.seed("s1", saved);
     f.start(); f.frames.flush();
-    expect(f.state.top).toBe(700);
-    expect(f.writeTop).toHaveBeenCalledOnce();
+    expect(f.state.top).toBe(200);
+    expect(f.writeTop).not.toHaveBeenCalled();
+    expect(f.host.requestEarlier).not.toHaveBeenCalled();
     f.flows.savePosition();
-    expect(f.storage.values.get(chatScrollStorageKey("s1"))).toBe(JSON.stringify({ mode: "bottom" }));
+    expect(f.storage.values.get(chatScrollStorageKey("s1"))).toBe(JSON.stringify(saved));
     f.state.height = 1300; f.update(); f.frames.flush();
-    expect(f.state.top).toBe(1000);
+    expect(f.state.top).toBe(200);
+    // Restoration has ended: a subsequent valid reading position can be saved.
+    f.state.anchors = [f.element(200, "current")];
+    f.flows.savePosition();
+    expect(f.storage.values.get(chatScrollStorageKey("s1"))).toBe(JSON.stringify({ mode: "anchor", anchorId: "current", offset: 0 }));
+    // Missing restoration does not prevent one manual return to bottom from
+    // entering the separate tail-follow mode.
+    f.state.top = 1000; f.flows.onScroll();
+    expect(f.flows.followingLive).toBe(true);
   });
 
   it.each([false, true])("user intent cancels delayed restoration independently of followTail=%s", (followTail) => {
@@ -722,6 +732,32 @@ describe("automatic history", () => {
 });
 
 describe("prepend and cleanup", () => {
+  it("preserves position against an offscreen durable anchor", () => {
+    const f = fixture({ ...MANUAL_CHAT_BEHAVIORS, anchorPrepends: true });
+    f.start();
+    f.state.top = 400;
+    f.state.anchors = [f.element(100, "durable"), f.element(400)];
+    f.flows.beforeRender({ sessionChanged: false, prepend: true });
+    f.state.height += 300;
+    f.state.anchors = [f.element(400, "durable"), f.element(700)];
+    f.update({ historyChanged: true });
+    f.frames.flush();
+    expect(f.state.top).toBe(700);
+    expect(f.writeTop).toHaveBeenCalledOnce();
+  });
+
+  it("does not correct a prepend when no durable anchor exists", () => {
+    const f = fixture({ ...MANUAL_CHAT_BEHAVIORS, anchorPrepends: true });
+    f.start(); f.state.top = 200;
+    f.state.anchors = [f.element(180)];
+    f.flows.beforeRender({ sessionChanged: false, prepend: true });
+    f.state.height += 300;
+    f.update({ historyChanged: true });
+    f.frames.flush();
+    expect(f.state.top).toBe(200);
+    expect(f.writeTop).not.toHaveBeenCalled();
+  });
+
   it("preserves the visible message through child rendering, independently of tail growth", () => {
     const f = fixture({ ...MANUAL_CHAT_BEHAVIORS, anchorPrepends: true });
     f.start();

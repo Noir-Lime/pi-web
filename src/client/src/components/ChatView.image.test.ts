@@ -31,7 +31,7 @@ describe("ChatView image content derivation", () => {
   });
 
   it("keys a tool image message to its stable scroll anchor", () => {
-    expect(chatMessageAnchorKey(7)).toBe("m:7");
+    expect(chatMessageAnchorKey(7, { entryId: "image-entry", role: "tool", parts: [] })).toBe('m:["image-entry","tool","message"]');
   });
 });
 

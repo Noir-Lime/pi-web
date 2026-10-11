@@ -13,9 +13,9 @@ import type { FormattedText } from "./FormattedText";
 import { nativeImage, settleImage } from "./imagePresentation.testSupport";
 
 const messages: ChatLine[] = [
-  { role: "assistant", parts: [{ type: "thinking", text: "A technical body" }] },
-  { role: "assistant", source: "compaction", parts: [{ type: "image", mimeType: "image/png", data: "QUJD" }] },
-  { role: "assistant", parts: [{ type: "text", text: "A normal reply" }] },
+  { entryId: "thought-entry", role: "assistant", parts: [{ type: "thinking", text: "A technical body" }] },
+  { entryId: "compaction-entry", role: "assistant", source: "compaction", parts: [{ type: "image", mimeType: "image/png", data: "QUJD" }] },
+  { entryId: "reply-entry", role: "assistant", parts: [{ type: "text", text: "A normal reply" }] },
 ];
 let frames: Map<number, FrameRequestCallback>;
 let frameId: number;

@@ -1,5 +1,5 @@
 import type { ChatBehaviors } from "./chatBehaviors";
-import { captureScrollPosition, findVisibleScrollAnchor, ChatScrollController, type ChatAnchorScrollPosition, type ChatScrollPosition, type ChatScrollScheduler, type ChatScrollStorage } from "./chatScrollPosition";
+import { captureScrollPosition, findScrollAnchor, ChatScrollController, type ChatAnchorScrollPosition, type ChatScrollPosition, type ChatScrollScheduler, type ChatScrollStorage } from "./chatScrollPosition";
 
 export interface ChatScrollFlowsHost {
   getScroller(): HTMLDivElement | undefined;
@@ -231,13 +231,17 @@ class PositionFlow {
       this.frame = undefined;
       const pending = this.pending;
       if (!this.host.getBehaviors().rememberPosition || pending?.sessionId !== this.host.getSessionId()) return;
-      const result = this.controller.restoreExplicitPosition(pending.position, this.host.getScroller(), this.host.getAnchors(), { fallbackToBottom: this.host.isHistoryReady() && !this.host.hasMore() });
+      const result = this.controller.restoreExplicitPosition(pending.position, this.host.getScroller(), this.host.getAnchors());
       if (result.status === "restored" || result.status === "bottom") {
         this.pending = undefined;
         this.onRestored();
       } else if (result.status === "missing") {
         this.onMissing();
-        if (this.host.isHistoryReady() && !this.requestedHistory && canLoadEarlier(this.host)) {
+        // Complete history proves the selected anchor is gone. End restoration
+        // without moving the viewport or substituting a different position.
+        if (this.host.isHistoryReady() && !this.host.hasMore()) {
+          this.pending = undefined;
+        } else if (this.host.isHistoryReady() && !this.requestedHistory && canLoadEarlier(this.host)) {
           this.requestedHistory = true;
           this.host.requestEarlier();
         }
@@ -314,7 +318,7 @@ class PrependFlow {
     this.cancel();
     const scroller = this.host.getScroller();
     if (scroller === undefined) return;
-    const anchor = findVisibleScrollAnchor(scroller, this.host.getAnchors());
+    const anchor = findScrollAnchor(scroller, this.host.getAnchors());
     if (anchor !== undefined) this.snapshot = captureScrollPosition(scroller, anchor);
   }
 
@@ -329,7 +333,7 @@ class PrependFlow {
     this.frame = this.frames.request(() => {
       this.frame = undefined;
       if (!this.host.getBehaviors().anchorPrepends) return;
-      const result = this.controller.restoreExplicitPosition(snapshot, this.host.getScroller(), this.host.getAnchors(), { fallbackToBottom: false });
+      const result = this.controller.restoreExplicitPosition(snapshot, this.host.getScroller(), this.host.getAnchors());
       if (result.status === "restored") this.onCorrected();
     });
     return true;
@@ -358,7 +362,10 @@ export class ChatScrollFlows {
   ) {
     const controller = new ChatScrollController(positionOptions.storage, positionOptions.saveScheduler);
     this.tail = new TailFlow(host, frames);
-    this.position = new PositionFlow(host, frames, controller, () => { this.tail.syncFollowingAfterNavigation(); }, () => { this.tail.pause(); });
+    this.position = new PositionFlow(host, frames, controller, () => { this.tail.syncFollowingAfterNavigation(); }, () => {
+      this.tail.pause();
+      this.tail.recordScrollBaseline();
+    });
     this.history = new HistoryFlow(host, frames);
     this.prepend = new PrependFlow(host, frames, controller, () => {
       this.tail.recordScrollBaseline();
