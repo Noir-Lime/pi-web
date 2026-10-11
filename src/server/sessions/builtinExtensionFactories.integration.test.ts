@@ -106,7 +106,7 @@ describe("builtin extension factories load through DefaultResourceLoader", () =>
         sessionManager: SessionManager.inMemory(directory), modelRuntime, model: testModel(),
         customTools: [createAskUserToolDefinition({ createAskId: unexpectedRunEndingCall }),
           ...createSubsessionToolDefinitions(directory, {
-            spawn: unexpectedRunEndingCall, list: unexpectedRunEndingCall,
+            spawn: unexpectedRunEndingCall, list: unexpectedRunEndingCall, join: unexpectedRunEndingCall,
             check: unexpectedRunEndingCall, read: unexpectedRunEndingCall,
           })],
       }));

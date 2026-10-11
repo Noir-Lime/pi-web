@@ -373,7 +373,16 @@ Tracked subsessions are join-oriented. Calling `spawn_subsession` returns immedi
 
 A tracked subsession always runs in the spawning session's working directory, so it stays in that workspace's session tree next to its parent. `spawn_subsession` takes no `cwd`. To get work done elsewhere, instruct the child to work there from this workspace, or use `spawn_session`, which still targets any workspace of the project, for an independent session there.
 
-The parent can continue independent work or wait for its tracked children. Completion notices arrive automatically and wake an idle parent; no polling is needed. Child output is available to the parent when the child stops.
+Receiving a completed result marks it read; checking status alone does not. Read results remain available for deliberate retrieval but are not automatically delivered again.
+
+The parent can continue independent work or join its tracked children with `yield_to_subsessions`, called alone and last at a join point:
+
+- `yield_to_subsessions` returns unread completed results immediately, even while other children are working. If there are no unread completed results but children are still working, it ends the current run; completion delivery wakes the parent. If neither unread results nor working children remain, it continues.
+- `check_subsession` on a completed child returns its latest result and acknowledges that completion, so it is not automatically replayed later. The latest result remains available for explicit retrieval; later runs of the same child have separate completions.
+- `list_subsessions` reports status only and does not acknowledge results.
+- `read_subsession` acknowledges a completion only when the current final output is actually returned. Reads that filter out that output, show only history, or truncate it leave the completion unread.
+
+Automatic completion delivery uses the same inbox as these tools and wakes an idle parent for unread results. No polling is needed.
 
 Both `spawn_session` and `spawn_subsession` accept an optional `model` parameter, given as an exact `provider/model-id` such as `anthropic/claude-sonnet-4-5`. When set, the new session starts on that model instead of inheriting the dispatching session's model. The match is strict: an unknown or malformed value is rejected with an error. A `#provider/model-id` reference in the prompt (see [Prompt completions](#prompt-completions)) is how users ask for a specific model; agents forward that reference as this parameter. The new session also inherits the dispatching session's thinking level, clamped to its model's capabilities.
 
