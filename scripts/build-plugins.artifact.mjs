@@ -79,6 +79,7 @@ describe("plugin delivery artifacts", () => {
       "dist/shared/pluginApiTypes.d.ts",
       "plugin-api.d.ts", "server-plugin-api.d.ts", "dist/client/index.html",
       "examples/session-bridge-plugin/package.json",
+      "dist/pi-web-plugins/git/workspace-discovery-notify.cjs",
     ]));
     expect(packagedFiles.some((path) => path.includes("/node_modules/") || /^examples\/[^/]+\/dist\//u.test(path))).toBe(false);
     expect(packagedFiles).not.toContain("dist/plugin-api/unstable.d.ts");
@@ -124,6 +125,20 @@ describe("plugin delivery artifacts", () => {
     if (!isRecord(builtRelaysPackage)) throw new Error("Built relays package metadata was not an object");
     expect(builtRelaysPackage["name"]).toBe("@jmfederico/pi-relay");
   });
+  it("ships a standalone Git notification helper that fails open", async () => {
+    const helperName = "workspace-discovery-notify.cjs";
+    const builtHelper = join(repoRoot, "dist", "pi-web-plugins", "git", helperName);
+    // Run outside the plugin tree to catch accidental checkout/runtime dependencies.
+    const helper = join(tempDir, helperName);
+    await cp(builtHelper, helper);
+    const marker = join(tempDir, "notification-attempted");
+    const failingCommand = [process.execPath, "-e", 'require("node:fs").writeFileSync(process.argv[1], "attempted"); process.exit(17);', marker];
+    const checkoutArgs = ["0".repeat(40), "2".repeat(40), "1"];
+    await expect(execUtf8(process.execPath, [helper, JSON.stringify(failingCommand), ...checkoutArgs], tempDir, 5_000)).resolves.toBe("");
+    expect(await readFile(marker, "utf8")).toBe("attempted");
+    await expect(execUtf8(process.execPath, [helper, JSON.stringify([join(tempDir, "missing-notification-command")]), ...checkoutArgs], tempDir, 5_000)).resolves.toBe("");
+  });
+
   it("ships default-enabled Workflows web integration and loadable prompt resources", async () => {
     const source = join(repoRoot, "dist", "pi-packages", "workflows");
     const metadata = JSON.parse(await readFile(join(source, "package.json"), "utf8"));

@@ -46,19 +46,18 @@ export function createWorkspaceDiscoveryHooks(
 
   async function reconcile(project: ProjectInput, signal: AbortSignal): Promise<void> {
     const isEnabled = await enabled(project, signal);
-    // Include the persistent activation directory as well as the opaque project
-    // id: separate registrations/daemons may share one repository.
+    // Separate projects/instances may share Git config. This identity belongs
+    // to the packaged-helper implementation; older generated helpers are untouched.
     const identity = createHash("sha256")
-      .update(JSON.stringify([context.pluginId, resolve(context.dataDirectory), project.id]))
+      .update(JSON.stringify(["packaged-helper", context.pluginId, resolve(context.dataDirectory), project.id]))
       .digest("hex");
     const name = `pi-web-workspace-discovery-${identity}`;
-    const helper = join(context.dataDirectory, "workspace-discovery", `${name}.cjs`);
-    const registration = `${helper}.registration.json`;
-    const command = registrationCommand(helper, nodeExecutable);
-    const previousNode = await readRegistrationNode(registration, signal);
-    const ownedCommands = new Set([command, ...(previousNode === undefined ? [] : [registrationCommand(helper, previousNode)])]);
-    const notifier = isEnabled ? context.workspaceNotifications?.command(project.id) : undefined;
-    const install = notifier !== undefined && notifier.length > 0;
+    const helper = join(context.packageRoot, "workspace-discovery-notify.cjs");
+    const registration = join(context.dataDirectory, "workspace-discovery", `${name}.registration.json`);
+    const notifier = context.workspaceNotifications?.command(project.id);
+    const command = registrationCommand(helper, nodeExecutable, notifier ?? []);
+    const ownedCommands = new Set([command, ...await readRegistrationCommands(registration, signal)]);
+    const install = isEnabled && notifier !== undefined && notifier.length > 0;
     if (install && !await supportsNamedHooks(project, signal)) return;
 
     const commandKey = `hook.${name}.command`;
@@ -79,17 +78,21 @@ export function createWorkspaceDiscoveryHooks(
       await unsetLocal(project, eventKey, events, signal);
       await unsetLocal(project, commandKey, commands, signal);
       signal.throwIfAborted();
-      await rm(helper, { force: true });
       await rm(registration, { force: true });
       return;
     }
 
-    await writeOwnedFileIfChanged(helper, helperSource(notifier), signal);
+    // Routing/runtime arguments live in Git config, not generated executable
+    // files. Preserve exact ownership before changing config, including either
+    // side of a failed update, then compact after installation succeeds.
+    await writeRegistration([...new Set([...commands.map((entry) => entry.value), command])]);
     await setLocal(project, commandKey, command, commands, signal);
     await setLocal(project, eventKey, EVENT, events, signal);
-    // Retain provenance across Node/version-manager upgrades. Only a command
-    // targeting this exact helper with our current or recorded runtime is owned.
-    await writeOwnedFileIfChanged(registration, `${JSON.stringify({ version: 1, nodeExecutable })}\n`, signal);
+    await writeRegistration([command]);
+
+    async function writeRegistration(owned: readonly string[]): Promise<void> {
+      await writeOwnedFileIfChanged(registration, `${JSON.stringify({ version: 1, commands: owned })}\n`, signal);
+    }
   }
 
   async function supportsNamedHooks(project: ProjectInput, signal: AbortSignal): Promise<boolean> {
@@ -140,46 +143,31 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-function registrationCommand(helper: string, nodeExecutable: string): string {
+function registrationCommand(helper: string, nodeExecutable: string, notificationCommand: readonly string[]): string {
   // Git itself supplies the shell and appends quoted hook argv to the function
   // call. No extra `sh` executable is required on the user's PATH. The final
   // return preserves best-effort behavior even when our helper/runtime is gone.
   const shellHelper = process.platform === "win32" ? helper.replaceAll("\\", "/") : helper;
   const shellNode = process.platform === "win32" ? nodeExecutable.replaceAll("\\", "/") : nodeExecutable;
-  return `pi_web_workspace_notify () { if test -r ${shellQuote(shellHelper)}; then ${shellQuote(shellNode)} ${shellQuote(shellHelper)} "$@" >/dev/null 2>&1; fi; return 0; }; pi_web_workspace_notify`;
+  return `pi_web_workspace_notify () { if test -r ${shellQuote(shellHelper)}; then ${shellQuote(shellNode)} ${shellQuote(shellHelper)} ${shellQuote(JSON.stringify(notificationCommand))} "$@" >/dev/null 2>&1; fi; return 0; }; pi_web_workspace_notify`;
 }
 
-async function readRegistrationNode(path: string, signal: AbortSignal): Promise<string | undefined> {
+async function readRegistrationCommands(path: string, signal: AbortSignal): Promise<readonly string[]> {
   let source: string;
   try {
     source = await readFile(path, { encoding: "utf8", signal });
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
     throw error;
   }
   const value: unknown = JSON.parse(source);
   if (typeof value !== "object" || value === null || Array.isArray(value)
     || Reflect.get(value, "version") !== 1) throw new Error(`Invalid PI WEB Git hook registration record: ${path}`);
-  const nodeExecutable: unknown = Reflect.get(value, "nodeExecutable");
-  if (typeof nodeExecutable !== "string" || !isAbsolute(nodeExecutable)) {
-    throw new Error(`Invalid PI WEB Git hook runtime record: ${path}`);
+  const commands: unknown = Reflect.get(value, "commands");
+  if (!Array.isArray(commands) || !commands.every((command: unknown): command is string => typeof command === "string" && command.length > 0)) {
+    throw new Error(`Invalid PI WEB Git hook command record: ${path}`);
   }
-  return nodeExecutable;
-}
-
-function helperSource(command: readonly string[]): string {
-  return `// Generated by the PI WEB Git plugin. Best-effort discovery hint, never Git authority.
-const { spawnSync } = require("node:child_process");
-const args = process.argv.slice(2);
-// Git worktree add's initial checkout has a null previous OID and branch flag 1.
-// --no-checkout does not fire this hook; normal catalog listing still discovers it.
-if (args.length === 3 && /^(?:0{40}|0{64})$/.test(args[0]) && args[2] === "1") {
-  const command = ${JSON.stringify(command)};
-  try {
-    spawnSync(command[0], command.slice(1), { stdio: "ignore", timeout: 2000, killSignal: "SIGKILL" });
-  } catch { /* Notification/daemon failure must not affect the Git operation. */ }
-}
-`;
+  return commands;
 }
 
 async function writeOwnedFileIfChanged(path: string, source: string, signal: AbortSignal): Promise<void> {
@@ -190,8 +178,7 @@ async function writeOwnedFileIfChanged(path: string, source: string, signal: Abo
     if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") throw error;
   }
   await mkdir(dirname(path), { recursive: true });
-  // Unique temporary siblings + atomic rename avoid partial helpers and races
-  // in the shared plugin data directory. Each registration has its own target.
+  // Atomic per-project ownership records never contain executable code.
   const temporary = `${path}.${randomUUID()}.tmp`;
   try {
     await writeFile(temporary, source, { flag: "wx", mode: 0o600, signal });
