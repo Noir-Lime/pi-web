@@ -2983,6 +2983,7 @@ export class PiWebApp extends LitElement {
       const queryWorkspaces: Pick<Workspace, "id" | "projectId">[] = pendingRuns.length === 0
         ? this.state.workspaces.filter((workspace) => workspace.projectId === project.id)
         : [...new Map(pendingRuns.map((run) => [run.workspaceId, { id: run.workspaceId, projectId: run.projectId }])).values()];
+      const runsBeforeQuery = this.state.workspaceDeletionRuns;
       const results = await Promise.allSettled(queryWorkspaces.map(async (workspace) => {
         const peer = createPluginPeer(composition.binding, workspace, machineId);
         if (peer === undefined) throw requiredTerminalUnavailableError(machineId);
@@ -3001,9 +3002,12 @@ export class PiWebApp extends LitElement {
         const failedWorkspace = result.status === "rejected" ? queryWorkspaces[index] : undefined;
         return failedWorkspace === undefined ? [] : [failedWorkspace.id];
       }));
-      const retainedPendingRuns = Object.values(this.state.workspaceDeletionRuns).filter((run) =>
-        run.projectId === project.id && isWorkspaceDeletionRunPending(run) && failedWorkspaceIds.has(run.workspaceId));
-      const discoveredRuns = [...successfulRuns.flatMap((result) => result.value), ...retainedPendingRuns]
+      // Poll responses must not erase runs recorded or updated while the query was in flight.
+      const retainedRuns = Object.entries(this.state.workspaceDeletionRuns).filter(([workspaceId, run]) =>
+        run.projectId === project.id && (run !== runsBeforeQuery[workspaceId]
+          || (isWorkspaceDeletionRunPending(run) && failedWorkspaceIds.has(run.workspaceId))))
+        .map(([, run]) => run);
+      const discoveredRuns = [...successfulRuns.flatMap((result) => result.value), ...retainedRuns]
         .filter((run) => !this.handledWorkspaceDeletionRunIds.has(machineScopedKey(machineId, run.id)));
       const latestRuns = latestWorkspaceDeletionRuns(discoveredRuns);
       this.setState({ workspaceDeletionRuns: latestRuns });

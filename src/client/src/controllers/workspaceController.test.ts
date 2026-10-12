@@ -680,6 +680,63 @@ describe("WorkspaceController.refreshSelectedProjectTopology", () => {
     expect(test.state().workspaces).toEqual([main, created]);
   });
 
+  it.each(["topology", "project"] as const)("does not let an older %s refresh restore a deleted workspace", async (source) => {
+    const repo = project("p1", "/repo");
+    const main = workspace(repo.id, repo.path, { isMain: true });
+    const removed = workspace(repo.id, "/repo-gone");
+    let resolveOldList!: (workspaces: Workspace[]) => void;
+    const oldList = new Promise<Workspace[]>((resolve) => { resolveOldList = resolve; });
+    const loadWorkspaces = vi.fn<LoadWorkspaces>()
+      .mockReturnValueOnce(oldList)
+      .mockResolvedValue([main]);
+    const test = harness({
+      projects: [repo], selectedProject: repo, selectedWorkspace: main,
+      workspaces: [main, removed], workspacesByProjectId: { [repo.id]: [main, removed] },
+    }, loadWorkspaces);
+
+    const oldRefresh = source === "topology"
+      ? test.controller.refreshSelectedProjectTopology()
+      : test.controller.refreshProjectWorkspaces(repo.id);
+    await vi.waitFor(() => { expect(loadWorkspaces).toHaveBeenCalledOnce(); });
+    await test.controller.refreshAfterWorkspaceDeleted(repo.id, removed.id);
+    expect(test.state().workspaces).toEqual([main]);
+
+    resolveOldList([main, removed]);
+    await oldRefresh;
+
+    expect(test.state().workspaces).toEqual([main]);
+    expect(test.state().workspacesByProjectId[repo.id]).toEqual([main]);
+    expect(test.state().selectedWorkspace).toBe(main);
+    expect(test.clearActiveSession).not.toHaveBeenCalled();
+  });
+
+  it("does not let superseded deletion reconciliation publish a list or navigate", async () => {
+    const repo = project("p1", "/repo");
+    const main = workspace(repo.id, repo.path, { isMain: true });
+    const removed = workspace(repo.id, "/repo-gone");
+    const created = workspace(repo.id, "/repo-new");
+    let resolveDeletionList!: (workspaces: Workspace[]) => void;
+    const deletionList = new Promise<Workspace[]>((resolve) => { resolveDeletionList = resolve; });
+    const loadWorkspaces = vi.fn<LoadWorkspaces>()
+      .mockReturnValueOnce(deletionList)
+      .mockResolvedValue([main, created]);
+    const navigateToWorkspace = vi.fn().mockResolvedValue(true);
+    const test = harness({
+      projects: [repo], selectedProject: repo, selectedWorkspace: removed,
+      workspaces: [main, removed], workspacesByProjectId: { [repo.id]: [main, removed] },
+    }, loadWorkspaces, { navigateToWorkspace });
+
+    const deleting = test.controller.refreshAfterWorkspaceDeleted(repo.id, removed.id);
+    await test.controller.refreshSelectedProjectTopology();
+    resolveDeletionList([main]);
+    await deleting;
+
+    expect(test.state().workspaces).toEqual([main, created]);
+    expect(test.state().workspacesByProjectId[repo.id]).toEqual([main, created]);
+    expect(navigateToWorkspace).not.toHaveBeenCalled();
+    expect(test.clearActiveSession).not.toHaveBeenCalled();
+  });
+
   it("publishes the fallback workspace before route reconciliation selects it", async () => {
     const repo = project("p1", "/repo");
     const main = workspace(repo.id, repo.path, { isMain: true });
@@ -758,6 +815,25 @@ describe("WorkspaceController.refreshSelectedProjectTopology", () => {
     expect(test.state().selectedWorkspace).toBe(target);
     expect(test.state().workspaces).toEqual([target]);
     expect(test.clearActiveSession).not.toHaveBeenCalled();
+  });
+
+  it("lets project navigation finish without a competing background topology request", async () => {
+    const repo = project("p1", "/repo");
+    const main = workspace(repo.id, repo.path, { isMain: true });
+    let resolveNavigationList!: (workspaces: Workspace[]) => void;
+    const navigationList = new Promise<Workspace[]>((resolve) => { resolveNavigationList = resolve; });
+    const loadTopology = vi.fn();
+    const test = harness({ projects: [repo] }, () => navigationList, { loadWorkspaceResolution: loadTopology });
+
+    const selecting = test.controller.selectProject(repo);
+    await test.controller.refreshSelectedProjectTopology();
+    expect(loadTopology).not.toHaveBeenCalled();
+    resolveNavigationList([main]);
+    await selecting;
+
+    expect(test.state().workspaces).toEqual([main]);
+    expect(test.state().selectedWorkspace).toBe(main);
+    expect(test.state().isLoadingWorkspaces).toBe(false);
   });
 
   it("does not request anything when no project is selected", async () => {
