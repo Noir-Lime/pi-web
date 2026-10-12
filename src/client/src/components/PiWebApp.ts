@@ -1702,7 +1702,7 @@ export class PiWebApp extends LitElement {
       state.selectedProject, state.projects, state.workspaces,
       state.isLoadingProjects, state.isLoadingWorkspaces, this.workspaceContentError(),
       this.workspaceUploadDefaultFolder, this.workspaceSurfaceRevision,
-      this.navigationPreferences, this.appShell.isMobileNavigationLayout, this.appShell.isDesktopSideBySideLayout,
+      this.navigationPreferences, this.appShell.isMobileNavigationLayout, this.isDesktopSideBySideLayout(),
       currentBrowserUrl(),
     ];
   }
@@ -1823,7 +1823,7 @@ export class PiWebApp extends LitElement {
   }
 
   private isDesktopSideBySideLayout(): boolean {
-    return this.appShell.isDesktopSideBySideLayout;
+    return this.appShell.isDesktopSideBySideLayout && !this.panelCollapse.workspacePanelCollapsed;
   }
 
   private measuredPanelWidth(side: ResizablePanelSide): number | undefined {
@@ -3687,7 +3687,7 @@ export class PiWebApp extends LitElement {
 
   private selectedNavigationTab(panels = this.visibleWorkspacePanels()): AppMobileMainTab["id"] | undefined {
     const mainView = this.effectiveMainView();
-    if (!this.appShell.isDesktopSideBySideLayout && mainView !== "workspace") return mainView;
+    if (!this.isDesktopSideBySideLayout() && mainView !== "workspace") return mainView;
     // An unavailable destination displays an error, not a remembered/default tool.
     if (this.workspaceContentError() !== "") return undefined;
     return this.effectiveWorkspaceTool(panels);
@@ -3696,7 +3696,7 @@ export class PiWebApp extends LitElement {
   private availableNavigationTabs(panels = this.visibleWorkspacePanels()): AppMobileMainTab[] {
     return this.mobileMainTabs(panels).filter((tab) => {
       if (tab.id === "navigation") return this.appShell.isMobileNavigationLayout;
-      if (tab.id === "chat") return !this.appShell.isDesktopSideBySideLayout;
+      if (tab.id === "chat") return !this.isDesktopSideBySideLayout();
       return true;
     });
   }
@@ -3776,7 +3776,7 @@ export class PiWebApp extends LitElement {
     const mainView = this.effectiveMainView();
     const activityNoticeVisible = this.unacknowledgedActivitySessionKey(state) !== undefined;
     return html`
-      <div class=${this.panelCollapse.shellClass(mainView)} style=${this.panelResize.shellStyle({ navigation: this.resizablePanelConstraints("navigation"), workspace: this.resizablePanelConstraints("workspace") })}>
+      <div class=${`${this.panelCollapse.shellClass(mainView)}${this.isDesktopSideBySideLayout() ? "" : " two-column-layout"}`} style=${this.panelResize.shellStyle({ navigation: this.resizablePanelConstraints("navigation"), workspace: this.resizablePanelConstraints("workspace") })}>
         <aside id="navigation-panel">${this.appShell.isMobileNavigationLayout ? null : this.renderNavigationPanel()}</aside>
         ${this.renderNavigationPanelEdgeControl()}
         <main class=${mainViewClass(mainView)}>

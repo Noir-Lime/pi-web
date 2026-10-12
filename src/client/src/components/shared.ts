@@ -154,30 +154,26 @@ export const appStyles = css`
   @media (min-width: 1181px) {
     .shell.navigation-panel-collapsed { --navigation-panel-width: 0px; }
     .shell.navigation-panel-collapsed > aside { display: none; }
-    .shell.workspace-panel-collapsed { --workspace-panel-width: 0px; }
-    .shell.workspace-panel-collapsed > workspace-panel { display: none; }
+    .shell.two-column-layout.workspace-panel-collapsed { grid-template-columns: var(--navigation-panel-width) 1px minmax(0, 1fr) 1px; }
+    .shell.workspace-panel-collapsed > app-panel-edge-control[side="workspace"] { grid-row: 1 / 3; }
   }
-  @media (max-width: 1180px) {
-    .shell { grid-template-columns: var(--navigation-panel-width) 1px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
-    .shell.navigation-panel-collapsed { --navigation-panel-width: 0px; }
-    .shell.navigation-panel-collapsed > aside { display: none; }
-    aside { grid-row: 1 / 3; }
-    .navigation-panel-edge { grid-row: 1 / 3; }
-    main { grid-column: 3; grid-row: 1 / 3; }
-    app-mobile-main-tabs { display: block; flex: 0 0 auto; min-width: 0; }
-    .mobile-tabs-frame { display: flex; }
-    .shell.workspace-view main { grid-row: 1; min-height: auto; }
-    .shell.workspace-view > workspace-panel { grid-column: 3; grid-row: 2; display: flex; border-left: 0; }
-    .shell:not(.workspace-view) > workspace-panel { display: none; }
-    .workspace-panel-edge { display: none; }
-    main.workspace-view chat-view, main.workspace-view .composer-area, main.workspace-view status-bar,
-    main.workspace-view .empty { display: none; }
-    main.workspace-view { overflow: hidden; }
-  }
+  .shell.two-column-layout { grid-template-columns: var(--navigation-panel-width) 1px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .shell.two-column-layout.navigation-panel-collapsed { --navigation-panel-width: 0px; }
+  .shell.two-column-layout.navigation-panel-collapsed > aside { display: none; }
+  .two-column-layout > aside, .two-column-layout > app-panel-edge-control[side="navigation"] { grid-row: 1 / 3; }
+  .two-column-layout main { grid-column: 3; grid-row: 1 / 3; }
+  .two-column-layout app-mobile-main-tabs { display: block; flex: 0 0 auto; min-width: 0; }
+  .two-column-layout .mobile-tabs-frame { display: flex; }
+  .shell.two-column-layout.workspace-view main { grid-row: 1; min-height: auto; }
+  .shell.two-column-layout.workspace-view > workspace-panel { grid-column: 3; grid-row: 2; display: flex; border-left: 0; }
+  .shell.two-column-layout:not(.workspace-view) > workspace-panel { display: none; }
+  .two-column-layout main.workspace-view chat-view, .two-column-layout main.workspace-view .composer-area, .two-column-layout main.workspace-view status-bar,
+  .two-column-layout main.workspace-view .empty { display: none; }
+  .two-column-layout main.workspace-view { overflow: hidden; }
   @media (max-width: 760px) {
-    .shell { grid-template-columns: minmax(0, 1fr); }
+    .shell.two-column-layout { grid-template-columns: minmax(0, 1fr); }
     aside, .navigation-panel-edge { display: none; }
-    main, .shell.workspace-view > workspace-panel { grid-column: 1; }
+    .two-column-layout main, .shell.two-column-layout.workspace-view > workspace-panel { grid-column: 1; }
     .context-bar { display: flex; }
     .mobile-navigation-tab { display: block; }
     main.navigation-view chat-view, main.navigation-view .composer-area, main.navigation-view status-bar,

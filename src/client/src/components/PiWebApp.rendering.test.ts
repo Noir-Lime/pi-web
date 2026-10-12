@@ -64,6 +64,38 @@ afterEach(() => {
 });
 
 describe("application rendering boundaries", () => {
+  it("switches a wide shell to tabbed two-column mode and restores three columns", async () => {
+    const app = await mountApp({ selectedWorkspace: workspace, workspaces: [workspace], mainView: "chat" }, () => html`<p>Tool content</p>`);
+    const shell: unknown = Reflect.get(app, "appShell");
+    if (!(shell instanceof AppShellController)) throw new Error("Expected shell controller");
+    shell.isDesktopSideBySideLayout = true;
+    shell.isMobileNavigationLayout = false;
+    app.requestUpdate();
+    await settle(app);
+    const layout = () => app.shadowRoot?.querySelector(".shell");
+    const edgeButton = (label: string) => app.shadowRoot?.querySelector('app-panel-edge-control[side="workspace"]')?.shadowRoot?.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+    const tabs = () => [...app.shadowRoot?.querySelector("app-mobile-main-tabs")?.shadowRoot?.querySelectorAll<HTMLButtonElement>(".mobile-tabs button") ?? []];
+    expect(layout()?.classList.contains("two-column-layout")).toBe(false);
+    expect(tabs().map((button) => button.title)).not.toContain("Chat");
+    expect(edgeButton("Collapse workspace panel")).not.toBeNull();
+    edgeButton("Collapse workspace panel")?.click();
+    await settle(app);
+    expect(layout()?.classList.contains("two-column-layout")).toBe(true);
+    expect(tabs().find((button) => button.title === "Chat")?.classList.contains("selected")).toBe(true);
+    tabs().find((button) => button.title === "Test")?.click();
+    await settle(app);
+    expect(layout()?.classList.contains("workspace-view")).toBe(true);
+    expect(tabs().find((button) => button.title === "Test")?.classList.contains("selected")).toBe(true);
+    tabs().find((button) => button.title === "Chat")?.click();
+    await settle(app);
+    expect(layout()?.classList.contains("chat-view")).toBe(true);
+    expect(edgeButton("Expand workspace panel")).not.toBeNull();
+    edgeButton("Expand workspace panel")?.click();
+    await settle(app);
+    expect(layout()?.classList.contains("two-column-layout")).toBe(false);
+    expect(tabs().map((button) => button.title)).not.toContain("Chat");
+    expect(app.shadowRoot?.querySelector("workspace-panel")?.shadowRoot?.textContent).toContain("Tool content");
+  });
   it("reactively filters navigation at both layout boundaries without losing hidden pins", async () => {
     let width = 1181;
     const originalMatchMedia = window.matchMedia.bind(window);
