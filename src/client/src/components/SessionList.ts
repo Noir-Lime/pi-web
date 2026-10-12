@@ -80,6 +80,15 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
   @state() private selectedSessionIds: ReadonlySet<string> = new Set();
   @state() private expandedAgentParents: ReadonlySet<string> = new Set();
 
+  private agentAttentionCache?: {
+    rows: readonly SessionRow[];
+    statuses: SessionList["statuses"];
+    activities: SessionList["activities"];
+    sending: SessionList["sending"];
+    unreadSessionIds: SessionList["unreadSessionIds"];
+    attention: ReadonlyMap<string, AgentAttention>;
+  };
+
   private visibleTreeCache?: {
     tree: NonNullable<SessionList["treeCache"]>;
     expanded: ReadonlySet<string>;
@@ -140,21 +149,30 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
   }
 
   private agentGroupAttention(rows: readonly SessionRow[], groups: AgentSessionGroups): ReadonlyMap<string, AgentAttention> {
+    const cached = this.agentAttentionCache;
+    if (cached?.rows === rows && cached.statuses === this.statuses && cached.activities === this.activities
+      && cached.sending === this.sending && cached.unreadSessionIds === this.unreadSessionIds) return cached.attention;
     const attention = new Map<string, AgentAttention>();
     // Parent-first tree order lets nested agent activity roll up in one reverse pass.
     // User/unknown children are always visible and do not contribute to these chips.
-    for (const { session } of [...rows].reverse()) {
+    for (let index = rows.length - 1; index >= 0; index--) {
+      const row = rows[index];
+      if (row === undefined) continue;
+      const { session } = row;
       const parentId = groups.parentByAgentId.get(session.id);
       if (parentId === undefined) continue;
       const nested = attention.get(session.id);
       const parent = attention.get(parentId);
       const ownKind = sessionRowActivityKind(session, this.statuses[session.id], this.activities[session.id], this.sending[session.id] === true);
-      const kinds = [ownKind, nested?.kind, parent?.kind];
-      attention.set(parentId, {
-        kind: kinds.includes("sending") ? "sending" : kinds.includes("session") ? "session" : undefined,
-        unread: sessionRowUnread(session, this.unreadSessionIds) || nested?.unread === true || parent?.unread === true,
-      });
+      const kind = ownKind === "sending" || nested?.kind === "sending" || parent?.kind === "sending"
+        ? "sending" : ownKind ?? nested?.kind ?? parent?.kind;
+      const unread = sessionRowUnread(session, this.unreadSessionIds) || nested?.unread === true || parent?.unread === true;
+      if (kind !== undefined || unread) attention.set(parentId, { kind, unread });
     }
+    this.agentAttentionCache = {
+      rows, statuses: this.statuses, activities: this.activities, sending: this.sending,
+      unreadSessionIds: this.unreadSessionIds, attention,
+    };
     return attention;
   }
 
@@ -247,7 +265,9 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     if (!this.collapsed) tree.descendantCounts ??= unarchivedDescendantCounts(this.sessions);
     const descendantCounts = tree.descendantCounts;
     const unreadCount = unreadSessionCount(tree.currentSelectableSessions, this.unreadSessionIds);
-    const agentAttention = this.collapsed ? undefined : this.agentGroupAttention(tree.currentRows, tree.currentAgentGroups);
+    const needsAgentAttention = !this.collapsed && currentRows.some(({ session }) =>
+      tree.currentAgentGroups.countByParentId.has(session.id) && !this.expandedAgentParents.has(session.id));
+    const agentAttention = needsAgentAttention ? this.agentGroupAttention(tree.currentRows, tree.currentAgentGroups) : undefined;
     return html`
       <section>
         ${this.renderHeading(tree.currentRows.length + tree.archivedRows.length, currentSelectableSessions, unreadCount)}
@@ -642,8 +662,9 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     .action-row.has-agent-subsessions { margin-bottom: 0; }
     .action-row.has-agent-subsessions .action-main,
     .action-row.has-agent-subsessions .action-menu-toggle { position: relative; z-index: 1; }
-    .agent-subsession-toggle { position: relative; z-index: 0; display: block; box-sizing: border-box; width: calc(100% - 24px - 2 * var(--agent-offset, 0px)); margin: -1px calc(12px + var(--agent-offset, 0px)) 8px; padding: 4px 8px; border-radius: 0 0 8px 8px; font-size: 12px; text-align: center; color: var(--pi-muted); }
-    .agent-subsession-toggle .action-activity { position: static; display: inline-grid; margin-left: 6px; vertical-align: middle; }
+    .agent-subsession-toggle { position: relative; z-index: 0; display: block; box-sizing: border-box; width: calc(100% - 24px - 2 * var(--agent-offset, 0px)); margin: -1px calc(12px + var(--agent-offset, 0px)) 8px; padding: 4px 22px; border-radius: 0 0 8px 8px; font-size: 12px; text-align: center; color: var(--pi-muted); }
+    /* Keep activity out of text flow so status changes cannot wrap or resize the chip. */
+    .agent-subsession-toggle .action-activity { top: 50%; right: 8px; transform: translateY(-50%); pointer-events: none; }
     .agent-subsession-toggle[aria-expanded="true"] { margin-bottom: 0; color: var(--pi-accent); border-color: var(--pi-accent-border); }
     .action-row.linked-agent-child { margin-inline: var(--agent-offset); }
     .agent-subsession-toggle:hover, .agent-subsession-toggle:focus-visible { color: var(--pi-text); background: var(--pi-surface-hover); }
