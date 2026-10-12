@@ -660,11 +660,10 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     .pending-session-row.starting-session .activity-indicator { flex: 0 0 auto; margin: 0; }
     .action-main.selecting { padding-left: calc(32px + var(--depth, 0) * 16px); }
     .action-row.has-agent-subsessions { margin-bottom: 0; }
-    .action-row.has-agent-subsessions .action-main,
-    .action-row.has-agent-subsessions .action-menu-toggle { position: relative; z-index: 1; }
-    .agent-subsession-toggle { position: relative; z-index: 0; display: block; box-sizing: border-box; width: calc(100% - 24px - 2 * var(--agent-offset, 0px)); margin: -1px calc(12px + var(--agent-offset, 0px)) 8px; padding: 4px 22px; border-radius: 0 0 8px 8px; font-size: 12px; text-align: center; color: var(--pi-muted); }
+    /* Share the card's bottom border instead of overlapping and raising either surface. */
+    .agent-subsession-toggle { position: relative; display: block; box-sizing: border-box; width: calc(100% - 24px - 2 * var(--agent-offset, 0px)); margin: 0 calc(12px + var(--agent-offset, 0px)) 8px; padding: 4px 22px; border-top: 0; border-radius: 0 0 8px 8px; font-size: 12px; text-align: center; color: var(--pi-muted); }
     /* Keep activity out of text flow so status changes cannot wrap or resize the chip. */
-    .agent-subsession-toggle .action-activity { top: 50%; right: 8px; transform: translateY(-50%); pointer-events: none; }
+    .agent-subsession-toggle .action-activity { top: 50%; right: 8px; z-index: auto; transform: translateY(-50%); pointer-events: none; }
     .agent-subsession-toggle[aria-expanded="true"] { margin-bottom: 0; color: var(--pi-accent); border-color: var(--pi-accent-border); }
     .action-row.linked-agent-child { margin-inline: var(--agent-offset); }
     .agent-subsession-toggle:hover, .agent-subsession-toggle:focus-visible { color: var(--pi-text); background: var(--pi-surface-hover); }
