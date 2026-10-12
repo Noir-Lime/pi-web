@@ -83,7 +83,7 @@ describe("SessionList row identity and derived data", () => {
 
     button(row(list, "parent"), ".action-menu-toggle").click();
     await list.updateComplete;
-    expect(row(list, "parent").textContent).toContain("Archive with descendants (1)");
+    expect(list.shadowRoot?.querySelector(".action-menu-panel")?.textContent).toContain("Archive with descendants (1)");
     list.unreadSessionIds = new Set([child.id]);
     list.sending = { child: true };
     list.activities = {};
@@ -103,7 +103,7 @@ describe("SessionList row identity and derived data", () => {
     expect(list.shadowRoot?.querySelectorAll(".action-row")).toHaveLength(1);
     button(row(list, "parent"), ".action-menu-toggle").click();
     await list.updateComplete;
-    expect(row(list, "parent").textContent).not.toContain("Archive with descendants");
+    expect(list.shadowRoot?.querySelector(".action-menu-panel")?.textContent ?? "").not.toContain("Archive with descendants");
     button(list.shadowRoot, ".subheading .section-toggle").click();
     await list.updateComplete;
     expect(row(list, "child").style.getPropertyValue("--depth")).toBe("0");
@@ -163,6 +163,6 @@ describe("SessionList row identity and derived data", () => {
     expect(row(list, "child").style.getPropertyValue("--depth")).toBe("1");
     button(row(list, "parent"), ".action-menu-toggle").click();
     await list.updateComplete;
-    expect(row(list, "parent").textContent).toContain("Archive with descendants (1)");
+    expect(list.shadowRoot?.querySelector(".action-menu-panel")?.textContent).toContain("Archive with descendants (1)");
   });
 });

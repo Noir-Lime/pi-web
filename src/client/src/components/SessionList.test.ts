@@ -112,10 +112,38 @@ describe("mark-as-read actions", () => {
     await openSessionMenu(list, unread.id);
     const markRead = list.shadowRoot?.querySelector<HTMLButtonElement>('button[title="Mark session as read"]');
     expect(markRead?.textContent).toBe("Mark as read");
+    // Fixed actions must escape the scroller's isolated paint context without
+    // leaving the component (document-click dismissal still belongs to it).
+    expect(markRead?.closest(".list-body")).toBeNull();
+    expect(markRead?.closest(".action-menu-panel")?.parentElement).toBe(list.shadowRoot?.querySelector("section"));
     markRead?.click();
 
     expect(onMarkRead).toHaveBeenCalledWith(unread);
     expect(componentState(list, "openMenuSessionId")).toBeUndefined();
+  });
+
+  it("retargets the floating menu to the clicked session and closes it when the session disappears", async () => {
+    const first = session("first");
+    const second = session("second");
+    const list = sessionList([first, second], new Set([first.id, second.id]));
+    const onMarkRead = vi.fn();
+    list.onMarkRead = onMarkRead;
+    await openSessionMenu(list, first.id);
+    await openSessionMenu(list, second.id);
+    expect(list.shadowRoot?.querySelectorAll(".action-menu-panel")).toHaveLength(1);
+    list.shadowRoot?.querySelector<HTMLButtonElement>('button[title="Mark session as read"]')?.click();
+    expect(onMarkRead).toHaveBeenCalledWith(second);
+    await list.updateComplete;
+    expect(list.shadowRoot?.querySelector(".action-menu-panel")).toBeNull();
+
+    await openSessionMenu(list, first.id);
+    list.sessions = [{ ...first, archived: true }, second];
+    await list.updateComplete;
+    expect(list.shadowRoot?.querySelector(".action-menu-panel")).toBeNull();
+    list.sessions = [second];
+    await list.updateComplete;
+    await list.updateComplete;
+    expect(list.shadowRoot?.querySelector(".action-menu-panel")).toBeNull();
   });
 
   it("hides Mark as read for read, transient, and archived sessions even when tracked as unread", async () => {

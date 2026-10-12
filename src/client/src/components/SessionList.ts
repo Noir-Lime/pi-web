@@ -275,15 +275,16 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
           <div class="list-body">
             ${this.renderCurrentSelectionToolbar(currentSelectableSessions)}
             ${this.startingCount > 0 ? this.renderStartingSession() : null}
-            ${repeat(currentRows, (row) => row.session.id, (row) => this.renderSession(row, descendantCounts?.get(row.session.id) ?? 0, "current", tree.currentAgentGroups.countByParentId.get(row.session.id) ?? 0, currentAgentOffsets.get(row.session.id) ?? 0, agentAttention?.get(row.session.id)))}
+            ${repeat(currentRows, (row) => row.session.id, (row) => this.renderSession(row, "current", tree.currentAgentGroups.countByParentId.get(row.session.id) ?? 0, currentAgentOffsets.get(row.session.id) ?? 0, agentAttention?.get(row.session.id)))}
             ${tree.archivedRows.length > 0 ? html`
               ${this.renderArchivedHeading(archivedSessions, tree.archivedRows.length)}
               ${this.archivedExpanded ? html`
                 ${this.renderArchivedSelectionToolbar(archivedSessions)}
-                ${repeat(archivedRows, (row) => row.session.id, (row) => this.renderSession(row, descendantCounts?.get(row.session.id) ?? 0, "archived", tree.archivedAgentGroups.countByParentId.get(row.session.id) ?? 0, archivedAgentOffsets.get(row.session.id) ?? 0))}
+                ${repeat(archivedRows, (row) => row.session.id, (row) => this.renderSession(row, "archived", tree.archivedAgentGroups.countByParentId.get(row.session.id) ?? 0, archivedAgentOffsets.get(row.session.id) ?? 0))}
               ` : null}
             ` : null}
           </div>
+          ${this.renderOpenSessionMenu(descendantCounts)}
         `}
       </section>
     `;
@@ -409,7 +410,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
       : html`<button @click=${() => { this.clearSelection(scope); }}>Clear selected (${selectedCount})</button>`;
   }
 
-  private renderSession(row: SessionRow, descendantCount: number, scope: SessionSelectionScope, agentChildCount: number, agentOffset: number, agentAttention?: AgentAttention) {
+  private renderSession(row: SessionRow, scope: SessionSelectionScope, agentChildCount: number, agentOffset: number, agentAttention?: AgentAttention) {
     const { session } = row;
     const linkedAgentChild = agentOffset > 0;
     const cappedDepth = Math.min(row.depth, 2);
@@ -421,8 +422,6 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     const activity = this.activities[session.id];
     const indicatorKind = sessionRowActivityKind(session, status, activity, this.sending[session.id] === true);
     const unread = sessionRowUnread(session, this.unreadSessionIds);
-    const canArchive = isArchivableSessionInfo(session, status);
-    const canDeleteTransient = isTransientNewSessionInfo(session, status);
     const labelItems = this.sessionLabelItems(session);
     return html`
       <div
@@ -441,29 +440,43 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
         </div>
         <div class="action-menu">
           <button class="action-menu-toggle" title="Session actions" @click=${(event: MouseEvent) => { event.stopPropagation(); this.toggleMenu(session.id, event.currentTarget); }}>⋯</button>
-          ${this.openMenuSessionId === session.id ? html`
-            <div class="action-menu-panel" style=${this.menuStyle}>
-              ${session.archived === true
-                ? html`
-                  <button title="Restore session" @click=${() => { this.openMenuSessionId = undefined; this.onRestore?.(session); }}>Restore</button>
-                  <button class="danger" title="Permanently delete archived session" @click=${() => { this.openMenuSessionId = undefined; this.confirmDeleteArchived(session); }}>Delete archived session</button>
-                `
-                : canDeleteTransient
-                  ? html`<button title="Delete transient new session" @click=${() => { this.openMenuSessionId = undefined; this.onDelete?.(session); }}>Delete</button>`
-                  : html`
-                    ${this.unreadSessionIds.has(session.id) ? html`<button title="Mark session as read" @click=${() => { this.openMenuSessionId = undefined; this.onMarkRead?.(session); }}>Mark as read</button>` : null}
-                    ${canArchive ? html`
-                      <button title="Archive session" @click=${() => { this.openMenuSessionId = undefined; this.onArchive?.(session); }}>Archive</button>
-                      ${descendantCount > 0 ? html`<button title="Archive this session and its descendants" @click=${() => { this.openMenuSessionId = undefined; this.confirmArchiveWithDescendants(session, descendantCount); }}>Archive with descendants (${descendantCount})</button>` : null}
-                    ` : null}
-                    ${session.parentSessionPath !== undefined ? html`<button title="Detach from parent" @click=${() => { this.openMenuSessionId = undefined; this.onDetachParent?.(session); }}>Detach from parent</button>` : null}
-                    ${canArchive ? html`<button title=${isSessionActive(this.statuses[session.id], this.activities[session.id]) ? "Stop current session activity before reloading from disk" : "Reload session from disk without refreshing Pi runtime resources"} ?disabled=${isSessionActive(this.statuses[session.id], this.activities[session.id])} @click=${() => { this.openMenuSessionId = undefined; this.onReload?.(session); }}>Reload from disk</button>` : null}
-                  `}
-            </div>
-          ` : null}
         </div>
       </div>
       ${agentChildCount > 0 ? html`<button class="agent-subsession-toggle" style=${`--agent-offset:${String(agentOffset)}px`} aria-expanded=${String(this.expandedAgentParents.has(session.id))} @click=${() => { this.toggleAgentParent(session.id); }}>${this.expandedAgentParents.has(session.id) ? "▾" : "▸"} Agent subsessions (${agentChildCount})${!this.expandedAgentParents.has(session.id) && agentAttention !== undefined ? renderActionActivityIndicator(agentAttention.kind, agentAttention.kind === "sending" ? "Sending subsession message" : "Agent subsessions active", agentAttention.unread ? "Unread subsession activity" : undefined) : null}</button>` : null}
+    `;
+  }
+
+  private renderOpenSessionMenu(descendantCounts: ReadonlyMap<string, number> | undefined) {
+    if (this.openMenuSessionId === undefined) return null;
+    const { currentRows, archivedRows } = this.visibleSessionTree();
+    const row = currentRows.find((candidate) => candidate.session.id === this.openMenuSessionId)
+      ?? (this.archivedExpanded ? archivedRows.find((candidate) => candidate.session.id === this.openMenuSessionId) : undefined);
+    if (row === undefined) return null;
+    const { session } = row;
+    const status = this.statuses[session.id];
+    const canArchive = isArchivableSessionInfo(session, status);
+    const canDeleteTransient = isTransientNewSessionInfo(session, status);
+    const descendantCount = descendantCounts?.get(session.id) ?? 0;
+    // Fixed overlays are siblings of the isolated scroller, not trapped in its paint context.
+    return html`
+      <div class="action-menu-panel" style=${this.menuStyle}>
+        ${session.archived === true
+          ? html`
+            <button title="Restore session" @click=${() => { this.openMenuSessionId = undefined; this.onRestore?.(session); }}>Restore</button>
+            <button class="danger" title="Permanently delete archived session" @click=${() => { this.openMenuSessionId = undefined; this.confirmDeleteArchived(session); }}>Delete archived session</button>
+          `
+          : canDeleteTransient
+            ? html`<button title="Delete transient new session" @click=${() => { this.openMenuSessionId = undefined; this.onDelete?.(session); }}>Delete</button>`
+            : html`
+              ${this.unreadSessionIds.has(session.id) ? html`<button title="Mark session as read" @click=${() => { this.openMenuSessionId = undefined; this.onMarkRead?.(session); }}>Mark as read</button>` : null}
+              ${canArchive ? html`
+                <button title="Archive session" @click=${() => { this.openMenuSessionId = undefined; this.onArchive?.(session); }}>Archive</button>
+                ${descendantCount > 0 ? html`<button title="Archive this session and its descendants" @click=${() => { this.openMenuSessionId = undefined; this.confirmArchiveWithDescendants(session, descendantCount); }}>Archive with descendants (${descendantCount})</button>` : null}
+              ` : null}
+              ${session.parentSessionPath !== undefined ? html`<button title="Detach from parent" @click=${() => { this.openMenuSessionId = undefined; this.onDetachParent?.(session); }}>Detach from parent</button>` : null}
+              ${canArchive ? html`<button title=${isSessionActive(this.statuses[session.id], this.activities[session.id]) ? "Stop current session activity before reloading from disk" : "Reload session from disk without refreshing Pi runtime resources"} ?disabled=${isSessionActive(this.statuses[session.id], this.activities[session.id])} @click=${() => { this.openMenuSessionId = undefined; this.onReload?.(session); }}>Reload from disk</button>` : null}
+            `}
+      </div>
     `;
   }
 
@@ -622,6 +635,8 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
 
   static override styles = [listStyles, css`
     h2 { min-height: 30px; }
+    /* Keep positioned/animated session content in the scroller's paint hierarchy. */
+    .list-body { isolation: isolate; }
     h2 > .section-count { flex: 0 0 auto; display: inline; color: var(--pi-muted); font-size: inherit; }
     h2 > .section-unread-count { flex: 0 0 auto; display: inline; color: var(--pi-accent); font-size: inherit; text-transform: none; }
     .bulk-select-entry { box-sizing: border-box; flex: 0 0 auto; display: inline-grid; place-items: center; width: 30px; height: 30px; padding: 0; font-size: 13px; line-height: 1; text-transform: none; }

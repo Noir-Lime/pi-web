@@ -238,7 +238,7 @@ describe("SessionList agent subsession controls", () => {
     expect(row(list, "agent")?.querySelector<HTMLInputElement>("input")?.checked).toBe(false);
     button(row(list, "parent"), ".action-menu-toggle").click();
     await settle(list);
-    expect(row(list, "parent")?.textContent).toContain("Archive with descendants (2)");
+    expect(list.shadowRoot?.querySelector(".action-menu-panel")?.textContent).toContain("Archive with descendants (2)");
   });
 
   it("reveals a selected nested agent on navigation but not same-id refresh churn", async () => {
