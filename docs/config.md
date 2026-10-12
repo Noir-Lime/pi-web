@@ -373,6 +373,8 @@ Tracked subsessions are join-oriented. Calling `spawn_subsession` returns immedi
 
 A tracked subsession always runs in the spawning session's working directory, so it stays in that workspace's session tree next to its parent. `spawn_subsession` takes no `cwd`. To get work done elsewhere, instruct the child to work there from this workspace, or use `spawn_session`, which still targets any workspace of the project, for an independent session there.
 
+In the session list, verified agent-created subsessions are collapsed by default under their direct parent. Each parent has its own **Agent subsessions** toggle. User-created forks and clones, sessions with unknown origin (including external sessions), and children whose parent is unavailable stay visible. Collapsing agent subsessions never hides user-created or unknown-origin descendants. Independent sessions created with `spawn_session` remain visible.
+
 Receiving a completed result marks it read; checking status alone does not. Read results remain available for deliberate retrieval but are not automatically delivered again.
 
 The parent can continue independent work or join its tracked children with `yield_to_subsessions`, called alone and last at a join point:

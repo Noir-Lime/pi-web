@@ -277,6 +277,7 @@ export function parseSessionInfo(value: unknown): SessionInfo {
   const name = optionalString(record, "name");
   const metadata = record["metadata"] === undefined ? undefined : parseSessionUiMetadata(record["metadata"]);
   const persisted = parseOptionalBoolean(record["persisted"], "persisted");
+  const agentSubsession = parseOptionalBoolean(record["agentSubsession"], "agentSubsession");
   const parentSessionPath = optionalString(record, "parentSessionPath");
   const archivedAt = optionalString(record, "archivedAt");
   return {
@@ -284,6 +285,7 @@ export function parseSessionInfo(value: unknown): SessionInfo {
     path: requireString(record, "path"),
     cwd: requireString(record, "cwd"),
     ...(persisted === undefined ? {} : { persisted }),
+    ...(agentSubsession === true ? { agentSubsession: true } : {}),
     ...(name === undefined ? {} : { name }),
     ...(metadata === undefined ? {} : { metadata }),
     created: requireString(record, "created"),

@@ -54,12 +54,17 @@ describe("PiSessionService", () => {
     }
 
     it("records the parent, delivers the prompt, and lists the tracked child", async () => {
-      const { child, service } = subsessionService({ allowed: true, cwd: "/workspace" });
+      const { child, service, events } = subsessionService({ allowed: true, cwd: "/workspace" });
       await service.start("/workspace"); // bring the parent online so it can be notified
 
       const result = await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "do the slice" });
 
       expect(result).toEqual({ sessionId: "child-1", cwd: "/workspace" });
+      const created = events.globalEvents.filter((event) => event.type === "session.created");
+      expect(created).toHaveLength(2);
+      expect(created[0]?.session).not.toHaveProperty("agentSubsession");
+      expect(created[1]?.session).toMatchObject({ id: "child-1", agentSubsession: true });
+      expect((await service.list("/workspace")).find((session) => session.id === "child-1")?.agentSubsession).toBe(true);
       expect(child.calls.prompt).toEqual([{ text: "do the slice", options: undefined }]);
       await expect(service.listSubsessions("parent-1")).resolves.toEqual([
         { sessionId: "child-1", cwd: "/workspace", status: "idle" },

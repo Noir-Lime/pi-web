@@ -611,6 +611,8 @@ export interface SessionNotificationSummaryEvent {
 
 export interface SessionInfo extends SessionRef {
   path: string;
+  /** Only true for positively verified tracked agent subsessions; absent otherwise. */
+  agentSubsession?: boolean;
   /** True when the server has verified a backing session file exists; false when known transient. */
   persisted?: boolean;
   /** Explicitly public, namespaced session data; never arbitrary Pi custom entries. */

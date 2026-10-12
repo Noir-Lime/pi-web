@@ -88,6 +88,7 @@ import type { SessionRouteRef, SessionRouteService } from "./sessionService.js";
 
 import { type AuthChange } from "./authService.js";
 import { canonicalizeStoredCwd, cwdPathsEqual } from "../workingDirectory.js";
+import { parsePersistedChildSubsessionLink, parsePersistedParentSubsessionLink, type PersistedChildSubsessionLink, type PersistedParentSubsessionLink } from "./subsessionProvenance.js";
 import { readSessionHeaderSummary } from "./sessionFileHeader.js";
 import type { WorkspaceActivityService } from "../activity/workspaceActivityService.js";
 import { createAskUserToolDefinition } from "./askUserTool.js";
@@ -271,18 +272,6 @@ interface TrackedSubsessionLink {
   cwd?: string;
 }
 
-interface PersistedParentSubsessionLink {
-  spawnedBySessionId: string;
-  spawnedSessionId: string;
-  spawnedSessionFile?: string;
-  cwd?: string;
-}
-
-interface PersistedChildSubsessionLink {
-  spawnedBySessionId: string;
-  spawnedSessionId: string;
-}
-
 type SessionCreationProvenance = "tracked-subsession" | "host-one-shot";
 
 interface StartSessionOptions {
@@ -306,6 +295,7 @@ interface StartSessionOptions {
 
 interface InternalStartSessionOptions extends StartSessionOptions {
   creationProvenance?: SessionCreationProvenance;
+  deferAnnouncement?: boolean;
 }
 
 function requirePromptText(value: unknown): string {
@@ -343,6 +333,7 @@ export interface PiSessionListEntry {
   messageCount: number;
   firstMessage: string;
   allMessagesText: string;
+  agentSubsession?: boolean;
   metadata?: SessionUiMetadata;
   name?: string;
   parentSessionPath?: string;
@@ -1517,8 +1508,18 @@ export class PiSessionService implements SessionRouteService {
     // Enumerate already-hosted runtimes only; listing must not open cold sessions.
     for (const active of new Set(this.active.values())) {
       const session = active.runtime.session;
-      if (!cwdPathsEqual(session.sessionManager.getCwd(), cwd) || archivedById.has(session.sessionId) || unarchivedById.has(session.sessionId)) continue;
-      unarchivedById.set(session.sessionId, clientSessionFromActiveSession(session));
+      if (!cwdPathsEqual(session.sessionManager.getCwd(), cwd) || archivedById.has(session.sessionId)) continue;
+      const listed = unarchivedById.get(session.sessionId);
+      const tracked = this.subsessionLinkForActiveChild(session) !== undefined;
+      if (listed !== undefined) {
+        // Match the file too: a clone with the same id must not inherit a
+        // live runtime's classification. Disk rows otherwise use the scanner.
+        if (tracked && session.sessionFile !== undefined && sessionPathsEqual(listed.path, session.sessionFile)) listed.agentSubsession = true;
+        continue;
+      }
+      const info = clientSessionFromActiveSession(session);
+      if (tracked) info.agentSubsession = true;
+      unarchivedById.set(session.sessionId, info);
     }
     const unarchivedSessions = [...unarchivedById.values()].sort((a, b) => Date.parse(b.modified) - Date.parse(a.modified));
     const reconcilableSessionIds = this.reconcilableSessionIds(cwd, unarchivedSessions.map((session) => session.id), archivedById);
@@ -1608,19 +1609,23 @@ export class PiSessionService implements SessionRouteService {
         ...(options.creationProvenance === undefined ? {} : { creationProvenance: options.creationProvenance }),
       },
     );
-    return this.announceCreatedSession(active, cwd, options.parentSession);
+    return options.deferAnnouncement === true
+      ? clientSessionFromActiveSession(active.runtime.session)
+      : this.announceCreatedSession(active, cwd, options.parentSession);
   }
 
   private announceCreatedSession(
     active: ActiveSession<PiSessionRuntime>,
     cwd: string,
     parentSession?: string,
+    agentSubsession?: boolean,
   ): ClientSession {
     const { session } = active.runtime;
     const created: ClientSession = {
       ...clientSessionFromActiveSession(session),
       cwd,
       ...(parentSession === undefined ? {} : { parentSessionPath: parentSession }),
+      ...(agentSubsession === true ? { agentSubsession: true } : {}),
     };
     // Broadcast so other clients (and the spawning agent's UI) can add the new
     // session to their list without a manual reload.
@@ -1688,6 +1693,7 @@ export class PiSessionService implements SessionRouteService {
       ...(model === undefined ? {} : { initialModel: model }),
       ...(input.thinkingLevel === undefined ? {} : { initialThinkingLevel: input.thinkingLevel }),
       creationProvenance: "tracked-subsession",
+      deferAnnouncement: true,
     });
     const modelUsed = this.active.get(created.id)?.runtime.session.model;
     const parentSessionFile = nonEmptyString(input.parentSessionFile);
@@ -1701,6 +1707,12 @@ export class PiSessionService implements SessionRouteService {
     await this.registerVerifiedSubsession(link);
     this.persistSubsessionLink(link);
     this.persistSubsessionChildMarker(input.parentSessionId, created.id);
+    const active = this.active.get(created.id);
+    if (active === undefined) throw new Error("Tracked subsession disappeared during creation");
+    // Freshly created children are known by this exact runtime/file link even
+    // before Pi flushes its buffered custom entries. Reopened sessions only
+    // enter this registry after reciprocal persisted provenance validation.
+    this.announceCreatedSession(active, decision.cwd, input.parentSessionFile, this.subsessionLinkForActiveChild(active.runtime.session) !== undefined);
     await this.prompt(created, input.prompt);
     this.logger.info(
       { parentSessionId: input.parentSessionId, sessionId: created.id, cwd: decision.cwd, promptLength: input.prompt.length },
@@ -4983,6 +4995,7 @@ function clientSessionFromListEntry(session: PiSessionListEntry): ClientSession 
     path: session.path,
     cwd: session.cwd,
     persisted: true,
+    ...(session.agentSubsession === true ? { agentSubsession: true } : {}),
     ...(session.metadata === undefined ? {} : { metadata: requireSessionUiMetadata(session.metadata) }),
     ...(session.name === undefined ? {} : { name: session.name }),
     created: session.created.toISOString(),
@@ -5230,33 +5243,6 @@ function persistedChildSubsessionLinkData(parentSessionId: string, childSessionI
     spawnedBySessionId: parentSessionId,
     spawnedSessionId: childSessionId,
   };
-}
-
-function parsePersistedParentSubsessionLink(entry: unknown): PersistedParentSubsessionLink | undefined {
-  if (!isRecord(entry) || entry["type"] !== "custom" || entry["customType"] !== SUBSESSION_LINK_CUSTOM_TYPE) return undefined;
-  const data = entry["data"];
-  if (!isRecord(data)) return undefined;
-  const spawnedBySessionId = getString(data, "spawnedBySessionId");
-  const spawnedSessionId = getString(data, "spawnedSessionId");
-  if (spawnedBySessionId === undefined || spawnedBySessionId === "" || spawnedSessionId === undefined || spawnedSessionId === "") return undefined;
-  const spawnedSessionFile = getString(data, "spawnedSessionFile");
-  const cwd = getString(data, "cwd");
-  return {
-    spawnedBySessionId,
-    spawnedSessionId,
-    ...(spawnedSessionFile === undefined || spawnedSessionFile === "" ? {} : { spawnedSessionFile }),
-    ...(cwd === undefined || cwd === "" ? {} : { cwd }),
-  };
-}
-
-function parsePersistedChildSubsessionLink(entry: unknown): PersistedChildSubsessionLink | undefined {
-  if (!isRecord(entry) || entry["type"] !== "custom" || entry["customType"] !== SUBSESSION_CHILD_LINK_CUSTOM_TYPE) return undefined;
-  const data = entry["data"];
-  if (!isRecord(data)) return undefined;
-  const spawnedBySessionId = getString(data, "spawnedBySessionId");
-  const spawnedSessionId = getString(data, "spawnedSessionId");
-  if (spawnedBySessionId === undefined || spawnedBySessionId === "" || spawnedSessionId === undefined || spawnedSessionId === "") return undefined;
-  return { spawnedBySessionId, spawnedSessionId };
 }
 
 function nonEmptyString(value: string | undefined): string | undefined {

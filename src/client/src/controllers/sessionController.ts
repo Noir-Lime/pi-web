@@ -1117,6 +1117,7 @@ export class SessionController {
       await this.api.detachParent(session, machineId);
       const detached = { ...session };
       delete detached.parentSessionPath;
+      delete detached.agentSubsession;
       this.replaceSession(detached);
     } catch (error) {
       this.reportSessionError(session, machineId, error, errorOwner);

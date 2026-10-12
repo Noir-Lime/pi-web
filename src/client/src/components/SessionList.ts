@@ -74,6 +74,18 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
   @state() private archivedExpanded = false;
   @state() private selectionScopes: ReadonlySet<SessionSelectionScope> = new Set();
   @state() private selectedSessionIds: ReadonlySet<string> = new Set();
+  @state() private expandedAgentParents: ReadonlySet<string> = new Set();
+
+  private visibleTreeCache?: {
+    tree: NonNullable<SessionList["treeCache"]>;
+    expanded: ReadonlySet<string>;
+    currentAgentOffsets: ReadonlyMap<string, number>;
+    archivedAgentOffsets: ReadonlyMap<string, number>;
+    currentRows: SessionRow[];
+    currentSelectableSessions: SessionInfo[];
+    archivedRows: SessionRow[];
+    archivedSessions: SessionInfo[];
+  };
 
   // Sessions are replaced on refresh; transient UI state must not rebuild the tree.
   private treeCache?: {
@@ -82,6 +94,8 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     currentSelectableSessions: SessionInfo[];
     archivedRows: SessionRow[];
     archivedSessions: SessionInfo[];
+    currentAgentGroups: AgentSessionGroups;
+    archivedAgentGroups: AgentSessionGroups;
     descendantCounts?: Map<string, number>;
   };
 
@@ -98,9 +112,52 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
         currentSelectableSessions: currentRows.map((row) => row.session).filter((session) => sessionSelectionScope(session) === "current"),
         archivedRows,
         archivedSessions: archivedRows.map((row) => row.session),
+        currentAgentGroups: agentSessionGroups(currentRows),
+        archivedAgentGroups: agentSessionGroups(archivedRows),
       };
     }
     return this.treeCache;
+  }
+
+  private visibleSessionTree() {
+    const tree = this.sessionTree();
+    if (this.visibleTreeCache?.tree !== tree || this.visibleTreeCache.expanded !== this.expandedAgentParents) {
+      const currentRows = visibleAgentSessionRows(tree.currentRows, this.expandedAgentParents, tree.currentAgentGroups);
+      const archivedRows = visibleAgentSessionRows(tree.archivedRows, this.expandedAgentParents, tree.archivedAgentGroups);
+      this.visibleTreeCache = {
+        tree, expanded: this.expandedAgentParents, currentRows, archivedRows,
+        currentAgentOffsets: agentChildOffsets(currentRows, tree.currentAgentGroups),
+        archivedAgentOffsets: agentChildOffsets(archivedRows, tree.archivedAgentGroups),
+        currentSelectableSessions: currentRows.map((row) => row.session).filter((session) => sessionSelectionScope(session) === "current"),
+        archivedSessions: archivedRows.map((row) => row.session),
+      };
+    }
+    return this.visibleTreeCache;
+  }
+
+  private revealSelectedAgentRow(): boolean {
+    if (this.selected === undefined) return false;
+    const tree = this.sessionTree();
+    const groups = tree.currentRows.some((row) => row.session.id === this.selected?.id) ? tree.currentAgentGroups : tree.archivedAgentGroups;
+    const expanded = new Set(this.expandedAgentParents);
+    const seen = new Set<string>();
+    let id: string | undefined = this.selected.id;
+    while (id !== undefined && !seen.has(id)) {
+      seen.add(id);
+      id = groups.parentByAgentId.get(id);
+      if (id !== undefined) expanded.add(id);
+    }
+    if (expanded.size === this.expandedAgentParents.size) return false;
+    this.expandedAgentParents = expanded;
+    return true;
+  }
+
+  private toggleAgentParent(parentId: string): void {
+    const expanded = new Set(this.expandedAgentParents);
+    if (expanded.has(parentId)) expanded.delete(parentId);
+    else expanded.add(parentId);
+    this.expandedAgentParents = expanded;
+    this.openMenuSessionId = undefined;
   }
 
   private readonly onDocumentClick = (event: MouseEvent) => {
@@ -126,12 +183,16 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     }
     if (changed.has("collapsed") && this.collapsed) this.openMenuSessionId = undefined;
     const previousSelected = changed.get("selected");
+    const selectionNavigated = changed.has("selected") && (previousSelected?.id !== this.selected?.id || (previousSelected?.archived === true && this.selected?.archived !== true));
+    const agentRevealed = selectionNavigated && this.revealSelectedAgentRow();
     if (changed.has("selected") && this.selected?.archived === true && (previousSelected?.id !== this.selected.id || previousSelected.archived !== true) && !this.archivedExpanded) {
       this.archivedExpanded = true;
       void this.updateComplete.then(() => { this.scrollSelectedIntoView(); });
       return;
     }
-    if (this.shouldRevealSelectedRow(changed)) this.scrollSelectedIntoView();
+    if (agentRevealed) {
+      void this.updateComplete.then(() => { this.scrollSelectedIntoView(); });
+    } else if (this.shouldRevealSelectedRow(changed)) this.scrollSelectedIntoView();
   }
 
   /**
@@ -158,24 +219,24 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
 
   override render() {
     const tree = this.sessionTree();
-    const { currentRows, currentSelectableSessions, archivedRows, archivedSessions } = tree;
+    const { currentRows, currentSelectableSessions, archivedRows, archivedSessions, currentAgentOffsets, archivedAgentOffsets } = this.visibleSessionTree();
     // The collapsed heading still needs tree counts, but never descendant actions.
     if (!this.collapsed) tree.descendantCounts ??= unarchivedDescendantCounts(this.sessions);
     const descendantCounts = tree.descendantCounts;
-    const unreadCount = unreadSessionCount(currentSelectableSessions, this.unreadSessionIds);
+    const unreadCount = unreadSessionCount(tree.currentSelectableSessions, this.unreadSessionIds);
     return html`
       <section>
-        ${this.renderHeading(currentRows.length + archivedRows.length, currentSelectableSessions, unreadCount)}
+        ${this.renderHeading(tree.currentRows.length + tree.archivedRows.length, currentSelectableSessions, unreadCount)}
         ${this.collapsed ? null : html`
           <div class="list-body">
             ${this.renderCurrentSelectionToolbar(currentSelectableSessions)}
             ${this.startingCount > 0 ? this.renderStartingSession() : null}
-            ${repeat(currentRows, (row) => row.session.id, (row) => this.renderSession(row, descendantCounts?.get(row.session.id) ?? 0, "current"))}
-            ${archivedRows.length > 0 ? html`
-              ${this.renderArchivedHeading(archivedSessions)}
+            ${repeat(currentRows, (row) => row.session.id, (row) => this.renderSession(row, descendantCounts?.get(row.session.id) ?? 0, "current", tree.currentAgentGroups.countByParentId.get(row.session.id) ?? 0, currentAgentOffsets.get(row.session.id) ?? 0))}
+            ${tree.archivedRows.length > 0 ? html`
+              ${this.renderArchivedHeading(archivedSessions, tree.archivedRows.length)}
               ${this.archivedExpanded ? html`
                 ${this.renderArchivedSelectionToolbar(archivedSessions)}
-                ${repeat(archivedRows, (row) => row.session.id, (row) => this.renderSession(row, descendantCounts?.get(row.session.id) ?? 0, "archived"))}
+                ${repeat(archivedRows, (row) => row.session.id, (row) => this.renderSession(row, descendantCounts?.get(row.session.id) ?? 0, "archived", tree.archivedAgentGroups.countByParentId.get(row.session.id) ?? 0, archivedAgentOffsets.get(row.session.id) ?? 0))}
               ` : null}
             ` : null}
           </div>
@@ -243,13 +304,13 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     `;
   }
 
-  private renderArchivedHeading(archivedSessions: SessionInfo[]) {
+  private renderArchivedHeading(archivedSessions: SessionInfo[], sessionCount: number) {
     const active = this.selectionScopes.has("archived");
     return html`
       <h2 class="subheading">
         <button class="section-toggle" aria-expanded=${String(this.archivedExpanded)} @click=${() => { this.toggleArchived(); }}><span>${this.archivedExpanded ? "▾" : "▸"} Archived</span></button>
         ${this.archivedExpanded ? html`<button class="bulk-select-entry ${active ? "selected" : ""}" title=${active ? "Close archived session selection" : "Select archived sessions"} aria-label=${active ? "Close archived session selection" : "Select archived sessions"} aria-expanded=${String(active)} aria-pressed=${String(active)} @click=${() => { this.toggleSelection("archived", archivedSessions); }}>☑</button>` : null}
-        <small class="section-count">${archivedSessions.length}</small>
+        <small class="section-count">${sessionCount}</small>
       </h2>
     `;
   }
@@ -304,8 +365,9 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
       : html`<button @click=${() => { this.clearSelection(scope); }}>Clear selected (${selectedCount})</button>`;
   }
 
-  private renderSession(row: SessionRow, descendantCount: number, scope: SessionSelectionScope) {
+  private renderSession(row: SessionRow, descendantCount: number, scope: SessionSelectionScope, agentChildCount: number, agentOffset: number) {
     const { session } = row;
+    const linkedAgentChild = agentOffset > 0;
     const cappedDepth = Math.min(row.depth, 2);
     const canBulkSelect = sessionSelectionScope(session) === scope;
     const selectionActive = this.selectionScopes.has(scope);
@@ -320,8 +382,8 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     const labelItems = this.sessionLabelItems(session);
     return html`
       <div
-        class="action-row ${this.selected?.id === session.id ? "selected" : ""} ${bulkSelected ? "bulk-selected" : ""} ${session.archived === true ? "archived" : ""} ${selectionActive ? "selecting" : ""} ${unread ? "unread" : ""}"
-        style=${`--depth:${String(cappedDepth)}`}
+        class="action-row ${this.selected?.id === session.id ? "selected" : ""} ${bulkSelected ? "bulk-selected" : ""} ${session.archived === true ? "archived" : ""} ${selectionActive ? "selecting" : ""} ${unread ? "unread" : ""} ${agentChildCount > 0 ? "has-agent-subsessions" : ""} ${linkedAgentChild ? "linked-agent-child" : ""}"
+        style=${`--depth:${String(cappedDepth)};--agent-offset:${String(agentOffset)}px`}
         tabindex="0"
         title=${session.path}
         @click=${(event: MouseEvent) => { activateSelectableRow(event, () => { this.activateSessionRow(session, scope); }); }}
@@ -357,6 +419,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
           ` : null}
         </div>
       </div>
+      ${agentChildCount > 0 ? html`<button class="agent-subsession-toggle" style=${`--agent-offset:${String(agentOffset)}px`} aria-expanded=${String(this.expandedAgentParents.has(session.id))} @click=${() => { this.toggleAgentParent(session.id); }}>${this.expandedAgentParents.has(session.id) ? "▾" : "▸"} Agent subsessions (${agentChildCount})</button>` : null}
     `;
   }
 
@@ -552,8 +615,66 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     .pending-session-row.starting-session .action-name { display: flex; align-items: center; gap: 6px; max-height: none; -webkit-line-clamp: 1; }
     .pending-session-row.starting-session .activity-indicator { flex: 0 0 auto; margin: 0; }
     .action-main.selecting { padding-left: calc(32px + var(--depth, 0) * 16px); }
+    .action-row.has-agent-subsessions { margin-bottom: 0; }
+    .action-row.has-agent-subsessions .action-main,
+    .action-row.has-agent-subsessions .action-menu-toggle { position: relative; z-index: 1; }
+    .agent-subsession-toggle { position: relative; z-index: 0; display: block; box-sizing: border-box; width: calc(100% - 24px - 2 * var(--agent-offset, 0px)); margin: -1px calc(12px + var(--agent-offset, 0px)) 8px; padding: 4px 8px; border-radius: 0 0 8px 8px; font-size: 12px; text-align: center; color: var(--pi-muted); }
+    .agent-subsession-toggle[aria-expanded="true"] { margin-bottom: 0; color: var(--pi-accent); border-color: var(--pi-accent-border); }
+    .action-row.linked-agent-child { margin-inline: var(--agent-offset); }
+    .agent-subsession-toggle:hover, .agent-subsession-toggle:focus-visible { color: var(--pi-text); background: var(--pi-surface-hover); }
+    .agent-subsession-toggle:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 2px; }
     .session-checkbox { position: absolute; top: 9px; left: calc(8px + var(--depth, 0) * 16px); z-index: 2; margin: 0; }
   `];
+}
+
+/** Match the parent's chip inset on both sides, including nested groups. */
+export function agentChildOffsets(rows: readonly SessionRow[], groups: AgentSessionGroups): ReadonlyMap<string, number> {
+  const offsets = new Map<string, number>();
+  for (const { session } of rows) {
+    const parent = groups.parentByAgentId.get(session.id);
+    if (parent !== undefined) offsets.set(session.id, (offsets.get(parent) ?? 0) + 12);
+  }
+  return offsets;
+}
+
+export interface AgentSessionGroups {
+  parentByAgentId: ReadonlyMap<string, string>;
+  countByParentId: ReadonlyMap<string, number>;
+}
+
+/** Only verified direct children with a parent in this section may be hidden. */
+export function agentSessionGroups(rows: readonly SessionRow[]): AgentSessionGroups {
+  const byPath = sessionsByNormalizedPath(rows.map((row) => row.session));
+  const parentByAgentId = new Map<string, string>();
+  const countByParentId = new Map<string, number>();
+  for (const { session } of rows) {
+    if (session.agentSubsession !== true || session.parentSessionPath === undefined) continue;
+    const parent = byPath.get(normalizeSessionPath(session.parentSessionPath));
+    if (parent === undefined || parent.id === session.id) continue;
+    parentByAgentId.set(session.id, parent.id);
+    countByParentId.set(parent.id, (countByParentId.get(parent.id) ?? 0) + 1);
+  }
+  return { parentByAgentId, countByParentId };
+}
+
+/**
+ * Trees are in parent-first order. Hidden agent ancestors hide agent children,
+ * but never user/unknown children: those remain reachable, with their own toggle.
+ * Orphans have no group and remain visible rather than losing their reveal control.
+ */
+export function visibleAgentSessionRows(
+  rows: readonly SessionRow[],
+  expandedParents: ReadonlySet<string>,
+  groups: AgentSessionGroups = agentSessionGroups(rows),
+): SessionRow[] {
+  const hidden = new Set<string>();
+  return rows.filter((row) => {
+    const parentId = groups.parentByAgentId.get(row.session.id);
+    if (parentId === undefined) return true;
+    if (!hidden.has(parentId) && expandedParents.has(parentId)) return true;
+    hidden.add(row.session.id);
+    return false;
+  });
 }
 
 export function unreadSessionCount(
@@ -675,6 +796,12 @@ function sessionRows(sessions: SessionInfo[]): SessionRow[] {
     const children = childrenByPath.get(parentKey) ?? [];
     children.push(session);
     childrenByPath.set(parentKey, children);
+  }
+
+  // Keep the chip's agent children together before user/unknown siblings,
+  // preserving the listing order within each group and among root sessions.
+  for (const children of childrenByPath.values()) {
+    children.sort((a, b) => Number(b.agentSubsession === true) - Number(a.agentSubsession === true));
   }
 
   const rows: SessionRow[] = [];
