@@ -42,6 +42,9 @@ describe("composer send behavior", () => {
     editor.canSteer = streaming;
     editor.isCompacting = compacting;
     await editor.updateComplete;
+    const highlighted = editor.renderRoot.querySelectorAll(".default-send-action");
+    expect(highlighted).toHaveLength(1);
+    expect(highlighted[0]?.getAttribute("aria-label")).toBe(expected === "steer" ? "Steer current response" : streaming || compacting ? "Queue message" : "Send message");
     press(editor, "Enter", { ctrlKey: true });
     if (editor.onSend === undefined) throw new Error("Missing send callback");
     expect(vi.mocked(editor.onSend).mock.calls[0]?.[1]).toBe(expected);
@@ -66,6 +69,10 @@ describe("composer send behavior", () => {
     expect(editor.onSend).toHaveBeenCalledOnce();
     if (editor.onSend === undefined) throw new Error("Missing send callback");
     expect(vi.mocked(editor.onSend).mock.calls[0]?.[1]).toBe("steer");
+    editor.defaultStreamingBehavior = preference === "steer" ? "followUp" : "steer";
+    await editor.updateComplete;
+    expect(editor.renderRoot.querySelector(".default-send-action")?.getAttribute("aria-label")).toBe(preference === "steer" ? "Queue message" : "Steer current response");
+    expect([...editor.renderRoot.querySelectorAll<HTMLButtonElement>(".actions button")].map((button) => button.getAttribute("aria-label"))).toEqual(["Queue message", "Steer current response", "Stop current work"]);
   });
 });
 
