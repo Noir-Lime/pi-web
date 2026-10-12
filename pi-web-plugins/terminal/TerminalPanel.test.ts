@@ -526,6 +526,88 @@ describe("Terminal panel lifecycle", () => {
     panel.disconnectedCallback();
   });
 
+  it.each(["route", "memory"] as const)("bounds missing %s selection reloads in the real Lit lifecycle", async (source) => {
+    const panel = createTerminalPanel();
+    const memory = new InMemoryTerminalSelectionMemory();
+    const runtime = new TerminalBrowserRuntime(memory);
+    let listings = 0;
+    const request = vi.fn((operation: string): Promise<JsonValue> => {
+      if (operation !== "terminal.list") return Promise.resolve([]);
+      listings += 1;
+      // Cap the broken render loop without relying on wall-clock timing.
+      if (listings > 6) return new Promise(() => undefined);
+      return Promise.resolve([terminalInfo("terminal-live")]);
+    });
+    const context = terminalContext({
+      peer: terminalPeer(request),
+      navigation: { ...terminalNavigation(source === "route" ? "terminal-gone" : undefined), set: vi.fn(() => false) },
+    });
+    if (source === "memory") memory.rememberTerminal(runtime.selectionScope(context), "terminal-gone");
+    panel.context = context;
+    panel.runtime = runtime;
+    Reflect.set(panel, "visible", true);
+    document.body.append(panel);
+    try {
+      // Let completed requests and their resulting Lit updates settle, without
+      // manually invoking lifecycle methods or asking the host to rerender.
+      for (let turn = 0; turn < 100; turn += 1) await Promise.resolve();
+      expect(listings).toBeLessThanOrEqual(2);
+      expect(listings).toBeGreaterThanOrEqual(1);
+    } finally {
+      panel.remove();
+      runtime.dispose();
+    }
+  });
+
+  it("backs off failed requested-terminal reloads and reconciles a fresh context", async () => {
+    vi.useFakeTimers();
+    const panel = createTerminalPanel();
+    const runtime = new TerminalBrowserRuntime(new InMemoryTerminalSelectionMemory());
+    let listings = 0;
+    let offline = true;
+    const request = vi.fn((operation: string): Promise<JsonValue> => {
+      if (operation !== "terminal.list") return Promise.resolve([]);
+      listings += 1;
+      if (listings > 1 && offline) return Promise.reject(new Error("offline"));
+      return Promise.resolve([terminalInfo("terminal-live")]);
+    });
+    const context = terminalContext({
+      peer: terminalPeer(request),
+      navigation: { ...terminalNavigation("terminal-gone"), set: vi.fn(() => false) },
+    });
+    panel.context = context;
+    panel.runtime = runtime;
+    Reflect.set(panel, "visible", true);
+    document.body.append(panel);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(listings).toBe(2);
+      for (const [delay, expected] of [[1_000, 3], [2_000, 4], [5_000, 5]] as const) {
+        await vi.advanceTimersByTimeAsync(delay - 1);
+        expect(listings).toBe(expected - 1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(listings).toBe(expected);
+      }
+      offline = false;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(listings).toBe(6);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(listings).toBe(6);
+
+      panel.context = terminalContext({
+        peer: terminalPeer(request),
+        navigation: terminalNavigation("terminal-gone"),
+      });
+      await panel.updateComplete;
+      await panel.updateComplete;
+      expect(Reflect.get(panel, "selectedId")).toBe("terminal-live");
+      expect(listings).toBe(6);
+    } finally {
+      panel.remove();
+      runtime.dispose();
+    }
+  });
+
   it("reloads a missing requested terminal once instead of on every update", async () => {
     vi.useFakeTimers();
     const panel = createTerminalPanel();
