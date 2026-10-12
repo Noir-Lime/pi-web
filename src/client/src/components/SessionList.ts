@@ -35,6 +35,10 @@ export interface SessionRow {
 }
 
 type SessionSelectionScope = "current" | "archived";
+interface AgentAttention {
+  kind: ActivityIndicatorKind | undefined;
+  unread: boolean;
+}
 
 @customElement("session-list")
 export class SessionList extends LitElement implements KeyboardNavigableSection {
@@ -135,6 +139,25 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     return this.visibleTreeCache;
   }
 
+  private agentGroupAttention(rows: readonly SessionRow[], groups: AgentSessionGroups): ReadonlyMap<string, AgentAttention> {
+    const attention = new Map<string, AgentAttention>();
+    // Parent-first tree order lets nested agent activity roll up in one reverse pass.
+    // User/unknown children are always visible and do not contribute to these chips.
+    for (const { session } of [...rows].reverse()) {
+      const parentId = groups.parentByAgentId.get(session.id);
+      if (parentId === undefined) continue;
+      const nested = attention.get(session.id);
+      const parent = attention.get(parentId);
+      const ownKind = sessionRowActivityKind(session, this.statuses[session.id], this.activities[session.id], this.sending[session.id] === true);
+      const kinds = [ownKind, nested?.kind, parent?.kind];
+      attention.set(parentId, {
+        kind: kinds.includes("sending") ? "sending" : kinds.includes("session") ? "session" : undefined,
+        unread: sessionRowUnread(session, this.unreadSessionIds) || nested?.unread === true || parent?.unread === true,
+      });
+    }
+    return attention;
+  }
+
   private revealSelectedAgentRow(): boolean {
     if (this.selected === undefined) return false;
     const tree = this.sessionTree();
@@ -224,6 +247,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     if (!this.collapsed) tree.descendantCounts ??= unarchivedDescendantCounts(this.sessions);
     const descendantCounts = tree.descendantCounts;
     const unreadCount = unreadSessionCount(tree.currentSelectableSessions, this.unreadSessionIds);
+    const agentAttention = this.collapsed ? undefined : this.agentGroupAttention(tree.currentRows, tree.currentAgentGroups);
     return html`
       <section>
         ${this.renderHeading(tree.currentRows.length + tree.archivedRows.length, currentSelectableSessions, unreadCount)}
@@ -231,7 +255,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
           <div class="list-body">
             ${this.renderCurrentSelectionToolbar(currentSelectableSessions)}
             ${this.startingCount > 0 ? this.renderStartingSession() : null}
-            ${repeat(currentRows, (row) => row.session.id, (row) => this.renderSession(row, descendantCounts?.get(row.session.id) ?? 0, "current", tree.currentAgentGroups.countByParentId.get(row.session.id) ?? 0, currentAgentOffsets.get(row.session.id) ?? 0))}
+            ${repeat(currentRows, (row) => row.session.id, (row) => this.renderSession(row, descendantCounts?.get(row.session.id) ?? 0, "current", tree.currentAgentGroups.countByParentId.get(row.session.id) ?? 0, currentAgentOffsets.get(row.session.id) ?? 0, agentAttention?.get(row.session.id)))}
             ${tree.archivedRows.length > 0 ? html`
               ${this.renderArchivedHeading(archivedSessions, tree.archivedRows.length)}
               ${this.archivedExpanded ? html`
@@ -365,7 +389,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
       : html`<button @click=${() => { this.clearSelection(scope); }}>Clear selected (${selectedCount})</button>`;
   }
 
-  private renderSession(row: SessionRow, descendantCount: number, scope: SessionSelectionScope, agentChildCount: number, agentOffset: number) {
+  private renderSession(row: SessionRow, descendantCount: number, scope: SessionSelectionScope, agentChildCount: number, agentOffset: number, agentAttention?: AgentAttention) {
     const { session } = row;
     const linkedAgentChild = agentOffset > 0;
     const cappedDepth = Math.min(row.depth, 2);
@@ -419,7 +443,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
           ` : null}
         </div>
       </div>
-      ${agentChildCount > 0 ? html`<button class="agent-subsession-toggle" style=${`--agent-offset:${String(agentOffset)}px`} aria-expanded=${String(this.expandedAgentParents.has(session.id))} @click=${() => { this.toggleAgentParent(session.id); }}>${this.expandedAgentParents.has(session.id) ? "▾" : "▸"} Agent subsessions (${agentChildCount})</button>` : null}
+      ${agentChildCount > 0 ? html`<button class="agent-subsession-toggle" style=${`--agent-offset:${String(agentOffset)}px`} aria-expanded=${String(this.expandedAgentParents.has(session.id))} @click=${() => { this.toggleAgentParent(session.id); }}>${this.expandedAgentParents.has(session.id) ? "▾" : "▸"} Agent subsessions (${agentChildCount})${!this.expandedAgentParents.has(session.id) && agentAttention !== undefined ? renderActionActivityIndicator(agentAttention.kind, agentAttention.kind === "sending" ? "Sending subsession message" : "Agent subsessions active", agentAttention.unread ? "Unread subsession activity" : undefined) : null}</button>` : null}
     `;
   }
 
@@ -619,6 +643,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     .action-row.has-agent-subsessions .action-main,
     .action-row.has-agent-subsessions .action-menu-toggle { position: relative; z-index: 1; }
     .agent-subsession-toggle { position: relative; z-index: 0; display: block; box-sizing: border-box; width: calc(100% - 24px - 2 * var(--agent-offset, 0px)); margin: -1px calc(12px + var(--agent-offset, 0px)) 8px; padding: 4px 8px; border-radius: 0 0 8px 8px; font-size: 12px; text-align: center; color: var(--pi-muted); }
+    .agent-subsession-toggle .action-activity { position: static; display: inline-grid; margin-left: 6px; vertical-align: middle; }
     .agent-subsession-toggle[aria-expanded="true"] { margin-bottom: 0; color: var(--pi-accent); border-color: var(--pi-accent-border); }
     .action-row.linked-agent-child { margin-inline: var(--agent-offset); }
     .agent-subsession-toggle:hover, .agent-subsession-toggle:focus-visible { color: var(--pi-text); background: var(--pi-surface-hover); }

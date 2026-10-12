@@ -126,6 +126,52 @@ describe("conservative agent child projection", () => {
 });
 
 describe("SessionList agent subsession controls", () => {
+  it("updates collapsed chips for nested activity, sending, and unread completions", async () => {
+    const parent = session("parent");
+    const agent = child("agent", parent, true);
+    const nested = child("nested", agent, true);
+    const list = await mount([parent, agent, nested]);
+    const toggle = agentToggle(list, "parent");
+    expect(toggle.querySelector(".action-activity")).toBeNull();
+
+    list.activities = { nested: { sessionId: nested.id, phase: "active", label: "Working", at: "now" } };
+    await settle(list);
+    expect(toggle.querySelector('[aria-label="Agent subsessions active"]')).not.toBeNull();
+    expect(row(list, "nested")).toBeNull();
+    list.sending = { agent: true };
+    list.unreadSessionIds = new Set([nested.id]);
+    await settle(list);
+    expect(toggle.querySelector('.unread-ring[aria-label="Unread subsession activity · Sending subsession message"]')).not.toBeNull();
+
+    toggle.click();
+    await settle(list);
+    expect(toggle.querySelector(".action-activity")).toBeNull();
+    expect(agentToggle(list, "agent").querySelector(".activity-indicator.session")).not.toBeNull();
+    toggle.click();
+    list.activities = {};
+    list.sending = {};
+    await settle(list);
+    expect(toggle.querySelector('.activity-indicator.unread[aria-label="Unread subsession activity"]')).not.toBeNull();
+    list.unreadSessionIds = new Set();
+    await settle(list);
+    expect(toggle.querySelector(".action-activity")).toBeNull();
+  });
+
+  it("does not roll parent, visible user-child, unrelated, or archived activity into a chip", async () => {
+    const parent = session("parent");
+    const agent = child("agent", parent, true);
+    const user = child("user", agent, false);
+    const userAgent = child("user-agent", user, true);
+    const archived = { ...child("archived", parent, true), archived: true };
+    const other = session("other");
+    const list = await mount([parent, agent, user, userAgent, archived, other]);
+    list.sending = { parent: true, user: true, "user-agent": true, archived: true, other: true };
+    list.unreadSessionIds = new Set([parent.id, user.id, userAgent.id, archived.id, other.id]);
+    await settle(list);
+    expect(agentToggle(list, "parent").querySelector(".action-activity")).toBeNull();
+    expect(agentToggle(list, "user").querySelector(".activity-indicator.sending")).not.toBeNull();
+  });
+
   it("places expanded agent children immediately below the chip before user children", async () => {
     const parent = session("parent");
     const user = child("user", parent);
