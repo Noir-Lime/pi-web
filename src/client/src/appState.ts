@@ -34,6 +34,10 @@ export interface AppState {
   selectedWorkspace: Workspace | undefined;
   selectedSession: SessionInfo | undefined;
   status: SessionStatus | undefined;
+  /** In-flight history operations; each entry belongs to one request. */
+  pendingTreeActions: readonly { machineId: string; sessionId: string }[];
+  /** Browser-local applied/dismissed suggestion text, keyed by machine/session. */
+  suppressedSuggestedInputs: Record<string, string>;
   activity: SessionActivity | undefined;
   /**
    * The selected session's open `ask_user` question set, derived from the
@@ -146,6 +150,8 @@ export function initialAppState(): AppState {
     selectedWorkspace: undefined,
     selectedSession: undefined,
     status: undefined,
+    pendingTreeActions: [],
+    suppressedSuggestedInputs: {},
     activity: undefined,
     pendingAsk: undefined,
     pendingDialogs: [],

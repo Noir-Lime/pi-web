@@ -4,6 +4,8 @@ import { html, render, type TemplateResult } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionInfo, SessionStatus } from "../api";
 import { initialAppState, type AppState } from "../appState";
+import { machineSessionKey } from "../machineKeys";
+import { loadDraft, saveDraft } from "../promptDraftStorage";
 import { SessionController } from "../controllers/sessionController";
 import { ChatView } from "./ChatView";
 import { PiWebApp } from "./PiWebApp";
@@ -68,13 +70,65 @@ describe("ChatView suggested input", () => {
     expect(view.shadowRoot?.querySelector(".suggested-input")).toBeNull();
   });
 
-  it("wires PiWebApp's rendered button to the current-session controller and omits it for archived sessions", async () => {
+  it("hides pending or already applied input, but keeps a different suggestion available", async () => {
+    const view = new ChatView();
+    view.sessionId = session.id;
+    view.status = status("restored prompt");
+    view.onUseSuggestedInput = vi.fn();
+    view.suggestedInputPending = true;
+    document.body.append(view);
+    await view.updateComplete;
+    expect(view.shadowRoot?.querySelector(".suggested-input")).toBeNull();
+    view.suggestedInputPending = false;
+    view.suppressedSuggestedInput = "restored prompt";
+    await view.updateComplete;
+    expect(view.shadowRoot?.querySelector(".suggested-input")).toBeNull();
+    view.status = status("different suggestion");
+    await view.updateComplete;
+    expect(view.shadowRoot?.querySelector(".suggested-input-text")?.textContent).toBe("different suggestion");
+    expect(view.onUseSuggestedInput).not.toHaveBeenCalled();
+  });
+
+  it("dismisses the card through a real click without changing the draft, and shows a later suggestion", async () => {
+    const key = machineSessionKey("local", session.id);
+    saveDraft(key, "unsent draft");
+    let state: AppState = { ...initialAppState(), selectedSession: session, status: status("suggestion") };
+    const view = new ChatView();
+    const replacePromptEditorText = vi.fn();
+    const controller = new SessionController(() => state, (patch) => {
+      state = { ...state, ...patch };
+      view.status = state.status ?? status();
+      view.suppressedSuggestedInput = state.suppressedSuggestedInputs[key];
+    }, () => undefined, undefined, { replacePromptEditorText });
+    view.sessionId = session.id;
+    view.status = state.status ?? status();
+    view.onUseSuggestedInput = vi.fn();
+    view.onDismissSuggestedInput = (machineId, sessionId, text) => { controller.dismissSuggestedInput(machineId, sessionId, text); };
+    document.body.append(view);
+    await view.updateComplete;
+    dismissButton(view).click();
+    await view.updateComplete;
+    expect(view.shadowRoot?.querySelector(".suggested-input")).toBeNull();
+    controller.applySessionStatus(status("suggestion"));
+    await view.updateComplete;
+    expect(view.shadowRoot?.querySelector(".suggested-input")).toBeNull();
+    controller.applySessionStatus(status("new suggestion"));
+    await view.updateComplete;
+    expect(view.shadowRoot?.querySelector(".suggested-input-text")?.textContent).toBe("new suggestion");
+    expect(loadDraft(key)).toBe("unsent draft");
+    expect(replacePromptEditorText).not.toHaveBeenCalled();
+    expect(view.onUseSuggestedInput).not.toHaveBeenCalled();
+    controller.dispose();
+  });
+
+  it("wires PiWebApp's rendered buttons to the current-session controller and omits them for archived sessions", async () => {
     // Render just the app's chat seam: mounting the entire shell would start
     // unrelated network/controller lifecycles. Interaction still uses real DOM.
     const app = new PiWebApp();
     const controller: unknown = Reflect.get(app, "sessions");
     if (!(controller instanceof SessionController)) throw new Error("Expected app session controller");
     const use = vi.spyOn(controller, "useSuggestedInput").mockResolvedValue(undefined);
+    const dismiss = vi.spyOn(controller, "dismissSuggestedInput").mockImplementation(() => undefined);
     const renderChat: unknown = Reflect.get(app, "renderChatView");
     if (!isRenderChat(renderChat)) throw new Error("Expected chat render seam");
     let state: AppState = { ...initialAppState(), selectedSession: session, status: status("suggestion") };
@@ -85,8 +139,25 @@ describe("ChatView suggested input", () => {
     if (view === null) throw new Error("Expected rendered chat view");
     await view.updateComplete;
     expect(use).not.toHaveBeenCalled();
+    expect(dismiss).not.toHaveBeenCalled();
     useButton(view).click();
     expect(use).toHaveBeenCalledExactlyOnceWith("local", session.id);
+    dismissButton(view).click();
+    expect(dismiss).toHaveBeenCalledExactlyOnceWith("local", session.id, "suggestion");
+    state = { ...state, pendingTreeActions: [{ machineId: "remote", sessionId: session.id }] };
+    render(renderChat.call(app, state, session), container);
+    await view.updateComplete;
+    expect(view.shadowRoot?.querySelector(".suggested-input")).not.toBeNull();
+    state = { ...state, pendingTreeActions: [{ machineId: "local", sessionId: session.id }] };
+    render(renderChat.call(app, state, session), container);
+    await view.updateComplete;
+    expect(view.shadowRoot?.querySelector(".suggested-input")).toBeNull();
+    state = { ...state, pendingTreeActions: [], suppressedSuggestedInputs: {
+      [machineSessionKey("local", session.id)]: "suggestion",
+    } };
+    render(renderChat.call(app, state, session), container);
+    await view.updateComplete;
+    expect(view.shadowRoot?.querySelector(".suggested-input")).toBeNull();
     const archived = { ...session, archived: true };
     state = { ...state, selectedSession: archived };
     render(renderChat.call(app, state, archived), container);
@@ -98,9 +169,15 @@ describe("ChatView suggested input", () => {
 });
 
 function useButton(view: ChatView): HTMLButtonElement {
-  const button = view.shadowRoot?.querySelector<HTMLButtonElement>(".suggested-input button");
+  const button = view.shadowRoot?.querySelector<HTMLButtonElement>(".suggested-input-use");
   if (button === undefined || button === null) throw new Error("Expected Use suggested input button");
   expect(button.textContent).toBe("Use suggested input");
+  return button;
+}
+
+function dismissButton(view: ChatView): HTMLButtonElement {
+  const button = view.shadowRoot?.querySelector<HTMLButtonElement>('[aria-label="Dismiss suggested input"]');
+  if (button === undefined || button === null) throw new Error("Expected Dismiss suggested input button");
   return button;
 }
 

@@ -426,9 +426,12 @@ export const chatStyles = css`
   .queued-kind { color: var(--pi-muted); font-size: 12px; text-transform: uppercase; }
   .queued-dialogs { margin: -8px 0 14px; padding: 0 4px; color: var(--pi-muted); font-size: 12px; text-align: center; }
   .suggested-input { display: grid; gap: 8px; margin: 0 0 14px; padding: 12px; border: 1px solid var(--pi-border); border-radius: 10px; background: var(--pi-surface); }
+  .suggested-input-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .suggested-input-text { max-height: 12em; overflow: auto; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
   .suggested-input small { color: var(--pi-muted); }
   .suggested-input button { justify-self: start; padding: 6px 10px; border: 1px solid var(--pi-accent-border); border-radius: 6px; background: var(--pi-selection-bg); color: var(--pi-text); font: inherit; cursor: pointer; }
+  .suggested-input button.suggested-input-dismiss { flex-shrink: 0; width: 28px; height: 28px; padding: 0; border-color: var(--pi-border); background: transparent; color: var(--pi-muted); font-size: 18px; }
+  .suggested-input button.suggested-input-dismiss:hover { color: var(--pi-text-bright); border-color: var(--pi-accent); }
   .suggested-input button:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 2px; }
   .session-activity { max-width: 100%; min-width: 0; box-sizing: border-box; display: grid; gap: 4px; margin: 0 0 14px; padding: 12px; border: 1px solid var(--pi-border); border-radius: 10px; background: var(--pi-surface); color: var(--pi-text); overflow: hidden; }
   .session-activity.compacting { border-color: var(--pi-purple-border); background: var(--pi-purple-surface); }

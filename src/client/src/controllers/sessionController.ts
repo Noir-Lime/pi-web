@@ -149,7 +149,6 @@ export class SessionController {
   // A pending join still owns its URL-derived token. Once it settles while
   // current, its loaded state/socket can outlive changes to the URL spelling.
   private selectedSessionJoinNavigation: NavigationFreshness | undefined;
-  private readonly pendingTreeActions = new Set<{ machineId: string; sessionId: string }>();
   private disposed = false;
   // Join-time stream watermark for the selected session. `seq` is the
   // `SessionEventHub` sequence captured together with the seeded partial by the
@@ -207,6 +206,7 @@ export class SessionController {
 
   dispose() {
     this.disposed = true;
+    if (this.getState().pendingTreeActions.length > 0) this.setState({ pendingTreeActions: [] });
     this.selectionSeq += 1;
     this.selectedSessionJoinNavigation = undefined;
     this.socket.close();
@@ -651,7 +651,7 @@ export class SessionController {
     const machineId = selectedMachineId(state);
     const errorOwner = this.captureSessionErrorOwner(session);
     const pending = { machineId, sessionId: session.id };
-    this.pendingTreeActions.add(pending);
+    this.setTreeActionPending(pending, true);
     try {
       const result = await this.api.navigateTree(session, { targetId, expectedLeafId: tree.activeLeafId, summary,
         ...(retainCheckpoint === undefined ? {} : { retainCheckpoint }),
@@ -662,7 +662,7 @@ export class SessionController {
       this.reportSessionError(session, machineId, error, errorOwner);
       throw error;
     } finally {
-      this.pendingTreeActions.delete(pending);
+      this.setTreeActionPending(pending, false);
     }
   }
 
@@ -679,19 +679,24 @@ export class SessionController {
     // identity and requires a fresh authoritative branch read.
     if (!this.isSelectedSessionIdentity(session.id, machineId)) return;
     this.clearPendingUpdates();
-    let authoritativeRefreshFailure: { error: unknown } | undefined;
-    try {
-      // Keep the subscription and selection identity during same-session reads.
-      await this.requestSelectedSessionRefresh({
+    // The response already owns the editor text. Restore it without waiting for
+    // transcript/inbox reads, and still refresh history if editor replacement fails.
+    const editorReplacement = (async () => {
+      await this.replacePromptEditorText?.({ machineId, sessionId: session.id, text: editorText });
+      if (this.isSelectedSessionIdentity(session.id, machineId)) {
+        this.suppressSuggestedInput({ machineId, sessionId: session.id }, editorText);
+      }
+    })();
+    // Keep the subscription and selection identity during same-session reads.
+    const [replacement, refresh] = await Promise.allSettled([
+      editorReplacement,
+      this.requestSelectedSessionRefresh({
         session, machineId, selectionSeq: this.selectionSeq, errorOwner: this.captureSessionErrorOwner(session),
-      });
-    } catch (error) {
-      authoritativeRefreshFailure = { error };
-    }
+      }),
+    ]);
     if (!this.isSelectedSessionIdentity(session.id, machineId)) return;
-
-    await this.replacePromptEditorText?.({ machineId, sessionId: session.id, text: editorText });
-    if (authoritativeRefreshFailure !== undefined) throw authoritativeRefreshFailure.error;
+    if (replacement.status === "rejected") throw replacement.reason;
+    if (refresh.status === "rejected") throw refresh.reason;
     if (this.isSelectedSessionIdentity(session.id, machineId) && this.getState().treeDialog === tree) this.setState({ treeDialog: undefined });
   }
 
@@ -710,7 +715,7 @@ export class SessionController {
     const errorOwner = this.captureSessionErrorOwner(session);
     const expected = this.navigationSelection();
     const pending = { machineId, sessionId: session.id };
-    this.pendingTreeActions.add(pending);
+    this.setTreeActionPending(pending, true);
     try {
       const result = await this.api.forkTree(session, { entryId, expectedLeafId: tree.activeLeafId,
         ...(retainCheckpoint === undefined ? {} : { retainCheckpoint }),
@@ -721,7 +726,7 @@ export class SessionController {
       this.reportSessionError(session, machineId, error, errorOwner);
       throw error;
     } finally {
-      this.pendingTreeActions.delete(pending);
+      this.setTreeActionPending(pending, false);
     }
   }
 
@@ -737,7 +742,10 @@ export class SessionController {
       return;
     }
     // The draft belongs to the forked session file; the original keeps its own.
-    if (result.promptDraft !== undefined) saveDraft(machineSessionKey(machineId, forked.id), result.promptDraft);
+    if (result.promptDraft !== undefined) {
+      saveDraft(machineSessionKey(machineId, forked.id), result.promptDraft);
+      this.suppressSuggestedInput({ machineId, sessionId: forked.id }, result.promptDraft);
+    }
     // The daemon replaced the runtime behind the original session identity with
     // the fork while the request was in flight, so any cached projection of the
     // original transcript is suspect; drop it so a later reselection reads the
@@ -790,9 +798,18 @@ export class SessionController {
     saveDraft(machineSessionKey(machineId, sessionId), text);
     try {
       await this.replacePromptEditorText?.({ machineId, sessionId, text });
+      if (this.isSelectedSessionIdentity(sessionId, machineId)) this.suppressSuggestedInput({ machineId, sessionId }, text);
     } catch (error) {
       this.reportSessionError(session, machineId, error, errorOwner);
     }
+  }
+
+  dismissSuggestedInput(machineId: string, sessionId: string, text: string): void {
+    if (!this.isSelectedSessionIdentity(sessionId, machineId)) return;
+    const status = this.getState().status;
+    // A click on an older rendered card must not dismiss a newer suggestion.
+    if (status?.sessionId !== sessionId || status.suggestedInput !== text) return;
+    this.suppressSuggestedInput({ machineId, sessionId }, text);
   }
 
   private invalidateSessionTree(): void {
@@ -812,8 +829,20 @@ export class SessionController {
     }
   }
 
+  private suppressSuggestedInput(target: PromptChipTarget, text: string): void {
+    if (this.disposed) return;
+    const key = machineSessionKey(target.machineId, target.sessionId);
+    this.setState({ suppressedSuggestedInputs: { ...this.getState().suppressedSuggestedInputs, [key]: text } });
+  }
+
+  private setTreeActionPending(target: PromptChipTarget, pending: boolean): void {
+    if (this.disposed) return;
+    const actions = this.getState().pendingTreeActions;
+    this.setState({ pendingTreeActions: pending ? [...actions, target] : actions.filter((action) => action !== target) });
+  }
+
   private hasPendingTreeAction(machineId: string, sessionId: string): boolean {
-    return [...this.pendingTreeActions].some((pending) => pending.machineId === machineId && pending.sessionId === sessionId);
+    return this.getState().pendingTreeActions.some((pending) => pending.machineId === machineId && pending.sessionId === sessionId);
   }
 
   async archiveSession(session = this.getState().selectedSession) {
@@ -2048,7 +2077,15 @@ export class SessionController {
     const state = this.getState();
     const isSelected = state.selectedSession?.id === status.sessionId;
     const clearsStaleActivity = state.sessionActivities[status.sessionId]?.phase === "active" && !isSessionActive(status);
+    const key = machineSessionKey(selectedMachineId(state), status.sessionId);
+    const suppressedText = state.suppressedSuggestedInputs[key];
+    // Retain suppression across delayed status delivery. Retire it when another
+    // suggestion arrives, or an observed applied/dismissed suggestion is cleared.
+    const retiresSuppressedInput = suppressedText !== undefined && !this.hasPendingTreeAction(selectedMachineId(state), status.sessionId)
+      && status.suggestedInput !== suppressedText
+      && (status.suggestedInput !== undefined || state.sessionStatuses[status.sessionId]?.suggestedInput === suppressedText);
     this.setState({
+      ...(retiresSuppressedInput ? { suppressedSuggestedInputs: omitKey(state.suppressedSuggestedInputs, key) } : {}),
       sessionStatuses: { ...state.sessionStatuses, [status.sessionId]: status },
       ...sessionMessageCountPatch(state, status.sessionId, status.messageCount),
       ...(clearsStaleActivity ? { sessionActivities: omitSessionActivity(state.sessionActivities, status.sessionId) } : {}),

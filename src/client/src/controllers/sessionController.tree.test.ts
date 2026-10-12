@@ -4,7 +4,7 @@ import { ChatTranscriptStore } from "../chatTranscriptStore";
 import { machineSessionKey } from "../machineKeys";
 import { loadDraft, saveDraft } from "../promptDraftStorage";
 import { SessionTreeForkUnavailableError, type CommandResult, type SessionTreeSnapshot } from "../api";
-import { SessionController } from "./sessionController";
+import { SessionController, type SessionControllerDependencies } from "./sessionController";
 import { InMemorySessionSelectionMemory } from "./sessionSelection";
 import {
   defaultApi,
@@ -187,7 +187,8 @@ describe("SessionController session tree navigation", () => {
       sessions: [oldSession],
       treeDialog: tree,
     };
-    const replacePromptEditorText = vi.fn();
+    const editorReplacement = deferred<undefined>();
+    const replacePromptEditorText = vi.fn<NonNullable<SessionControllerDependencies["replacePromptEditorText"]>>(() => editorReplacement.promise);
     const transcriptSnapshot = vi.fn<typeof defaultApi.transcriptSnapshot>(() => transcriptSnapshotFixture(authoritativePage.promise, status(oldSession.id)));
     const api: typeof defaultApi = {
       ...defaultApi,
@@ -206,9 +207,12 @@ describe("SessionController session tree navigation", () => {
     const navigation = controller.navigateTree("root", { mode: "none" });
     await vi.waitFor(() => { expect(transcriptSnapshot).toHaveBeenCalledOnce(); });
     expect(state.treeDialog).toBe(tree);
-    expect(replacePromptEditorText).not.toHaveBeenCalled();
+    expect(replacePromptEditorText).toHaveBeenCalledWith({ machineId: "local", sessionId: oldSession.id, text: "edit after refresh" });
 
     authoritativePage.resolve(page("authoritative branch", 1));
+    await vi.waitFor(() => { expect(state.messages[0]?.parts).toEqual([{ type: "text", text: "authoritative branch" }]); });
+    expect(state.treeDialog).toBe(tree);
+    editorReplacement.resolve(undefined);
     await navigation;
 
     expect(replacePromptEditorText).toHaveBeenCalledWith({ machineId: "local", sessionId: oldSession.id, text: "edit after refresh" });

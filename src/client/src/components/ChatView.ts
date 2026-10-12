@@ -218,7 +218,10 @@ export class ChatView extends LitElement {
   @property({ type: Number }) pendingMessageCount = 0;
   @property({ attribute: false }) clientQueuedMessages: QueuedSessionMessage[] = [];
   @property({ attribute: false }) status?: SessionStatus;
+  @property({ type: Boolean }) suggestedInputPending = false;
+  @property({ attribute: false }) suppressedSuggestedInput: string | undefined;
   @property({ attribute: false }) onUseSuggestedInput: ((machineId: string, sessionId: string) => void) | undefined;
+  @property({ attribute: false }) onDismissSuggestedInput: ((machineId: string, sessionId: string, text: string) => void) | undefined;
   @property({ attribute: false }) activity?: SessionActivity;
   @property({ attribute: false }) pendingAsk?: PendingAskUser;
   @property({ attribute: false }) askDraftSessionId = "";
@@ -760,13 +763,20 @@ export class ChatView extends LitElement {
 
   private renderSuggestedInput() {
     const text = this.status?.sessionId === this.sessionId ? this.status.suggestedInput : undefined;
-    if (text === undefined || this.onUseSuggestedInput === undefined) return null;
+    if (text === undefined || this.onUseSuggestedInput === undefined
+      || this.suggestedInputPending || this.suppressedSuggestedInput === text) return null;
     return html`
       <aside class="suggested-input">
-        <strong>Suggested input</strong>
+        <div class="suggested-input-header">
+          <strong>Suggested input</strong>
+          ${this.onDismissSuggestedInput === undefined ? null : html`
+            <button type="button" class="suggested-input-dismiss" aria-label="Dismiss suggested input" title="Dismiss suggested input in this browser"
+              @click=${() => { this.onDismissSuggestedInput?.(this.machineId, this.sessionId, text); }}>×</button>
+          `}
+        </div>
         <p class="suggested-input-text" dir="auto">${text === "" ? "Empty input" : text}</p>
         <small>Replaces your current draft. Nothing is sent.</small>
-        <button type="button" @click=${() => { this.onUseSuggestedInput?.(this.machineId, this.sessionId); }}>Use suggested input</button>
+        <button type="button" class="suggested-input-use" @click=${() => { this.onUseSuggestedInput?.(this.machineId, this.sessionId); }}>Use suggested input</button>
       </aside>
     `;
   }

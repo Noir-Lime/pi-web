@@ -76,10 +76,8 @@ async function settle(view: ChatView) {
 }
 
 describe("plugin-defined transcript message actions", () => {
-  it.each([
-    ["Clone session from this message", "fork", "Are you sure you want to fork this session?"],
-    ["Go back to this message", "goBack", "Are you sure you want to go back to this message?"],
-  ] as const)("preserves core confirmation for %s through the public callback", async (label, action, copy) => {
+  it("preserves core confirmation for cloning through the public callback", async () => {
+    const label = "Clone session from this message";
     const { view, context } = await mount();
     expect(buttons(view).map((button) => button.getAttribute("aria-label"))).toEqual([
       "Clone session from this message", "Go back to this message", "Copy user message",
@@ -88,13 +86,23 @@ describe("plugin-defined transcript message actions", () => {
     vi.stubGlobal("confirm", confirm);
     button(view, label).click();
     await settle(view);
-    expect(confirm).toHaveBeenCalledWith(copy);
-    expect(context.history[action]).not.toHaveBeenCalled();
+    expect(confirm).toHaveBeenCalledWith("Are you sure you want to fork this session?");
+    expect(context.history.fork).not.toHaveBeenCalled();
     await vi.waitFor(() => { expect(button(view, label).disabled).toBe(false); });
     confirm.mockReturnValue(true);
     button(view, label).click();
     await settle(view);
-    await vi.waitFor(() => { expect(context.history[action]).toHaveBeenCalledOnce(); });
+    await vi.waitFor(() => { expect(context.history.fork).toHaveBeenCalledOnce(); });
+  });
+
+  it("delegates go-back to the browser helper without a blanket confirmation", async () => {
+    const { view, context } = await mount();
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal("confirm", confirm);
+    button(view, "Go back to this message").click();
+    await settle(view);
+    expect(context.history.goBack).toHaveBeenCalledOnce();
+    expect(confirm).not.toHaveBeenCalled();
   });
 
   it("runs arbitrary plugin workflows without a host confirmation and filters availability per message", async () => {
