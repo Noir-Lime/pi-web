@@ -3508,6 +3508,53 @@ describe("PiWebApp plugin host", () => {
     expect(Reflect.get(app, "workspaceDeletionPollTimer")).toBeUndefined();
   });
 
+  it.each(["new run with empty response", "updated run with stale response", "newer run for same target"] as const)(
+    "retains workspace deletion progress during polling: %s",
+    async (scenario) => {
+      const targetWorkspaceId = "workspace-target";
+      const queuedRun: TerminalCommandRun = {
+        id: "deletion-run",
+        origin: "core",
+        projectId: project.id,
+        workspaceId: workspace.id,
+        terminalId: "deletion-terminal",
+        title: "Remove target",
+        command: "remove-target",
+        status: "queued",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        metadata: { "pi.operation": "workspace.delete", "target.workspaceId": targetWorkspaceId },
+      };
+      const runningRun: TerminalCommandRun = {
+        ...queuedRun,
+        status: "running",
+        ...(scenario === "newer run for same target"
+          ? { id: "newer-deletion-run", createdAt: "2026-01-01T00:01:00.000Z" }
+          : {}),
+      };
+      const app = createApp();
+      setAppState(app, {
+        ...initialAppState(),
+        selectedProject: project,
+        selectedWorkspace: workspace,
+        workspaces: [workspace],
+        workspaceDeletionRuns: scenario === "new run with empty response" ? {} : { [targetWorkspaceId]: queuedRun },
+      });
+      await markPluginLoadingReady(app);
+      const queryResult = deferredValue<TerminalCommandRun[]>();
+      const listCommandRuns = vi.fn<RequiredTerminalBrowserFacadeV1["listCommandRuns"]>(() => queryResult.promise);
+      replaceTestTerminalFacade(app, { ...testTerminalFacade(), listCommandRuns });
+
+      const refreshing = callAsyncAppMethod(app, "refreshWorkspaceDeletionRuns");
+      expect(listCommandRuns).toHaveBeenCalledOnce();
+      expect(callAppMethod(app, "recordWorkspaceDeletionRun", runningRun, "local")).toBe(true);
+      queryResult.resolve(scenario === "new run with empty response" ? [] : [queuedRun]);
+      await refreshing;
+
+      expect(appState(app).workspaceDeletionRuns).toEqual({ [targetWorkspaceId]: runningRun });
+      expect(Reflect.get(app, "workspaceDeletionPollTimer")).toBeDefined();
+    },
+  );
+
   it("aborts an old project deletion refresh and lets the new scope refresh immediately", async () => {
     const otherProject: Project = { id: "project-2", name: "Other", path: "/other", createdAt: "now" };
     const otherWorkspace: Workspace = { ...workspace, id: "workspace-2", projectId: otherProject.id, path: "/other", label: "other" };

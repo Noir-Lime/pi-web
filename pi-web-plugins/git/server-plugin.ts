@@ -11,15 +11,24 @@ import type {
   WorkspaceRemovePlan,
 } from "@jmfederico/pi-web/server-plugin-api";
 import { requestGitBackend } from "./git-backend.js";
+import { createWorkspaceDiscoveryHooks } from "./workspaceDiscoveryHooks.js";
 
 const GIT_LOCAL_ENV_VARS = Object.freeze([
   "GIT_ALTERNATE_OBJECT_DIRECTORIES",
   "GIT_COMMON_DIR",
+  "GIT_CONFIG",
+  "GIT_CONFIG_COUNT",
+  "GIT_CONFIG_PARAMETERS",
   "GIT_DIR",
+  "GIT_GRAFT_FILE",
+  "GIT_IMPLICIT_WORK_TREE",
   "GIT_INDEX_FILE",
+  "GIT_NO_REPLACE_OBJECTS",
   "GIT_OBJECT_DIRECTORY",
   "GIT_PREFIX",
   "GIT_QUARANTINE_PATH",
+  "GIT_REPLACE_REF_BASE",
+  "GIT_SHALLOW_FILE",
   "GIT_WORK_TREE",
 ]);
 
@@ -47,6 +56,7 @@ export default plugin;
 export function createGitWorkspaceProvider(context: ServerPluginActivationContext): WorkspaceProvider {
   return Object.freeze({
     fallback: true,
+    integration: createWorkspaceDiscoveryHooks(context, (cwd, args, signal) => runGit(context, cwd, args, signal)),
     async probe(project: ProjectInput, signal: AbortSignal): Promise<ProviderClaim> {
       const result = await runGit(context, project.path, ["rev-parse", "--is-inside-work-tree"], signal);
       if (result.signal !== null) throw new Error(`git repository probe ended from signal ${result.signal}`);
@@ -195,6 +205,7 @@ async function runGit(
     file: "git",
     args: ["-C", cwd, ...args],
     unsetEnv: GIT_LOCAL_ENV_VARS,
+    timeoutMs: 10_000,
     signal,
   });
   if (result.stdoutTruncated || result.stderrTruncated) {

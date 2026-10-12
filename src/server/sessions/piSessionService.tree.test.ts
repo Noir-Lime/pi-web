@@ -62,7 +62,7 @@ function treeHarness(
 
 describe("PiSessionService session-tree behavior", () => {
   it.each(["moved", "summarized", "unchanged", "cancelled", "failed"] as const)(
-    "handles pending questions when tree navigation is %s",
+    "does not create question events or cancellation records when tree navigation is %s",
     async (scenario) => {
       let leafId = "leaf-1";
       const navigateTree = vi.fn<NavigateTree>(() => {
@@ -73,34 +73,26 @@ describe("PiSessionService session-tree behavior", () => {
           ...(scenario === "summarized" ? { summaryEntry: { id: "target-1" } } : {}),
         });
       });
-      const { service, fake, hub } = treeHarness({ getLeafId: () => leafId }, { navigateTree });
+      const questionEntry = {
+        id: "leaf-1", type: "message", message: {
+          role: "toolResult", toolName: "ask_user", isError: false, details: { ask: {
+            askId: "ask-1", askedAt: "2026-01-01T00:00:00.000Z", questions: [{ id: "choice", question: "Which option?", options: [] }],
+          } },
+        },
+      };
+      const { service, fake, hub } = treeHarness({
+        getLeafId: () => leafId, getBranch: () => leafId === "leaf-1" ? [questionEntry] : [],
+      }, { navigateTree });
       try {
         await service.status(sessionRef(SESSION_ID));
-        const { ask } = await service.openAsk({
-          sessionId: SESSION_ID,
-          questions: [{ id: "choice", question: "Which option?", options: [] }],
-        });
         const navigation = service.navigateTree(sessionRef(SESSION_ID), navigationRequest(
           { mode: scenario === "summarized" ? "default" : "none" },
         ));
         if (scenario === "failed") await expect(navigation).rejects.toThrow("navigation failed");
         else await expect(navigation).resolves.toEqual({ cancelled: scenario === "cancelled" });
 
-        const moved = scenario === "moved" || scenario === "summarized";
-        const status = await service.status(sessionRef(SESSION_ID));
-        const closedEvents = hub.sessionEvents.filter(({ event }) => event.type === "ask.closed");
-        if (moved) {
-          expect(status).not.toHaveProperty("pendingAsk");
-          expect(closedEvents).toEqual([{
-            sessionId: SESSION_ID,
-            event: { type: "ask.closed", askId: ask.askId, reason: "cancelled" },
-          }]);
-          await expect(service.submitAsk(sessionRef(SESSION_ID), ask.askId, { answers: [] }))
-            .resolves.toMatchObject({ result: "stale" });
-        } else {
-          expect(status.pendingAsk).toEqual(ask);
-          expect(closedEvents).toEqual([]);
-        }
+        expect(await service.status(sessionRef(SESSION_ID))).not.toHaveProperty("pendingAsk");
+        expect(hub.sessionEvents.filter(({ event }) => event.type.startsWith("ask."))).toEqual([]);
         expect(fake.calls.sendCustomMessage).toEqual([]);
         expect(fake.calls.prompt).toEqual([]);
       } finally {

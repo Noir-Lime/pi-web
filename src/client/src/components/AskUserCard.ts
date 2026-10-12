@@ -7,7 +7,7 @@ import {
   type AskUserQuestion,
   type AskUserQuestionRecord,
   type AskUserSubmission,
-  type PendingAskUser,
+  type AskUserRequest,
 } from "../../../shared/apiTypes";
 import {
   answeredCount,
@@ -30,18 +30,20 @@ interface DisplayedRecordAnswer {
 /**
  * One question set posted by `ask_user`.
  *
- * The live mode owns only browser-local draft state; the daemon remains the
- * source of truth for whether the ask is open. Record mode consumes the closed
- * daemon outcome and, for a superseded ask, can recover the unsent local draft
- * so text the user had entered is not silently hidden.
+ * The transcript projection owns availability. This component owns only local
+ * drafts; closed requests and response records never expose answer controls.
  */
 @customElement("ask-user-card")
 export class AskUserCard extends LitElement {
-  @property({ attribute: false }) ask?: PendingAskUser;
+  @property({ attribute: false }) ask?: AskUserRequest;
+  @property({ type: Boolean }) open = false;
+  @property({ attribute: false }) outcomes: readonly AskUserOutcome[] = [];
   @property({ attribute: false }) outcome?: AskUserOutcome;
+  /** A response alongside an original request need not repeat offered options. */
+  @property({ type: Boolean }) compact = false;
   /** Machine-scoped session cache key used by the ask draft store. */
   @property({ attribute: false }) draftSessionId = "";
-  @property({ attribute: false }) onSubmit?: AskUserSubmitCallback;
+  @property({ attribute: false }) onSubmit: AskUserSubmitCallback | undefined;
 
   @state() private answers: AskDraftAnswers = {};
   @state() private confirmingPartialSubmit = false;
@@ -60,11 +62,12 @@ export class AskUserCard extends LitElement {
 
   override render(): TemplateResult | null {
     if (this.outcome !== undefined) return this.renderRecord(this.outcome);
-    if (this.ask !== undefined) return this.renderOpenAsk(this.ask);
+    if (this.ask !== undefined) return this.open && this.onSubmit !== undefined
+      ? this.renderOpenAsk(this.ask) : this.renderClosedAsk(this.ask);
     return null;
   }
 
-  private renderOpenAsk(ask: PendingAskUser): TemplateResult {
+  private renderOpenAsk(ask: AskUserRequest): TemplateResult {
     const count = answeredCount(ask.questions, this.answers);
     const unanswered = unansweredQuestions(ask.questions, this.answers);
     return html`
@@ -80,6 +83,8 @@ export class AskUserCard extends LitElement {
             ${ask.questions.map((question, index) => this.renderQuestion(ask, question, index))}
           </div>
           <footer class="form-footer">
+            <button class="secondary-action skip-questions" type="button" ?disabled=${this.submitting}
+              @click=${() => { this.submitAnswers(ask, { answers: [] }); }}>Skip questions</button>
             ${this.confirmingPartialSubmit && unanswered.length > 0
               ? this.renderPartialSubmitConfirmation(ask, unanswered)
               : html`
@@ -93,7 +98,7 @@ export class AskUserCard extends LitElement {
     `;
   }
 
-  private renderQuestion(ask: PendingAskUser, question: AskUserQuestion, index: number): TemplateResult {
+  private renderQuestion(ask: AskUserRequest, question: AskUserQuestion, index: number): TemplateResult {
     const answer = this.answers[question.id];
     const answered = answeredCount([question], this.answers) === 1;
     const detailId = question.detail === undefined ? undefined : this.questionDetailId(index);
@@ -157,7 +162,7 @@ export class AskUserCard extends LitElement {
     `;
   }
 
-  private renderPartialSubmitConfirmation(ask: PendingAskUser, unanswered: AskUserQuestion[]): TemplateResult {
+  private renderPartialSubmitConfirmation(ask: AskUserRequest, unanswered: AskUserQuestion[]): TemplateResult {
     return html`
       <div class="partial-confirmation" role="group" aria-label="Confirm partial answers">
         <p>
@@ -178,16 +183,47 @@ export class AskUserCard extends LitElement {
     `;
   }
 
+  private renderClosedAsk(ask: AskUserRequest): TemplateResult {
+    return html`
+      <details class="card closed-card">
+        <summary class="card-header"><h2><span class="disclosure-indicator" aria-hidden="true">▸</span> Questions</h2><span class="header-status">Closed · ${ask.questions.length} questions</span></summary>
+        ${this.outcomes.map((outcome) => html`<p class="record-summary">${outcome.summary}</p>`)}
+        <div class="record-questions">
+          ${ask.questions.map((question, index) => html`
+            <section class="record-question" aria-labelledby=${this.recordQuestionHeadingId(index)}>
+              <h3 id=${this.recordQuestionHeadingId(index)}><span class="question-number">${String(index + 1)}.</span><span>${question.question}</span></h3>
+              ${question.detail === undefined ? null : html`<p class="question-detail">${question.detail}</p>`}
+              ${this.renderOfferedOptions(question)}
+              ${this.outcomes.length === 0
+                ? this.renderRecordedAnswer(undefined, { question, answered: false, values: [] })
+                : this.outcomes.map((outcome) => {
+                    const record = outcome.questions.find((item) => item.question.id === question.id);
+                    return record === undefined ? null : this.renderRecordedAnswer(outcome, record);
+                  })}
+            </section>
+          `)}
+        </div>
+      </details>
+    `;
+  }
+
+  private renderOfferedOptions(question: AskUserQuestion): TemplateResult {
+    return html`${question.multiple === true ? html`<p class="question-detail">Multiple choices allowed</p>` : null}<ul class="offered-options">
+      ${question.options.map((option) => html`<li><span>${option.label}</span>${option.detail === undefined ? null : html`<p class="option-detail">${option.detail}</p>`}</li>`)}
+      <li>${question.options.length === 0 ? "Custom answer" : "Custom"}</li>
+    </ul>`;
+  }
+
   private renderRecord(outcome: AskUserOutcome): TemplateResult {
     const recordLabel = outcome.reason === "submitted"
-      ? "Answers sent"
+      ? outcome.answeredCount === 0 ? "Questions skipped" : "Answers sent"
       : outcome.reason === "superseded"
         ? "Superseded"
         : "Cancelled";
     return html`
       <article class="card record-card" aria-labelledby="ask-user-record-heading">
         <header class="card-header">
-          <h2 id="ask-user-record-heading">Questions</h2>
+          <h2 id="ask-user-record-heading">${this.compact ? "Answers" : "Questions"}</h2>
           <span class=${`header-status ${outcome.reason}`}>${recordLabel}</span>
         </header>
         <p class="record-summary">
@@ -203,7 +239,6 @@ export class AskUserCard extends LitElement {
   }
 
   private renderQuestionRecord(outcome: AskUserOutcome, record: AskUserQuestionRecord, index: number): TemplateResult {
-    const answer = this.displayedRecordAnswer(outcome, record);
     return html`
       <section class="record-question" aria-labelledby=${this.recordQuestionHeadingId(index)}>
         <h3 id=${this.recordQuestionHeadingId(index)}>
@@ -211,6 +246,15 @@ export class AskUserCard extends LitElement {
           <span>${record.question.question}</span>
         </h3>
         ${record.question.detail === undefined ? null : html`<p class="question-detail">${record.question.detail}</p>`}
+        ${this.compact ? null : this.renderOfferedOptions(record.question)}
+        ${this.renderRecordedAnswer(outcome, record)}
+      </section>
+    `;
+  }
+
+  private renderRecordedAnswer(outcome: AskUserOutcome | undefined, record: AskUserQuestionRecord): TemplateResult {
+    const answer = this.displayedRecordAnswer(outcome, record);
+    return html`
         ${answer === undefined
           ? html`<p class="unanswered-record">Unanswered</p>`
           : html`
@@ -220,7 +264,6 @@ export class AskUserCard extends LitElement {
               </ul>
               ${answer.fromDraft ? html`<p class="draft-note">Draft answer · not sent</p>` : null}
             `}
-      </section>
     `;
   }
 
@@ -275,7 +318,7 @@ export class AskUserCard extends LitElement {
     if (this.ask !== undefined && this.draftSessionId !== "") saveAskDraft(this.draftSessionId, this.ask.askId, next);
   }
 
-  private handleSubmit(event: SubmitEvent, ask: PendingAskUser): void {
+  private handleSubmit(event: SubmitEvent, ask: AskUserRequest): void {
     event.preventDefault();
     if (this.submitting) return;
     if (unansweredQuestions(ask.questions, this.answers).length > 0) {
@@ -285,8 +328,8 @@ export class AskUserCard extends LitElement {
     this.submitAnswers(ask);
   }
 
-  private submitAnswers(ask: PendingAskUser): void {
-    if (this.submitting) return;
+  private submitAnswers(ask: AskUserRequest, submission = toSubmission(ask.questions, this.answers)): void {
+    if (this.submitting || !this.open) return;
     this.submitting = true;
     const callback = this.onSubmit;
     if (callback === undefined) {
@@ -295,7 +338,7 @@ export class AskUserCard extends LitElement {
     }
     const askId = ask.askId;
     void Promise.resolve()
-      .then(() => callback(askId, toSubmission(ask.questions, this.answers)))
+      .then(() => callback(askId, submission))
       .catch(() => {
         // The parent controller owns the visible transport error. Keeping this
         // card and its draft intact is the only recovery needed at this boundary.
@@ -311,7 +354,7 @@ export class AskUserCard extends LitElement {
     this.renderRoot.querySelector<HTMLElement>(".send-anyway")?.focus();
   }
 
-  private keepEditing(ask: PendingAskUser, unanswered: AskUserQuestion[]): void {
+  private keepEditing(ask: AskUserRequest, unanswered: AskUserQuestion[]): void {
     this.confirmingPartialSubmit = false;
     const first = unanswered[0];
     if (first !== undefined) this.focusQuestion(ask.questions.indexOf(first));
@@ -336,7 +379,7 @@ export class AskUserCard extends LitElement {
     return question.multiple === true || answer.values.length === 0;
   }
 
-  private displayedRecordAnswer(outcome: AskUserOutcome, record: AskUserQuestionRecord): DisplayedRecordAnswer | undefined {
+  private displayedRecordAnswer(outcome: AskUserOutcome | undefined, record: AskUserQuestionRecord): DisplayedRecordAnswer | undefined {
     if (record.answered) {
       return {
         values: [...record.values],
@@ -344,7 +387,7 @@ export class AskUserCard extends LitElement {
         fromDraft: false,
       };
     }
-    if (outcome.reason !== "superseded") return undefined;
+    if (outcome !== undefined && outcome.reason !== "superseded") return undefined;
     const answer = toSubmission([record.question], this.answers).answers[0];
     if (answer === undefined) return undefined;
     return {
@@ -360,7 +403,7 @@ export class AskUserCard extends LitElement {
 
   private currentModelIdentity(): string | undefined {
     if (this.outcome !== undefined) return `record:${this.draftSessionId}:${this.outcome.askId}`;
-    if (this.ask !== undefined) return `open:${this.draftSessionId}:${this.ask.askId}`;
+    if (this.ask !== undefined) return `request:${this.draftSessionId}:${this.ask.askId}`;
     return undefined;
   }
 
@@ -370,7 +413,7 @@ export class AskUserCard extends LitElement {
     return loadAskDraft(this.draftSessionId, askId);
   }
 
-  private questionGroupName(ask: PendingAskUser, question: AskUserQuestion): string {
+  private questionGroupName(ask: AskUserRequest, question: AskUserQuestion): string {
     return `ask-user:${ask.askId}:${question.id}`;
   }
 
@@ -536,6 +579,11 @@ export class AskUserCard extends LitElement {
       text-underline-offset: 2px;
     }
     .confirmation-actions { flex: 0 0 auto; display: flex; gap: 7px; }
+    .closed-card > summary { cursor: pointer; position: static; }
+    .disclosure-indicator { display: inline-block; }
+    .closed-card[open] .disclosure-indicator { transform: rotate(90deg); }
+    .offered-options { display: grid; gap: 5px; margin: 0 0 12px; padding-left: 22px; color: var(--pi-muted); }
+    .offered-options .option-detail { margin: 2px 0 0; }
     .record-summary { margin: 0; color: var(--pi-muted); padding: 12px 16px; font-size: 12px; }
     .record-questions { display: grid; }
     .record-question { min-width: 0; padding: 14px 16px; }

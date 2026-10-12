@@ -85,16 +85,13 @@ describe("ChatView native image modal", () => {
 });
 
 async function mountImageView(): Promise<ChatView> {
-  vi.stubGlobal("IntersectionObserver", undefined);
   const view = new ChatView();
   view.sessionId = "session-image";
   view.messages = [{ role: "user", parts: [{ type: "image", mimeType: "image/png", data: IMAGE_DATA }] }];
   document.body.append(view);
   await view.updateComplete;
   const transcript = requiredElement(view.renderRoot.querySelector<TranscriptImage>("pi-web-transcript-image"), "transcript image");
-  const presentation = await settleImage(transcript);
-  requiredElement(presentation.renderRoot.querySelector("img"), "native image").dispatchEvent(new Event("load"));
-  await presentation.updateComplete;
+  await settleImage(transcript);
   return view;
 }
 

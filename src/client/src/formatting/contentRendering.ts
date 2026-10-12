@@ -8,6 +8,7 @@ import type { ContentRendererChoice } from "../plugins/contentRenderers";
 import "../components/ContentRendererHost";
 import "../components/ContentRenderingBoundary";
 import { renderIntentMemory } from "./renderIntentMemory";
+import type { CodeBlockSourcePolicy } from "./codeBlockPolicy";
 
 export const contentRenderingCapabilityToken: PluginCapability<ContentRenderingCapability> = {
   pluginId: "pi-web", id: "content-rendering", version: 1,
@@ -43,7 +44,7 @@ export function isClosedFence(token: Tokens.Code): boolean {
 
 /** Host-only Chat seam; intent identity is never part of the plugin capability. */
 export interface ChatContentRendering {
-  renderMarkdown(request: ContentMarkdownRenderRequest, intentKey?: string): TemplateResult;
+  renderMarkdown(request: ContentMarkdownRenderRequest, intentKey?: string, sourcePolicy?: CodeBlockSourcePolicy): TemplateResult;
 }
 
 export function createContentRenderingCapability(select: SelectRenderer): ContentRenderingCapability {
@@ -55,11 +56,11 @@ export function createContentRenderingService(select: SelectRenderer): ChatConte
     if (request.truncated === true || request.text.length > MAX_CONTENT_RENDERER_LENGTH) return [];
     return select(request);
   };
-  const host = (text: string, choices: readonly ContentRendererChoice[], externalControls = false, rendererId?: string, allowManualPreview = false, intentKey?: string): TemplateResult => html`<pi-web-content-renderer
-    .intentKey=${intentKey} .externalControls=${externalControls} .text=${text} .choices=${choices} .rendererId=${rendererId} .allowManualPreview=${allowManualPreview}
+  const host = (text: string, choices: readonly ContentRendererChoice[], externalControls = false, rendererId?: string, allowManualPreview = false, intentKey?: string, sourcePolicy?: CodeBlockSourcePolicy): TemplateResult => html`<pi-web-content-renderer
+    .codeBlocks=${sourcePolicy} .intentKey=${intentKey} .externalControls=${externalControls} .text=${text} .choices=${choices} .rendererId=${rendererId} .allowManualPreview=${allowManualPreview}
   ></pi-web-content-renderer>`;
 
-  const renderMarkdown = (request: ContentMarkdownRenderRequest, identity?: string): TemplateResult => {
+  const renderMarkdown = (request: ContentMarkdownRenderRequest, identity?: string, sourcePolicy?: CodeBlockSourcePolicy): TemplateResult => {
       const template = document.createElement("template");
       template.innerHTML = request.toSafeHtml(request.text);
       const tokens: Tokens.Code[] = [];
@@ -67,10 +68,10 @@ export function createContentRenderingService(select: SelectRenderer): ChatConte
         if (isCodeToken(token)) tokens.push(token);
       });
       const hosts = new Map<Node, TemplateResult>();
-      template.content.querySelectorAll("pre").forEach((pre, index) => {
+      const blockSelector = "pre, .plain-code-block";
+      template.content.querySelectorAll(blockSelector).forEach((block, index) => {
         const token = tokens[index];
-        const code = pre.querySelector("code");
-        if (token === undefined || code === null) return;
+        if (token === undefined || (block.tagName === "PRE" && block.querySelector("code") === null)) return;
         const text = token.text;
         const selected = isClosedFence(token) ? selection({
           machineId: request.machineId, text,
@@ -80,17 +81,22 @@ export function createContentRenderingService(select: SelectRenderer): ChatConte
         const intentKey = identity === undefined ? undefined : JSON.stringify([request.machineId, identity, index]);
         // Validate even when no host will mount (e.g. its plugin was disabled).
         if (intentKey !== undefined) renderIntentMemory.read(intentKey, text, selected.map(({ id }) => id));
-        if (selected.length > 0) hosts.set(pre, host(text, selected, false, undefined, request.allowManualPreview, intentKey));
+        if (selected.length > 0) {
+          // Replace the whole source block, including its optional copy controls.
+          const root = block.parentElement?.classList.contains("code-block-wrapper") === true ? block.parentElement : block;
+          hosts.set(root, host(text, selected, false, undefined, request.allowManualPreview, intentKey, sourcePolicy));
+        }
       });
 
-      // Only sanitized ancestor tags are rebuilt as Lit templates. Everything
-      // else stays under the caller's HTML policy. Stable positional child parts
-      // preserve completed fence hosts while later streaming prose changes.
+      // Only sanitized ancestor tags are rebuilt as Lit templates; the rest stays
+      // under the caller's HTML policy. Use this path even without preview matches:
+      // stable child parts preserve source blocks, Copy feedback and completed
+      // preview hosts while trailing prose streams.
       const renderNode = (node: Node): unknown => {
         const replacement = hosts.get(node);
         if (replacement !== undefined) return replacement;
         if (!(node instanceof Element)) return node.textContent;
-        if (!node.querySelector("pre")) return unsafeHTML(node.outerHTML);
+        if (!node.querySelector(blockSelector)) return unsafeHTML(node.outerHTML);
         const tag = unsafeStatic(node.tagName.toLowerCase());
         const attributes = [...node.attributes].map(({ name, value }) => [name, value] as const);
         return staticHtml`<${tag} ${ref((element) => {

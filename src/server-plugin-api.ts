@@ -38,6 +38,10 @@ export interface ServerPluginActivationContext {
   readonly dataDirectory: string;
   readonly logger: ServerPluginLogger;
   readonly settings: JsonObject;
+  /** Resolve this plugin's global snapshot plus the registered project's settings snapshot. Settings remain fixed until sessiond restarts. */
+  readonly resolveProjectSettings?: (project: ProjectInput, signal: AbortSignal) => Promise<JsonObject>;
+  /** Machine-local command used by provider-owned integrations to send a bounded notification to this daemon. */
+  readonly workspaceNotifications?: ServerPluginWorkspaceNotifications;
   /** Record a host-attributed application notice when this capability is available. */
   readonly notices?: ServerPluginNoticeReporterV1;
   /**
@@ -334,12 +338,28 @@ export interface ServerPluginPeerChannelOpenContext {
   readonly send: (data: JsonValue) => void;
 }
 
+/** Host-attributed invocation for provider-owned external integrations. */
+export interface ServerPluginWorkspaceNotifications {
+  /** An argv invocation attributed to this plugin and registered project; providers own any hook-specific argument filtering. */
+  readonly command: (projectId: string) => readonly string[];
+}
+
+/** Optional external integration maintained only for the project's current provider. */
+export interface WorkspaceProviderIntegration {
+  /** Idempotently maintain integration, including removal when plugin settings disable it. Failure never changes discovery authority. */
+  reconcile(project: ProjectInput, signal: AbortSignal): Promise<void>;
+  /** Apply provider-owned policy to an incoming hint. A true result asks the host to invalidate workspace projections, not register a path. */
+  acceptNotification(project: ProjectInput, signal: AbortSignal): Promise<boolean>;
+}
+
 /**
  * Every signal supplied to a provider is scoped to that single callback
  * invocation. The host aborts it when the operation times out or settles; it
  * must not be retained as a plugin-lifetime shutdown signal.
  */
 export interface WorkspaceProvider {
+  /** External integration lifecycle; separate from side-effect-free probing and listing. */
+  integration?: WorkspaceProviderIntegration;
   /** Fallback providers are considered only after all primary providers pass. */
   fallback?: boolean;
   probe(project: ProjectInput, signal: AbortSignal): Promise<ProviderClaim>;

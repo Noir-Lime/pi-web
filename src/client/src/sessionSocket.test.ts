@@ -114,20 +114,16 @@ describe("notification socket guards", () => {
     expect(parseSessionSocketEvent({ type: "session.startup", activity })).toBeUndefined();
   });
 
-  it("accepts validated ask frames and drops malformed ones", () => {
+  it("carries question payloads in transcript frames rather than lifecycle frames", () => {
     const ask = {
       askId: "ask-1",
       askedAt: "2026-07-20T00:00:00.000Z",
       questions: [{ id: "q1", question: "Which database?", options: [{ value: "pg", label: "Postgres" }] }],
     };
-
-    expect(parseSessionSocketEvent({ type: "ask.opened", ask })).toEqual({ type: "ask.opened", ask });
-    expect(parseSessionSocketEvent({ type: "ask.closed", askId: "ask-1", reason: "superseded" }))
-      .toEqual({ type: "ask.closed", askId: "ask-1", reason: "superseded" });
-    expect(parseSessionSocketEvent({ type: "ask.opened", ask: { ...ask, questions: [] } })).toBeUndefined();
-    expect(parseSessionSocketEvent({ type: "ask.opened" })).toBeUndefined();
-    expect(parseSessionSocketEvent({ type: "ask.closed", askId: "ask-1", reason: "ignored" })).toBeUndefined();
-    // Ask frames are per-session only, so they must not be accepted globally.
+    const event = { type: "tool.end", toolName: "ask_user", toolCallId: "call-1", text: "Posted questions", isError: false, details: { ask }, seq: 9 };
+    expect(parseSessionSocketEvent(event)).toEqual(event);
+    expect(parseSessionSocketEvent({ type: "ask.opened", ask })).toBeUndefined();
+    expect(parseSessionSocketEvent({ type: "ask.closed", askId: "ask-1", reason: "submitted" })).toBeUndefined();
     expect(parseRealtimeSocketEvent({ type: "ask.opened", ask })).toBeUndefined();
   });
 
@@ -284,6 +280,12 @@ describe("socket stream validation", () => {
     for (const frame of validFrames) expect(parseRealtimeSocketEvent(frame)).toEqual(frame);
   });
 
+  it("accepts workspace invalidations only on the global realtime socket", () => {
+    const event = { type: "workspaces.changed", projectId: "project-1" };
+    expect(parseRealtimeSocketEvent(event)).toEqual(event);
+    expect(parseSessionSocketEvent(event)).toBeUndefined();
+  });
+
   it("keeps unrecognised status flags so a newer daemon's tree still arrives", () => {
     // A federated machine may run a daemon that publishes flags this browser
     // does not know; the frame must survive and still carry them.
@@ -376,6 +378,35 @@ describe("socket instance isolation", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(newHandler).toHaveBeenCalledOnce();
+  });
+
+  it("drops malformed workspace frames in transport without losing later valid notifications", async () => {
+    const realtime = new RealtimeSocket();
+    const session = new SessionSocket();
+    const onRealtimeEvent = vi.fn();
+    const onSessionEvent = vi.fn();
+    const changed = { type: "workspaces.changed", projectId: "project-1" };
+    realtime.connect(onRealtimeEvent);
+    session.connect({ id: "session-1", cwd: "/repo" }, onSessionEvent);
+    const globalSocket = FakeWebSocket.instances[0];
+    const sessionSocket = FakeWebSocket.instances[1];
+    if (globalSocket === undefined || sessionSocket === undefined) throw new Error("expected both sockets");
+
+    for (const data of ["{", "null", JSON.stringify({ type: "workspaces.changed" }), JSON.stringify({ ...changed, projectId: false })]) {
+      globalSocket.onmessage?.({ data });
+    }
+    sessionSocket.onmessage?.({ data: JSON.stringify(changed) });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(onRealtimeEvent).not.toHaveBeenCalled();
+    expect(onSessionEvent).not.toHaveBeenCalled();
+
+    globalSocket.onmessage?.({ data: JSON.stringify(changed) });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(onRealtimeEvent).toHaveBeenCalledExactlyOnceWith(changed);
+    realtime.close();
+    session.close();
   });
 
   it("does not attribute a queued global frame to a replacement machine", async () => {

@@ -194,6 +194,35 @@ describe("plugin-defined transcript message actions", () => {
     }, fork.id);
   });
 
+  it("targets the real entry and anchor when an event group spans invisible conversation entries", async () => {
+    const { view } = await mount([{ id: "inspect", title: "Inspect entry", run: () => undefined }]);
+    const onEntry = vi.fn(() => Promise.resolve());
+    view.onMessageAction = onEntry;
+    view.messageStart = 20;
+    view.messages = [
+      { role: "assistant", entryId: "first", parts: [{ type: "thinking", text: "First thought" }] },
+      { role: "tool", entryId: "boundary", parts: [{ type: "toolResultBoundary", toolCallId: "earlier" }] },
+      { role: "assistant", entryId: "empty", parts: [{ type: "empty" }] },
+      { role: "assistant", entryId: "last", parts: [{ type: "thinking", text: "Last thought" }] },
+    ];
+    await settle(view);
+    const groups = view.renderRoot.querySelectorAll("details.event-group");
+    expect(groups).toHaveLength(1);
+    const sections = Array.from(groups[0]?.querySelectorAll<HTMLElement>("section.group-msg") ?? []);
+    expect(sections.map((section) => section.dataset["index"])).toEqual(["20", "23"]);
+    expect(sections.map((section) => section.dataset["scrollAnchorId"])).toEqual([
+      'e:["first","assistant","message"]',
+      'e:["last","assistant","message"]',
+    ]);
+    const action = sections[1]?.querySelector<HTMLButtonElement>('button[title="Inspect entry"]');
+    if (action === null || action === undefined) throw new Error("Missing last entry action");
+    action.click();
+    await settle(view);
+    expect(onEntry).toHaveBeenCalledExactlyOnceWith({
+      ...base, message: { entryId: "last", role: "assistant", text: "" },
+    }, "custom:inspect");
+  });
+
   it("offers only opted-in display actions without a durable entry", async () => {
     const { view } = await mount();
     view.messages = [{ role: "assistant", parts: [{ type: "text", text: "Streaming" }] }];

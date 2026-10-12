@@ -114,7 +114,7 @@
 </tr>
 <tr>
 <th scope="row">Project config</th>
-<td>Shared file access and upload/attachment folders.</td>
+<td>Shared file access, upload/attachment folders, and supported server-plugin settings.</td>
 <td><span id="project-config"></span><code>&lt;project&gt;/.pi-web/config.json</code>. Commit it with the repository.</td>
 </tr>
 <tr>
@@ -148,6 +148,10 @@
 <tr>
 <th scope="row"><code>pathAccess.allowedPaths</code></th>
 <td>Adds to the machine list; duplicates removed.</td>
+</tr>
+<tr>
+<th scope="row"><code>plugins.&lt;id&gt;.settings</code></th>
+<td>Overrides top-level setting keys over the plugin’s machine settings; nested objects are replaced, not deep-merged. For server plugins supporting project settings. <code>plugins.&lt;id&gt;.enabled</code> and project-level disablement are not supported. See <a href="#project-plugin-settings">snapshot and restart rules</a>.</td>
 </tr>
 <tr>
 <th scope="row"><code>version</code></th>
@@ -383,8 +387,12 @@
 <td>Sessiond restart</td>
 </tr>
 </tbody></table></div>
-<details class="config-details"><summary>Independent sessions vs. tracked subsessions</summary><ul><li><strong>Independent:</strong> fire-and-forget work in a workspace of the same project; output is not returned to the parent.</li><li><strong>Tracked:</strong> work in the parent’s working directory; completion wakes the parent and makes output available. No polling needed.</li><li><strong>Model:</strong> both tools accept an exact <code>provider/model-id</code>; otherwise they inherit the parent’s model. Thinking level is inherited and clamped to model capabilities.</li></ul></details>
-<details class="config-details"><summary>Question forms and extension dialogs are different</summary><ul><li><strong>Question forms:</strong> up to 20 questions, up to 12 choices per question, custom text, and optional answers. An ordinary chat message cancels an open form; a new form supersedes the old one.</li><li><strong>Persistence:</strong> an open question form survives browser/web restarts while its owning session daemon remains running.</li><li><strong>Extension dialogs:</strong> always supported, independently of <code>askUser</code>. The sooner of the extension’s timeout and the configured daemon timeout wins.</li><li><strong>Timeout result:</strong> <code>false</code> for confirmation; <code>undefined</code> for selection/text input.</li></ul></details>
+<details class="config-details"><summary>Independent sessions vs. tracked subsessions</summary><ul><li><strong>Independent:</strong> fire-and-forget work in a workspace of the same project; output is not returned to the parent.</li><li><strong>Tracked:</strong> work in the parent’s working directory; the parent can continue independent work or join its children.</li><li><strong>Model:</strong> both tools accept an exact <code>provider/model-id</code>; otherwise they inherit the parent’s model. Thinking level is inherited and clamped to model capabilities.</li></ul>
+<p>Receiving a completed result marks it read; checking status alone does not. Read results remain available for deliberate retrieval but are not automatically delivered again.</p>
+<p>Call <code>yield_to_subsessions</code> alone and last at a join point:</p>
+<ul><li><code>yield_to_subsessions</code> returns unread completed results immediately, even while other children are working. If there are no unread completed results but children are still working, it ends the current run; completion delivery wakes the parent. If neither unread results nor working children remain, it continues.</li><li><code>check_subsession</code> on a completed child returns its latest result and acknowledges that completion, so it is not automatically replayed later. The latest result remains available for explicit retrieval; later runs of the same child have separate completions.</li><li><code>list_subsessions</code> reports status only and does not acknowledge results.</li><li><code>read_subsession</code> acknowledges a completion only when the current final output is actually returned. Reads that filter out that output, show only history, or truncate it leave the completion unread.</li></ul>
+<p>Automatic completion delivery uses the same inbox as these tools and wakes an idle parent for unread results. No polling is needed.</p></details>
+<details class="config-details"><summary>Question forms and extension dialogs are different</summary><ul><li><strong>Question forms:</strong> up to 20 questions, up to 12 choices per question, custom text, and optional answers. A form is open only at the active conversation’s tail. Answers, skips, and other conversation entries close it; earlier forms remain expandable and read-only in place.</li><li><strong>Persistence:</strong> questions are saved conversation entries, so forms can be rendered again after browser, web/API, or session-daemon restarts. Returning the active branch to a question reopens it; archived conversations remain read-only.</li><li><strong>Responses:</strong> answering or skipping wakes the agent. Partial submissions are confirmed, and late or repeated human responses remain in the conversation.</li><li><strong>Extension dialogs:</strong> always supported, independently of <code>askUser</code>. The sooner of the extension’s timeout and the configured daemon timeout wins.</li><li><strong>Timeout result:</strong> <code>false</code> for confirmation; <code>undefined</code> for selection/text input.</li></ul></details>
 </section>
 <section id="plugin-config"><h2>Plugins & packages</h2>
 <p>Use <strong>Settings → PI WEB plugins</strong> for enablement/settings and <strong>Settings → Pi packages</strong> for package installation. These are separate operations.</p>
@@ -408,10 +416,17 @@
 </tr>
 <tr>
 <th scope="row">Plugin settings<br><code>plugins.&lt;id&gt;.settings</code></th>
-<td>Machine</td>
+<td>Machine + project for server plugins supporting project settings</td>
 <td><code>{}</code>; plugin-defined behavior</td>
-<td>JSON settings for the plugin.</td>
-<td>Browser-only: reload tab. Server-backed: sessiond restart + tab reload</td>
+<td>JSON settings; project top-level setting keys override machine settings.</td>
+<td>Browser-only global settings: reload tab. Server-backed global/project settings: manual sessiond restart + tab reload</td>
+</tr>
+<tr>
+<th scope="row"><a href="#git-worktree-discovery-hooks">Git worktree discovery hooks</a><br><code>plugins.git.settings.workspaceDiscoveryHooks</code></th>
+<td>Machine + project</td>
+<td><code>true</code></td>
+<td>Install and repair native named hooks on supported Git builds (introduced in Git 2.54), preserving existing hooks.</td>
+<td>Manual sessiond restart; browser reload alone is insufficient</td>
 </tr>
 <tr>
 <th scope="row">Plugin recovery mode<br><code>serverPlugins.safeStart</code></th>
@@ -421,7 +436,17 @@
 <td>Next sessiond start</td>
 </tr>
 </tbody></table></div>
-<p><strong>Saved ≠ active:</strong> Settings shows desired and active plugin state. A server plugin can remain active after you disable it until sessiond restarts.</p>
+<p><strong>Saved ≠ active:</strong> Settings shows desired and active plugin state. A server plugin can remain active after you disable it until sessiond restarts. Global server settings are captured at startup; project settings are fixed snapshots too, not live config.</p>
+<details class="config-details" id="project-plugin-settings"><summary>Project plugin settings: scope, merge, and restarts</summary><p>Server plugins that support project settings, including Git, can use <code>plugins.&lt;id&gt;.settings</code> in <code>&lt;project&gt;/.pi-web/config.json</code>. Each project’s top-level setting keys override the plugin’s machine settings; nested objects are replaced, not deep-merged. Omitted keys keep their global values. Only settings are allowed: plugin enablement/disablement stays global, and project <code>plugins.&lt;id&gt;.enabled</code> is not supported.</p><p>PI WEB reads the file at the <strong>registered project’s path</strong>, not an override file in an arbitrary newly created worktree. Sessiond snapshots project plugin settings at startup for existing registered projects and at first use for newly registered projects. These snapshots, including absent config files, stay fixed until a manual session-daemon restart. Global server settings remain the startup snapshot; project/workspace list access does not reload either settings scope.</p><p>After editing global or project server-plugin settings, manually restart the target session daemon, then reload the browser. Browser reload, web/API restart, or Pi’s <code>/reload</code> alone does not update server settings. A daemon restart can interrupt active sessions and terminals; inspect work first and restart from outside its hosted sessions.</p></details>
+<details class="config-details" id="git-worktree-discovery-hooks"><summary>Git worktree discovery hooks: opt out</summary><p>The Git provider owns the boolean <code>plugins.git.settings.workspaceDiscoveryHooks</code>, default <code>true</code>. On Git builds supporting native config-based named hooks (introduced in Git 2.54), it installs and repairs its discovery hook automatically while preserving <code>core.hooksPath</code> and existing hook scripts. See <a href="plugins#automatic-git-worktree-discovery">Automatic Git worktree discovery</a> for notification behavior and catch-up paths.</p><p>Merge this into the global config selected by <code>PI_WEB_CONFIG</code> (or its default path) for the machine, or into <code>&lt;project&gt;/.pi-web/config.json</code> at the registered project’s path for just that project:</p><div class="code-card"><div class="copy-row"><strong>Git hook opt-out</strong><button class="copy-button" data-copy="#git-discovery-opt-out">Copy</button></div><pre id="git-discovery-opt-out"><code>{
+  "plugins": {
+    "git": {
+      "settings": {
+        "workspaceDiscoveryHooks": false
+      }
+    }
+  }
+}</code></pre></div><p>A project value overrides the global value; <code>true</code> can enable hooks for one project when the global value is <code>false</code>. Every change requires a <strong>manual session-daemon restart</strong>; browser reload alone is insufficient. This opts out of the discovery hook, not the Git plugin or ordinary workspace discovery.</p></details>
 <div class="table-scroll" role="region" aria-label="After installing or updating a Pi package" tabindex="0">
 <table class="reference-table ">
 <caption>After installing or updating a Pi package</caption>

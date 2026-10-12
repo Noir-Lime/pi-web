@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
@@ -20,6 +21,7 @@ import {
   type AgentSessionServices,
   type CreateAgentSessionRuntimeFactory,
   type CreateAgentSessionServicesOptions,
+  type CustomMessageEntryDraft,
   type EditToolDetails,
   type ExtensionCommandContextActions,
   type ExtensionUIDialogOptions,
@@ -58,7 +60,6 @@ import type { PiWebConfigService } from "../configRoutes.js";
 import { parsePromptAttachments } from "../../shared/promptAttachments.js";
 import { ASK_USER_ANSWERS_CUSTOM_TYPE, SESSION_TREE_CUSTOM_INSTRUCTIONS_MAX_LENGTH, SESSION_UNREAD_LIMIT } from "../../shared/apiTypes.js";
 import type {
-  AskUserCloseResponse,
   AskUserOutcome,
   AskUserSubmission,
   ExtensionDialogAnswer,
@@ -89,16 +90,18 @@ import { type AuthChange } from "./authService.js";
 import { canonicalizeStoredCwd, cwdPathsEqual } from "../workingDirectory.js";
 import { readSessionHeaderSummary } from "./sessionFileHeader.js";
 import type { WorkspaceActivityService } from "../activity/workspaceActivityService.js";
-import { createAskUserToolDefinition, type AskUserInvocation, type AskUserToolDeps } from "./askUserTool.js";
-import { PendingAskStore, renderAskUserAnswersText, type PendingAskCloseResult, type PendingAskOpenResult } from "./pendingAskStore.js";
+import { createAskUserToolDefinition } from "./askUserTool.js";
+import { createAskUserOutcome, renderAskUserAnswersText, resolveAskUserRequest } from "./askUserDomain.js";
 import { PendingExtensionDialogStore, type ExtensionDialogCancelReason } from "./pendingExtensionDialogStore.js";
 import { ExtensionDialogWaiters, effectiveExtensionDialogTimeoutMs, extensionDialogCancelValue } from "./extensionDialogWaiters.js";
 import { DEFAULT_EXTENSION_DIALOGS_TIMEOUT_MS } from "../../config.js";
 import { createSpawnSessionToolDefinition, type SpawnSessionInvocation, type SpawnSessionResult } from "./spawnSessionTool.js";
 import type { SessionUiMetadata } from "../../shared/pluginApiTypes.js";
 import { readSessionUiMetadata, requireSessionUiMetadata, SESSION_UI_METADATA_CUSTOM_TYPE } from "./sessionMetadata.js";
-import { createSubsessionToolDefinitions, type SpawnSubsessionInvocation, type SpawnSubsessionResult, type SubsessionCheckResult, type SubsessionReadQuery, type SubsessionReadResult, type SubsessionStatus, type SubsessionSummary, type SubsessionToolDeps } from "./spawnSubsessionTool.js";
-import { buildTranscriptView } from "./subsessionTranscript.js";
+import { createSubsessionToolDefinitions, type SpawnSubsessionInvocation, type SpawnSubsessionResult, type SubsessionCheckResult, type SubsessionJoinResult, type SubsessionReadQuery, type SubsessionReadResult, type SubsessionStatus, type SubsessionSummary, type SubsessionToolDeps } from "./spawnSubsessionTool.js";
+import { buildTranscriptView, type TranscriptView } from "./subsessionTranscript.js";
+import { createSubsessionCompletionDelivery, type SubsessionCompletionDeliveryDeps } from "./subsessionCompletionDelivery.js";
+import { completionReceiptIds, persistedSubsessionCompletions, renderSubsessionCompletions, SUBSESSION_COMPLETION_ENTRY_TYPE, SUBSESSION_NOTIFICATION_CUSTOM_TYPE, SUBSESSION_RECEIPT_ENTRY_TYPE, SubsessionCompletionInbox, type SubsessionCompletion } from "./subsessionCompletionInbox.js";
 import { annotateAssistantThinkingLevel, historyMessagesFromEntries } from "./transcriptMessages.js";
 import { planSessionCleanup, summarizeSessionCleanupExecution, type NormalizedSessionCleanupRequest, type SessionCleanupPlan } from "./sessionCleanup.js";
 import type { SpawnTargetDecision, SpawnTargetResolver } from "./spawnTargetResolver.js";
@@ -210,12 +213,6 @@ interface QueuedPrompt {
   text: string;
   images?: ImageContent[];
   echoUserMessage?: boolean;
-}
-
-interface DeferredSubsessionNotification {
-  parentId: string;
-  childId: string;
-  text: string;
 }
 
 interface TreeExclusiveOperationTarget {
@@ -797,7 +794,7 @@ export function createPiWebCustomToolDefinitions(
   delegationEnabled: boolean,
   spawn?: SpawnSessionFn,
   subsessions?: SubsessionToolDeps,
-  askUser?: AskUserToolDeps,
+  askUserEnabled = false,
 ) {
   return [
     createPiWebEditToolDefinition(cwd),
@@ -805,7 +802,7 @@ export function createPiWebCustomToolDefinitions(
     ...(delegationEnabled && subsessions !== undefined ? createSubsessionToolDefinitions(cwd, subsessions) : []),
     // Asking the user is not delegation: the questions land in the session the
     // user is already watching, so tracked children may ask too.
-    ...(askUser === undefined ? [] : [createAskUserToolDefinition(askUser)]),
+    ...(askUserEnabled ? [createAskUserToolDefinition()] : []),
   ];
 }
 
@@ -1001,8 +998,8 @@ function createDefaultRuntimeFactory(
   modelRuntime: ModelRuntime,
   sessionManagers: Pick<PiSessionManagerGateway, "open">,
   spawn?: SpawnSessionFn,
-  subsessions?: SubsessionToolDeps,
-  askUser?: AskUserToolDeps,
+  subsessions?: SubsessionToolDeps & SubsessionCompletionDeliveryDeps,
+  askUserEnabled = false,
   appendSystemPromptSections: readonly string[] = [],
 ): PiWebCreateAgentSessionRuntimeFactory {
   const resourceLoaderOptions = piWebResourceLoaderOptions(appendSystemPromptSections);
@@ -1037,7 +1034,10 @@ function createDefaultRuntimeFactory(
       agentDir,
       modelRuntime,
       settingsManager,
-      resourceLoaderOptions: { ...resourceLoaderOptions, eventBus, extensionFactories: [...builtinFactories, sessionDispatch] },
+      resourceLoaderOptions: {
+        ...resourceLoaderOptions, eventBus,
+        extensionFactories: [...builtinFactories, sessionDispatch, ...(subsessions === undefined ? [] : [createSubsessionCompletionDelivery(subsessions)])],
+      },
       ...(projectTrustRequiring
         ? {
             resourceLoaderReloadOptions: {
@@ -1063,7 +1063,7 @@ function createDefaultRuntimeFactory(
     const resolvedDelegationToolsEnabled = delegationToolsEnabled
       ?? await sessionAllowsDelegationTools(sessionManager, sessionManagers);
     dispatchEnabled = resolvedDelegationToolsEnabled;
-    const customTools = createPiWebCustomToolDefinitions(cwd, resolvedDelegationToolsEnabled, spawn, subsessions, askUser);
+    const customTools = createPiWebCustomToolDefinitions(cwd, resolvedDelegationToolsEnabled, spawn, subsessions, askUserEnabled);
     const result = await createAgentSessionFromServices({
       services,
       sessionManager,
@@ -1136,8 +1136,6 @@ export interface PiSessionServiceDependencies {
    * it with container environment facts in Docker deployments.
    */
   appendSystemPromptSections?: readonly string[];
-  /** Daemon-lifetime open-ask state; defaults to an in-memory store in tests. */
-  pendingAskStore?: PendingAskStore;
   /** Daemon-lifetime open-dialog state; defaults to an in-memory store in tests. */
   pendingExtensionDialogStore?: PendingExtensionDialogStore;
   /**
@@ -1219,7 +1217,11 @@ export class PiSessionService implements SessionRouteService {
   /** Runtime/session-identity reservations for operations that must not overlap tree navigation. */
   private readonly treeExclusiveRuntimeOperationCounts = new WeakMap<PiSessionRuntime, number>();
   private readonly treeExclusiveSessionOperationCounts = new Map<string, number>();
-  private readonly deferredSubsessionNotifications = new WeakMap<PiAgentSession, DeferredSubsessionNotification[]>();
+  /** Parent id/file identity -> one inbox shared by all completion delivery paths. */
+  private readonly subsessionInboxes = new Map<string, SubsessionCompletionInbox>();
+  private readonly subsessionStoppedParents = new WeakSet<PiAgentSession>();
+  private readonly subsessionDeliveringParents = new WeakSet<PiAgentSession>();
+  private readonly subsessionDeliveryScheduled = new WeakSet<PiAgentSession>();
   private readonly deferredGeneratedSessionNames = new WeakMap<PiAgentSession, string>();
   private readonly compactionPromptQueues = new Map<string, QueuedPrompt[]>();
   private readonly compactionDrainTimers = new Map<string, NodeJS.Timeout>();
@@ -1254,7 +1256,6 @@ export class PiSessionService implements SessionRouteService {
   /** Last idle-poll transcript file resolution per runtime, throttled; entries die with their runtime. */
   private readonly idleSessionFileResolutions = new WeakMap<PiAgentSession, { at: number; path: string | undefined }>();
   private readonly unreadStore: SessionUnreadStore;
-  private readonly pendingAskStore: PendingAskStore;
   private readonly pendingExtensionDialogStore: PendingExtensionDialogStore;
   private readonly extensionDialogsTimeoutMs: number;
   /** The parked extension Promise resolvers behind the store's open dialogs. */
@@ -1286,7 +1287,6 @@ export class PiSessionService implements SessionRouteService {
     this.notificationStore = deps.notificationStore ?? new SessionNotificationStore();
     this.unreadStore = deps.unreadStore ?? new SessionUnreadStore();
     this.onUnreadChanged = deps.onUnreadChanged;
-    this.pendingAskStore = deps.pendingAskStore ?? new PendingAskStore();
     this.pendingExtensionDialogStore = deps.pendingExtensionDialogStore ?? new PendingExtensionDialogStore();
     this.extensionDialogsTimeoutMs = deps.extensionDialogsTimeoutMs ?? DEFAULT_EXTENSION_DIALOGS_TIMEOUT_MS;
     this.catalogRefreshStatus = deps.catalogRefreshStatus;
@@ -1308,10 +1308,12 @@ export class PiSessionService implements SessionRouteService {
       !subsessionsActive ? undefined : {
         spawn: (input) => this.spawnSubsession(input),
         list: (parentSessionId, parentSessionFile) => this.listSubsessions(parentSessionId, parentSessionFile),
-        check: (parentSessionId, sessionId, parentSessionFile) => this.checkSubsession(parentSessionId, sessionId, parentSessionFile),
-        read: (parentSessionId, sessionId, query, parentSessionFile) => this.readSubsession(parentSessionId, sessionId, query, parentSessionFile),
+        join: (parentSessionId, parentSessionFile, toolCallId) => this.joinSubsessions(parentSessionId, parentSessionFile, toolCallId),
+        prepare: (parentSessionId, parentSessionFile) => this.prepareSubsessionDelivery(parentSessionId, parentSessionFile),
+        check: (parentSessionId, sessionId, parentSessionFile, toolCallId) => this.checkSubsession(parentSessionId, sessionId, parentSessionFile, toolCallId),
+        read: (parentSessionId, sessionId, query, parentSessionFile, toolCallId) => this.readSubsession(parentSessionId, sessionId, query, parentSessionFile, toolCallId),
       },
-      deps.askUserEnabled === true ? { open: (input) => this.openAsk(input) } : undefined,
+      deps.askUserEnabled === true,
       deps.appendSystemPromptSections ?? [],
     );
     this.createAgentRuntime = deps.createAgentRuntime ?? defaultCreateAgentRuntime;
@@ -1468,7 +1470,6 @@ export class PiSessionService implements SessionRouteService {
     const activeSessions = Array.from(new Set(this.active.values()));
     for (const active of activeSessions) {
       this.forgetUnreadActivity(active.runtime.session);
-      this.pendingAskStore.forgetSession(active.runtime.session.sessionId);
       this.endSessionExtensionDialogs(active.runtime.session.sessionId);
     }
     this.active.clear();
@@ -1483,6 +1484,7 @@ export class PiSessionService implements SessionRouteService {
     this.subsessionLinks.clear();
     this.subsessionHydratedParents.clear();
     this.subsessionNotifyArmed.clear();
+    this.subsessionInboxes.clear();
     this.notificationStore.clearAll("service-dispose");
     await Promise.all(activeSessions.map(async (active) => {
       active.unsubscribe();
@@ -1849,91 +1851,35 @@ export class PiSessionService implements SessionRouteService {
     return model;
   }
 
-  /**
-   * Register the question set an agent wants the user to answer as the session's
-   * open ask. Deliberately does not wait for the user: `ask_user` terminates the
-   * run and the submitted answers come back later as a follow-up message.
-   *
-   * Rejected question sets throw {@link PendingAskValidationError}, which the
-   * agent loop reports to the model as an error tool result.
-   */
-  // eslint-disable-next-line @typescript-eslint/require-await -- async so a rejected question set becomes a rejection rather than a synchronous throw from a promise-returning method.
-  async openAsk(input: AskUserInvocation): Promise<PendingAskOpenResult> {
-    const result = this.pendingAskStore.open(input);
-    // A supersede closes the earlier ask, so the browsers watching it must hear
-    // that before they hear about its replacement.
-    if (result.superseded !== undefined) this.publishAskClosed(input.sessionId, result.superseded);
-    this.events.publish(input.sessionId, { type: "ask.opened", ask: result.ask });
-    this.publishStatusForSessionId(input.sessionId);
-    return result;
-  }
-
-  /**
-   * Record the user's answers to the session's open ask and hand them to the
-   * model. The answers travel as a system-authored custom message rather than a
-   * user message, so they are not attributed to the human in the transcript;
-   * they still wake an idle session (`triggerTurn`) and queue behind in-flight
-   * work (`deliverAs: "followUp"`), which is how the run that `ask_user`
-   * terminated continues.
-   */
-  async submitAsk(ref: PiSessionRef, askId: string, submission: AskUserSubmission): Promise<AskUserCloseResponse> {
+  /** Reply to a durable question entry, even after later conversation or replies. */
+  async submitAsk(ref: PiSessionRef, askId: string, submission: AskUserSubmission): Promise<ClientSessionStatus> {
     await this.assertWritable(ref);
     const session = await this.getOrOpen(ref);
-    // Checked before the store closes the ask so a refused delivery cannot
-    // discard answers the user already submitted.
     this.assertTreeNavigationInactive(session, "answer questions");
-    return this.closeAsk(session, this.pendingAskStore.submit(session.sessionId, askId, submission));
+    const ask = resolveAskUserRequest(await this.readableSessionBranch(ref, session), askId);
+    const outcome = createAskUserOutcome(ask, submission, this.now().toISOString());
+    return this.deliverAskOutcome(session, outcome);
   }
 
-  /**
-   * Close the open ask without answers. The model is still told, naming every
-   * question as unanswered: it was promised a follow-up message and would
-   * otherwise wait for one that never comes.
-   */
-  async cancelAsk(ref: PiSessionRef, askId: string): Promise<AskUserCloseResponse> {
+  /** Skip is also a transcript reply; it does not invalidate future answers. */
+  async cancelAsk(ref: PiSessionRef, askId: string): Promise<ClientSessionStatus> {
     await this.assertWritable(ref);
     const session = await this.getOrOpen(ref);
-    this.assertTreeNavigationInactive(session, "dismiss questions");
-    return this.closeAsk(session, this.pendingAskStore.cancel(session.sessionId, askId));
+    this.assertTreeNavigationInactive(session, "skip questions");
+    const ask = resolveAskUserRequest(await this.readableSessionBranch(ref, session), askId);
+    return this.deliverAskOutcome(session, createAskUserOutcome(ask, undefined, this.now().toISOString()));
   }
 
-  /**
-   * Publish and deliver a closed ask. A stale close is reported rather than
-   * thrown: losing the race against a supersede, another browser, or a session
-   * that went away is ordinary, and the returned status tells the browser what
-   * the session's open ask is now.
-   */
-  private async closeAsk(session: PiAgentSession, result: PendingAskCloseResult): Promise<AskUserCloseResponse> {
-    if (result.status === "stale") return { result: "stale", sessionStatus: this.statusFromSession(session) };
-    const { outcome } = result;
-    this.publishAskClosed(session.sessionId, outcome);
+  private async deliverAskOutcome(session: PiAgentSession, outcome: AskUserOutcome): Promise<ClientSessionStatus> {
+    // Pi persists/displays the structured message and wakes an idle agent, or
+    // queues it behind in-flight work. Ordinary entry-mutation protection still
+    // applies, but there is no answer-specific stale/duplicate gate.
     await this.runSessionEntryMutation(session, "deliver answers to your questions", () => session.sendCustomMessage(
       { customType: ASK_USER_ANSWERS_CUSTOM_TYPE, content: renderAskUserAnswersText(outcome), display: true, details: outcome },
       { triggerTurn: true, deliverAs: "followUp" },
     ));
     this.publishStatus(session);
-    return { result: "closed", outcome, sessionStatus: this.statusFromSession(session) };
-  }
-
-  private publishAskClosed(sessionId: string, outcome: AskUserOutcome): void {
-    this.events.publish(sessionId, { type: "ask.closed", askId: outcome.askId, reason: outcome.reason });
-  }
-
-  /**
-   * Void the session's open ask because the user sent a chat message instead of
-   * answering it. Every browser closes the card as cancelled, and the model is
-   * told — without being woken — so the notice rides into the turn the message
-   * itself triggers rather than becoming a turn of its own.
-   */
-  private async voidOpenAskForUserMessage(session: PiAgentSession): Promise<void> {
-    const outcome = this.pendingAskStore.cancelOpen(session.sessionId);
-    if (outcome === undefined) return;
-    this.publishAskClosed(session.sessionId, outcome);
-    await this.runSessionEntryMutation(session, "void the open questions", () => session.sendCustomMessage(
-      { customType: ASK_USER_ANSWERS_CUSTOM_TYPE, content: renderAskUserAnswersText(outcome), display: true, details: outcome },
-      { triggerTurn: false, deliverAs: "followUp" },
-    ));
-    this.publishStatus(session);
+    return this.statusFromSession(session);
   }
 
   /**
@@ -2087,28 +2033,122 @@ export class PiSessionService implements SessionRouteService {
     return Promise.all(authorizedChildIds.map(async (childId) => ({ sessionId: childId, ...(await this.subsessionSummaryFields(childId)) })));
   }
 
+  /** Collect ready answers before deciding whether the parent needs to wait. */
+  async joinSubsessions(parentSessionId: string, parentSessionFile?: string, toolCallId?: string): Promise<SubsessionJoinResult> {
+    const subsessions = await this.listSubsessions(parentSessionId, parentSessionFile);
+    this.reconcileSubsessionCompletions(parentSessionId, parentSessionFile);
+    const completions = this.subsessionInbox(parentSessionId, parentSessionFile).pending();
+    this.receiveSubsessionCompletions(parentSessionId, parentSessionFile, completions, toolCallId);
+    return { subsessions, completions };
+  }
+
   /** Status and final result of a subsession, scoped to the caller's children. */
-  async checkSubsession(parentSessionId: string, sessionId: string, parentSessionFile?: string): Promise<SubsessionCheckResult> {
+  async checkSubsession(parentSessionId: string, sessionId: string, parentSessionFile?: string, toolCallId?: string): Promise<SubsessionCheckResult> {
     const session = await this.openSubsession(parentSessionId, sessionId, parentSessionFile);
+    // Finalize the same completion even if its event/heartbeat notification has
+    // not run yet. Inspection must not leave a future notice armed for this run.
+    this.reconcileSubsessionCompletion(session);
+    const status = this.subsessionStatus(session);
     const messages = historyMessages(session);
+    const completion = this.subsessionCompletionForOutput(parentSessionId, parentSessionFile, session, messages);
+    if (status !== "working" && completion !== undefined) this.receiveSubsessionCompletions(parentSessionId, parentSessionFile, [completion], toolCallId);
     return {
       sessionId,
       cwd: session.sessionManager.getCwd(),
-      status: this.subsessionStatus(session),
+      status,
       finalText: finalAssistantText(messages),
       messageCount: messages.length,
+      ...(status === "working" || completion?.errorDetail === undefined ? {} : { errorDetail: completion.errorDetail }),
     };
   }
 
-  /** Filtered, paginated transcript of a subsession, scoped to the caller's children. */
-  async readSubsession(parentSessionId: string, sessionId: string, query: SubsessionReadQuery, parentSessionFile?: string): Promise<SubsessionReadResult> {
+  /** Filtered transcript reads acknowledge only the final answer actually returned. */
+  async readSubsession(parentSessionId: string, sessionId: string, query: SubsessionReadQuery, parentSessionFile?: string, toolCallId?: string): Promise<SubsessionReadResult> {
     const session = await this.openSubsession(parentSessionId, sessionId, parentSessionFile);
-    const view = buildTranscriptView(historyMessages(session), query);
+    this.reconcileSubsessionCompletion(session);
+    const messages = historyMessages(session);
+    const view = buildTranscriptView(messages, query);
+    const status = this.subsessionStatus(session);
+    const completion = this.subsessionCompletionForOutput(parentSessionId, parentSessionFile, session, messages);
+    const errorDetail = status === "working" ? undefined : completion?.errorDetail;
+    if (status !== "working" && completion !== undefined
+      && (transcriptReturnsFinalOutput(messages, view, completion.finalText) || (completion.finalText === "" && errorDetail !== undefined))) {
+      this.receiveSubsessionCompletions(parentSessionId, parentSessionFile, [completion], toolCallId);
+    }
+    return { sessionId, cwd: session.sessionManager.getCwd(), status, ...view, ...(errorDetail === undefined ? {} : { errorDetail }) };
+  }
+
+  private subsessionInbox(parentSessionId: string, parentSessionFile?: string): SubsessionCompletionInbox {
+    const file = nonEmptyString(parentSessionFile) ?? nonEmptyString(this.active.get(parentSessionId)?.runtime.session.sessionFile);
+    const key = subsessionHydratedParentKey(parentSessionId, file);
+    let inbox = this.subsessionInboxes.get(key);
+    if (inbox === undefined) {
+      inbox = new SubsessionCompletionInbox();
+      this.subsessionInboxes.set(key, inbox);
+    }
+    return inbox;
+  }
+
+  private restoreSubsessionReceipts(session: PiAgentSession, releaseClaims = true): void {
+    this.subsessionInbox(session.sessionId, session.sessionFile).restoreReceipts(session.sessionManager.getBranch(), releaseClaims);
+  }
+
+  private subsessionCompletionForOutput(parentId: string, parentFile: string | undefined, child: PiAgentSession, messages: readonly unknown[]): SubsessionCompletion | undefined {
+    const branch = persistedSubsessionCompletions(child.sessionManager.getBranch()).filter(({ sessionId }) => sessionId === child.sessionId);
+    // A child can be rewound independently of its parent. Never acknowledge an
+    // abandoned branch's newer result while returning the current branch's text.
+    const completion = branch.at(-1) ?? (child.sessionManager.appendCustomEntry === undefined
+      ? this.subsessionInbox(parentId, parentFile).latest(child.sessionId) : undefined);
+    return completion?.finalText === finalAssistantText(messages) ? completion : undefined;
+  }
+
+  private receiveSubsessionCompletions(parentId: string, parentFile: string | undefined, completions: readonly SubsessionCompletion[], toolCallId?: string): void {
+    if (completions.length === 0) return;
+    const parent = this.active.get(parentId)?.runtime.session;
+    if (parent === undefined || (parentFile !== undefined && !sessionFileMatches(parent, parentFile))) {
+      throw new Error(`Parent session ${parentId} is not available to receive subsession results`);
+    }
+    const inbox = this.subsessionInbox(parentId, parentFile);
+    const completionIds = completions.map(({ completionId }) => completionId).filter((id) => !inbox.hasReceived(id));
+    if (completionIds.length === 0) return;
+    // Persist before removing unread results. A storage failure leaves the
+    // answer unread and fails the tool instead of losing the notification.
+    this.assertTreeNavigationInactive(parent, "receive subsession results");
+    parent.sessionManager.appendCustomEntry?.(SUBSESSION_RECEIPT_ENTRY_TYPE, { completionIds, ...(toolCallId === undefined ? {} : { toolCallId }) });
+    inbox.receive(completionIds);
+  }
+
+  private reconcileSubsessionCompletions(parentId: string, parentFile?: string): void {
+    for (const childId of this.subsessionChildren.get(parentId) ?? []) {
+      if (!this.subsessionLinkBelongsToParent(parentId, nonEmptyString(parentFile), childId)) continue;
+      const link = this.subsessionLinks.get(childId);
+      const child = link === undefined ? undefined : this.activeChildForSubsessionLink(link)?.runtime.session;
+      if (child !== undefined) this.reconcileSubsessionCompletion(child);
+    }
+  }
+
+  private reconcileSubsessionCompletion(session: PiAgentSession): void {
+    this.updateSubsessionTracking(session);
+    if (!this.hasActiveWork(session) && this.subsessionNotifyArmed.get(session.sessionId) === true) {
+      throw new Error(`Could not record completion of subsession ${session.sessionId}; its result remains unread. Retry after fixing session storage.`);
+    }
+  }
+
+  /** Claims commit on entry_appended (boundary drafts) or message_end (idle wakes). */
+  async prepareSubsessionDelivery(parentId: string, parentFile?: string): Promise<CustomMessageEntryDraft | undefined> {
+    await this.hydrateSubsessionsForParent(parentId, nonEmptyString(parentFile));
+    const parent = this.active.get(parentId)?.runtime.session;
+    if (parent === undefined || (parentFile !== undefined && !sessionFileMatches(parent, parentFile))) return undefined;
+    // Tool receipts are intents until the successful (possibly nested) result
+    // is persisted. Reconcile those intents without releasing in-flight drafts.
+    this.restoreSubsessionReceipts(parent, false);
+    this.reconcileSubsessionCompletions(parentId, parentFile);
+    const completions = this.subsessionInbox(parentId, parentFile).claim();
+    if (completions.length === 0) return undefined;
     return {
-      sessionId,
-      cwd: session.sessionManager.getCwd(),
-      status: this.subsessionStatus(session),
-      ...view,
+      type: "custom_message", customType: SUBSESSION_NOTIFICATION_CUSTOM_TYPE, display: true,
+      content: renderSubsessionCompletions(completions, this.workingSubsessionIds(parentId)),
+      details: { sessionId: completions[0]?.sessionId, completionIds: completions.map(({ completionId }) => completionId) },
     };
   }
 
@@ -2164,6 +2204,13 @@ export class PiSessionService implements SessionRouteService {
 
     this.subsessionLinks.set(childSessionId, link);
     if (!this.subsessionNotifyArmed.has(childSessionId)) this.subsessionNotifyArmed.set(childSessionId, false);
+    const childManager = this.activeChildForSubsessionLink(link)?.runtime.session.sessionManager
+      ?? (link.childSessionFile === undefined ? undefined : this.sessionManager.open(link.childSessionFile));
+    if (childManager !== undefined) {
+      for (const completion of persistedSubsessionCompletions(childManager.getEntries?.() ?? childManager.getBranch())) {
+        if (completion.sessionId === childSessionId) this.subsessionInbox(parentSessionId, link.parentSessionFile).record(completion);
+      }
+    }
 
     const cwd = this.cwdForVerifiedSubsession(link);
     await this.publishUnreadMutations(this.unreadStore.excludeSession(childSessionId, cwd));
@@ -2190,6 +2237,7 @@ export class PiSessionService implements SessionRouteService {
     this.subsessionParents.delete(childSessionId);
     this.subsessionLinks.delete(childSessionId);
     this.subsessionNotifyArmed.delete(childSessionId);
+    for (const inbox of this.subsessionInboxes.values()) inbox.forgetChild(childSessionId);
     if (parentSessionId === undefined) return;
     const children = this.subsessionChildren.get(parentSessionId);
     children?.delete(childSessionId);
@@ -2349,7 +2397,7 @@ export class PiSessionService implements SessionRouteService {
    * working. Prompt failures before agent_start explicitly arm the same latch.
    * Standalone commands and compactions must not arm a completion notice.
    */
-  private updateSubsessionTracking(session: PiAgentSession, agentStarted = false): void {
+  private updateSubsessionTracking(session: PiAgentSession, agentStarted = false, agentSettled = false): void {
     const link = this.subsessionLinkForActiveChild(session);
     if (link === undefined) return;
     const childId = link.childSessionId;
@@ -2357,20 +2405,28 @@ export class PiSessionService implements SessionRouteService {
       this.subsessionNotifyArmed.set(childId, true);
       return;
     }
-    if (this.hasActiveWork(session)) return;
+    // Native settlement is authoritative even while the host prompt Promise's
+    // mutation receipt is unwinding. Capture now, before another run can start.
+    if (!agentSettled && this.hasActiveWork(session)) return;
     if (this.subsessionNotifyArmed.get(childId) !== true) return;
-    this.subsessionNotifyArmed.set(childId, false);
     const activity = this.activities.get(childId);
-    const status: SubsessionStatus = activity?.phase === "error" ? "error" : "idle";
-    const errorSection = status === "error" && activity?.detail !== undefined ? `Error: ${activity.detail}\n\n` : "";
-    const finalText = finalAssistantText(historyMessages(session));
-    const outputSection = formatSubsessionNotificationOutput(childId, finalText);
-    const workingIds = this.workingSubsessionIds(link.parentSessionId);
-    const next = workingIds.length === 0
-      ? "No other tracked subsessions are working."
-      : `Still working: ${workingIds.join(", ")}. Continue working, or call yield_to_subsessions alone and last at the next join point. Further completion notices arrive automatically; do not poll.`;
-    const text = `Subsession ${childId} stopped working (${status}).\n${next}\n\n${errorSection}${outputSection}`;
-    void this.notifyParentOfSubsession(link.parentSessionId, childId, text);
+    const messages = historyMessages(session);
+    const completion: SubsessionCompletion = {
+      completionId: randomUUID(), sessionId: childId, cwd: session.sessionManager.getCwd(),
+      status: activity?.phase === "error" ? "error" : "idle",
+      finalText: finalAssistantText(messages), messageCount: messages.length,
+      ...(activity?.phase !== "error" || activity.detail === undefined ? {} : { errorDetail: activity.detail }),
+    };
+    try {
+      session.sessionManager.appendCustomEntry?.(SUBSESSION_COMPLETION_ENTRY_TYPE, completion);
+    } catch (error: unknown) {
+      // Keep the latch armed so a later reconciliation can retry persistence.
+      this.logSubsessionNotificationFailure(link.parentSessionId, childId, error);
+      return;
+    }
+    this.subsessionNotifyArmed.set(childId, false);
+    this.subsessionInbox(link.parentSessionId, link.parentSessionFile).record(completion);
+    void this.wakeParentForSubsession(link.parentSessionId, childId);
   }
 
   private async getOrOpenParentForSubsession(parentSessionId: string, childSessionId: string): Promise<PiAgentSession> {
@@ -2389,34 +2445,58 @@ export class PiSessionService implements SessionRouteService {
     return (await this.create(sessionManager, sessionManager.getCwd())).runtime.session;
   }
 
-  /**
-   * Deliver a subsession-completion notice to the parent as a system-authored
-   * custom message rather than a user message, so it is not attributed to the
-   * human in the transcript. It still wakes an idle parent (`triggerTurn`) and
-   * queues behind in-flight work (`deliverAs: "followUp"`), preserving the
-   * established "queue if busy, send and act if idle" behavior.
-   */
-  private async notifyParentOfSubsession(parentId: string, childId: string, text: string): Promise<void> {
+  private async wakeParentForSubsession(parentId: string, childId: string): Promise<void> {
     try {
       const session = await this.getOrOpenParentForSubsession(parentId, childId);
-      if (this.treeNavigations.has(session)) {
-        const pending = this.deferredSubsessionNotifications.get(session) ?? [];
-        pending.push({ parentId, childId, text });
-        this.deferredSubsessionNotifications.set(session, pending);
-        return;
-      }
-      await this.deliverSubsessionNotification(session, { parentId, childId, text });
+      this.scheduleSubsessionDelivery(session);
     } catch (error: unknown) {
       this.logSubsessionNotificationFailure(parentId, childId, error);
     }
   }
 
-  private async deliverSubsessionNotification(session: PiAgentSession, notification: DeferredSubsessionNotification): Promise<void> {
-    await this.runSessionEntryMutation(session, "deliver a subsession notification", () => session.sendCustomMessage(
-      { customType: SUBSESSION_NOTIFICATION_CUSTOM_TYPE, content: notification.text, display: true, details: { sessionId: notification.childId } },
-      { triggerTurn: true, deliverAs: "followUp" },
-    ));
-    this.publishStatus(session);
+  /** Busy parents keep results in the inbox; never enqueue a second copy in Pi. */
+  private async deliverPendingSubsessionCompletions(session: PiAgentSession): Promise<void> {
+    if (this.hasActiveWork(session) || !this.isCurrentActiveSession(session) || this.subsessionStoppedParents.has(session)) return;
+    const inbox = this.subsessionInbox(session.sessionId, session.sessionFile);
+    const completions = inbox.claim();
+    if (completions.length === 0) return;
+    const completionIds = completions.map(({ completionId }) => completionId);
+    this.subsessionDeliveringParents.add(session);
+    let delivered = false;
+    try {
+      await this.runSessionEntryMutation(session, "deliver subsession results", () => session.sendCustomMessage(
+        {
+          customType: SUBSESSION_NOTIFICATION_CUSTOM_TYPE, display: true,
+          content: renderSubsessionCompletions(completions, this.workingSubsessionIds(session.sessionId)),
+          details: { sessionId: completions[0]?.sessionId, completionIds },
+        },
+        { triggerTurn: true },
+      ));
+      inbox.receive(completionIds);
+      delivered = true;
+    } catch (error: unknown) {
+      this.subsessionStoppedParents.add(session);
+      throw error;
+    } finally {
+      inbox.release(completionIds);
+      this.subsessionDeliveringParents.delete(session);
+      if (delivered) this.scheduleSubsessionDelivery(session);
+      this.publishStatus(session);
+    }
+  }
+
+  private scheduleSubsessionDelivery(session: PiAgentSession): void {
+    if (this.subsessionDeliveryScheduled.has(session) || this.subsessionInbox(session.sessionId, session.sessionFile).pending().length === 0) return;
+    this.subsessionDeliveryScheduled.add(session);
+    // Settlement can precede the host prompt-mutation receipt's finally block.
+    // Recheck on the next tick, closing the yield/child-completion race without
+    // restarting a stopped run or putting rendered answers in a follow-up queue.
+    setTimeout(() => {
+      this.subsessionDeliveryScheduled.delete(session);
+      void this.deliverPendingSubsessionCompletions(session).catch((error: unknown) => {
+        this.logSubsessionNotificationFailure(session.sessionId, "inbox", error);
+      });
+    }, 0);
   }
 
   private logSubsessionNotificationFailure(parentId: string, childId: string, error: unknown): void {
@@ -2732,11 +2812,6 @@ export class PiSessionService implements SessionRouteService {
       this.publishStatus(session);
       return;
     }
-    // A chat message answers the session's open ask in the user's own words, so
-    // the form is void: keeping it open would invite answers to questions the
-    // conversation has already moved past. Ignored duplicates skip this on
-    // purpose: they must not void an ask posted after the queued original.
-    await this.voidOpenAskForUserMessage(session);
     if (session.isCompacting) {
       this.enqueuePromptDuringCompaction(session, promptText, behavior ?? "followUp", images, echoUserMessage);
       return;
@@ -2784,6 +2859,7 @@ export class PiSessionService implements SessionRouteService {
       }
     });
     void promptPromise.catch((error: unknown) => {
+      this.subsessionStoppedParents.add(session);
       const message = error instanceof Error ? error.message : String(error);
       this.publishActivity(session, "error", "error", message);
       this.events.publish(session.sessionId, { type: "session.error", message });
@@ -2994,13 +3070,6 @@ export class PiSessionService implements SessionRouteService {
         return { cancelled: true, ...(result.aborted === undefined ? {} : { aborted: result.aborted }) };
       }
 
-      if (session.sessionManager.getLeafId() !== oldLeafId) {
-        // Questions belong to the position we left. Close them for every browser
-        // without appending a cancellation message or waking the rewound session.
-        const outcome = this.pendingAskStore.cancelOpen(session.sessionId);
-        if (outcome !== undefined) this.publishAskClosed(session.sessionId, outcome);
-      }
-
       if (result.summaryEntry !== undefined) {
         // A summary entry durably identifies the selected branch as the file's
         // newest leaf, superseding any earlier bare selection.
@@ -3032,7 +3101,6 @@ export class PiSessionService implements SessionRouteService {
         this.publishStatus(session);
       } else {
         this.deferredGeneratedSessionNames.delete(session);
-        this.deferredSubsessionNotifications.delete(session);
       }
     }
   }
@@ -3440,6 +3508,7 @@ export class PiSessionService implements SessionRouteService {
     if (active === undefined) return;
     const sessionId = active.runtime.session.sessionId;
     this.clearCompactionPromptQueue(sessionId);
+    this.subsessionStoppedParents.add(active.runtime.session);
     clearSessionQueue(active.runtime.session);
     // Settle run-scoped dialogs now, at abort-request time: pi's agent loop
     // waits for a parked `tool_call` dialog handler before it can emit
@@ -3614,11 +3683,8 @@ export class PiSessionService implements SessionRouteService {
     }
     if (!active) return;
     this.forgetUnreadActivity(active.runtime.session);
-    // An open ask is meaningful only while the runtime that posted it exists: no
-    // one is left to receive the answers, so it is dropped without an outcome.
-    this.pendingAskStore.forgetSession(sessionId);
-    // Open dialogs share that stance, but their extension waiters are parked
-    // Promises inside the dying runtime: settle them rather than dropping them.
+    // Extension dialog waiters are parked Promises inside the dying runtime:
+    // settle them rather than dropping them.
     this.endSessionExtensionDialogs(sessionId);
     this.active.delete(sessionId);
     this.events.mediaIndex.forgetSession({ id: sessionId, cwd: active.runtime.session.sessionManager.getCwd() });
@@ -4310,9 +4376,28 @@ export class PiSessionService implements SessionRouteService {
         if (sessionId !== session.sessionId) this.clearCompactionPromptQueue(sessionId);
       }
     }
+    this.restoreSubsessionReceipts(session);
     const unsubscribe = session.subscribe((event) => {
       const eventType = getString(event, "type");
       const message = getProperty(event, "message");
+      const inbox = this.subsessionInbox(session.sessionId, session.sessionFile);
+      if (eventType === "agent_start") {
+        this.restoreSubsessionReceipts(session, false);
+        this.subsessionStoppedParents.delete(session);
+      }
+      if (eventType === "message_end" && getString(message, "role") === "assistant"
+        && (getString(message, "stopReason") === "aborted" || getString(message, "stopReason") === "error")) {
+        this.subsessionStoppedParents.add(session);
+      }
+      const entry = getProperty(event, "entry");
+      if (eventType === "entry_appended" && getString(entry, "type") === "custom_message"
+        && getString(entry, "customType") === SUBSESSION_NOTIFICATION_CUSTOM_TYPE) {
+        inbox.receive(completionReceiptIds(getProperty(entry, "details")));
+      }
+      // message_end listeners run before SDK persistence. These later
+      // boundaries can safely reconcile committed messages and failed intents.
+      if (eventType === "turn_end" || eventType === "agent_settled") this.restoreSubsessionReceipts(session);
+      if (eventType === "agent_settled") this.scheduleSubsessionDelivery(session);
       if ((eventType === "message_start" || eventType === "message_update") && getString(message, "role") === "assistant") {
         // SDK state advances before async extension hooks finish. Capture only
         // published messages, detaching even blocks left intact by projection.
@@ -4328,21 +4413,13 @@ export class PiSessionService implements SessionRouteService {
       }
       this.events.publish(session.sessionId, clientEvent, { id: session.sessionId, cwd: session.sessionManager.getCwd() });
       this.publishActivityForEvent(session, event);
-      // Queued messages can reach the model after an ask opened, even though
-      // there was no ask to dismiss when the user originally submitted them.
-      if (eventType === "message_start" && isRecord(event) && getString(event["message"], "role") === "user") {
-        void this.voidOpenAskForUserMessage(session).catch((error: unknown) => {
-          const message = error instanceof Error ? error.message : String(error);
-          this.publishActivity(session, "error", "error", message);
-          this.events.publish(session.sessionId, { type: "session.error", message });
-        });
-      }
       if (eventType === "message_start" && getString(message, "role") === "user") this.suggestedInputs.delete(session.sessionId);
       if (eventType === "agent_end") this.abortRunScopedExtensionDialogs(session.sessionId);
       if (eventType === "compaction_end") this.scheduleCompactionQueueDrain(session.sessionId);
+      if (eventType === "compaction_end" || eventType === "bash_execution_end") this.scheduleSubsessionDelivery(session);
       if (eventType === "agent_start" || eventType === "agent_end") this.scheduleCompactionQueueDrain(session.sessionId);
       this.publishStatus(session);
-      this.updateSubsessionTracking(session, eventType === "agent_start");
+      this.updateSubsessionTracking(session, eventType === "agent_start", eventType === "agent_settled");
     });
     active.unsubscribe = () => {
       this.sessionEvents.close(session);
@@ -4449,13 +4526,8 @@ export class PiSessionService implements SessionRouteService {
       }
     }
 
-    const notifications = this.deferredSubsessionNotifications.get(session) ?? [];
-    this.deferredSubsessionNotifications.delete(session);
-    for (const notification of notifications) {
-      void this.deliverSubsessionNotification(session, notification).catch((error: unknown) => {
-        this.logSubsessionNotificationFailure(notification.parentId, notification.childId, error);
-      });
-    }
+    this.restoreSubsessionReceipts(session);
+    this.scheduleSubsessionDelivery(session);
   }
 
   applyAuthChange(change: AuthChange = {}): void {
@@ -4620,6 +4692,7 @@ export class PiSessionService implements SessionRouteService {
     if (remaining <= 0) this.sessionEntryMutationCounts.delete(session);
     else this.sessionEntryMutationCounts.set(session, remaining);
     this.observeUnreadActivityState(session);
+    if (remaining <= 0 && !this.subsessionDeliveringParents.has(session)) this.scheduleSubsessionDelivery(session);
   }
 
   private isSessionEntryMutationActive(session: PiAgentSession, ignoredReceipts = 0): boolean {
@@ -4749,7 +4822,6 @@ export class PiSessionService implements SessionRouteService {
     const model = session.model === undefined ? undefined : modelToClientModel(session.model);
     const contextUsage = session.getContextUsage();
     const warnings = this.warningsForSession(session);
-    const pendingAsk = this.pendingAskStore.pendingAsk(session.sessionId);
     const pendingDialogs = this.pendingExtensionDialogStore.pendingDialogs(session.sessionId);
     const suggestedInput = this.suggestedInputs.get(session.sessionId);
     return {
@@ -4768,7 +4840,6 @@ export class PiSessionService implements SessionRouteService {
       cost: stats.cost,
       ...(contextUsage === undefined ? {} : { contextUsage }),
       ...(warnings.length === 0 ? {} : { warnings }),
-      ...(pendingAsk === undefined ? {} : { pendingAsk }),
       ...(pendingDialogs.length === 0 ? {} : { pendingDialogs }),
       ...(suggestedInput === undefined ? {} : { suggestedInput }),
     };
@@ -5373,17 +5444,19 @@ const SUBSESSION_LINK_CUSTOM_TYPE = "pi-web.subsession.link";
 /** custom entry type used to mark a child as created by spawn_subsession. */
 const SUBSESSION_CHILD_LINK_CUSTOM_TYPE = "pi-web.subsession.spawned";
 
-/** customType marking a parent-facing subsession-completion notice. */
-const SUBSESSION_NOTIFICATION_CUSTOM_TYPE = "subsession.completion";
-
-const SUBSESSION_NOTIFICATION_MAX_OUTPUT_CHARS = 2000;
-
-/** Avoid duplicating a partial result in context when deliberate inspection can return the full output. */
-function formatSubsessionNotificationOutput(childSessionId: string, text: string): string {
-  if (text.length > SUBSESSION_NOTIFICATION_MAX_OUTPUT_CHARS) {
-    return `Output from subsession ${childSessionId} was too long for this completion notice and was omitted. Call check_subsession with sessionId "${childSessionId}" to retrieve the final output.`;
+/** A filtered read is a receipt only when it contains the complete latest final text. */
+function transcriptReturnsFinalOutput(messages: readonly unknown[], view: TranscriptView, finalText: string): boolean {
+  if (finalText === "") return false;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const text = finalAssistantText([messages[index]]);
+    if (text === "") continue;
+    const entry = view.entries.find((candidate) => candidate.index === index && candidate.role === "assistant");
+    if (entry === undefined || text !== finalText) return false;
+    const texts = entry.parts.filter((part) => part.kind === "text");
+    return texts.every((part) => part.truncated === undefined)
+      && texts.map((part) => part.text).join("\n").trim() === finalText.trim();
   }
-  return `--- SUBSESSION OUTPUT: ${childSessionId} ---\n${text === "" ? "(no output)" : text}`;
+  return false;
 }
 
 /** Most recent assistant text from a history message list, or "" if none. */
