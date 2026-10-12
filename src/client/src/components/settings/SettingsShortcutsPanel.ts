@@ -93,7 +93,7 @@ export class SettingsShortcutsPanel extends LitElement {
                 <option value="followUp">Follow-up</option>
               </select>
             </label>
-            <p>Applies only to the keyboard send shortcut. The chat buttons keep their fixed Send/Follow-up and Steer actions. Steer delivers before the next model call; follow-up waits until the response finishes. During compaction, messages always queue as follow-ups.</p>
+            <p>Keyboard shortcut only. Steer sends before the next model call; follow-up waits for the response to finish.</p>
           </section>
           ${groups.length === 0 ? html`<div class="loading-card">No actions registered.</div>` : groups.map((group) => html`
             <section class="shortcut-group">
