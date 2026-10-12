@@ -164,6 +164,8 @@ export interface PiWebThemePreference {
 export interface PiWebConfigValues {
   /** App-wide theme default; browser-local theme preferences take precedence. */
   defaultTheme?: PiWebThemePreference;
+  /** Gateway-wide send behavior while streaming; defaults to steer. */
+  defaultStreamingBehavior?: "steer" | "followUp";
   host?: string;
   port?: number;
   allowedHosts?: string[] | true;

@@ -242,6 +242,13 @@
 <td>Settings save / browser config refresh; no restart</td>
 </tr>
 <tr>
+<th scope="row">Streaming send default<br><code>defaultStreamingBehavior</code></th>
+<td>Global gateway; not project-local</td>
+<td><code>steer</code></td>
+<td>Choose in Settings → Keyboard shortcuts → Send while agent is running. Applies only to the keyboard send shortcut. Chat buttons keep their fixed order and actions: Send/Follow-up, Steer, then Stop. Keyboard send while streaming: <code>followUp</code> queues until the current response finishes; <code>steer</code> delivers before the next model call. Only these exact strings are accepted; omission uses <code>steer</code>. During compaction, messages remain queued as follow-ups.</td>
+<td>Settings save / browser config refresh; no restart</td>
+</tr>
+<tr>
 <th scope="row"><span id="shortcut-config" class="reference-anchor"></span>Keyboard bindings<br><code>shortcuts.&lt;actionId&gt;</code></th>
 <td>Gateway</td>
 <td>Built-in bindings</td>

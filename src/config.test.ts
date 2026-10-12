@@ -67,6 +67,29 @@ describe("PI WEB config persistence", () => {
     expect(() => loadPiWebConfig(testOptions())).toThrow("PI WEB config defaultTheme");
   });
 
+  it.each(["steer", "followUp"] as const)("round-trips and clears defaultStreamingBehavior %s", async (defaultStreamingBehavior) => {
+    savePiWebConfig({ defaultStreamingBehavior }, testOptions());
+    expect(loadPiWebConfig(testOptions()).config.defaultStreamingBehavior).toBe(defaultStreamingBehavior);
+    const current = loadPiWebConfig(testOptions()).config;
+    savePiWebConfig({ ...current, port: 9000 }, testOptions());
+    expect(effectivePiWebConfig(testOptions()).config.defaultStreamingBehavior).toBe(defaultStreamingBehavior);
+
+    savePiWebConfig({ port: 9000 }, testOptions());
+    expect(loadPiWebConfig(testOptions()).config).not.toHaveProperty("defaultStreamingBehavior");
+    expect(JSON.parse(await readFile(configPath, "utf8"))).not.toHaveProperty("defaultStreamingBehavior");
+  });
+
+  it.each(["", "followup", "queue", null, false, 42, {}, []])("rejects invalid defaultStreamingBehavior %j on load and save", async (value) => {
+    await writeFile(configPath, JSON.stringify({ defaultStreamingBehavior: value }), "utf8");
+    expect(() => loadPiWebConfig(testOptions())).toThrow("PI WEB config defaultStreamingBehavior");
+    const original = await readFile(configPath, "utf8");
+    // Model an untyped caller at the persistence boundary.
+    const invalid = { defaultStreamingBehavior: value };
+    // @ts-expect-error Deliberately exercise invalid untyped config input.
+    expect(() => savePiWebConfig(invalid, testOptions())).toThrow("PI WEB config defaultStreamingBehavior");
+    expect(await readFile(configPath, "utf8")).toBe(original);
+  });
+
   it("rejects invalid plugin config", async () => {
     await writeFile(configPath, `${JSON.stringify({ plugins: { info: { enabled: "no" } } }, null, 2)}\n`, "utf8");
 
