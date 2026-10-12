@@ -84,6 +84,17 @@ export class SettingsShortcutsPanel extends LitElement {
             <code>${this.configResponse?.path ?? "Unknown"}</code>
             <small>Shortcut overrides are saved under <code>shortcuts</code>. A value of <code>null</code> disables the action shortcut.</small>
           </div>
+          <section class="shortcut-group">
+            <h3>Send behavior</h3>
+            <label class="shortcut-input-label">
+              <span>Send while agent is running</span>
+              <select aria-label="Send while agent is running" .value=${this.configResponse?.config.defaultStreamingBehavior ?? "steer"} ?disabled=${this.loading || this.saving || this.configResponse === undefined} @change=${(event: Event) => { void this.saveSendBehavior(event); }}>
+                <option value="steer">Steer (default)</option>
+                <option value="followUp">Follow-up</option>
+              </select>
+            </label>
+            <p>Applies only to the keyboard send shortcut. The chat buttons keep their fixed Send/Follow-up and Steer actions. Steer delivers before the next model call; follow-up waits until the response finishes. During compaction, messages always queue as follow-ups.</p>
+          </section>
           ${groups.length === 0 ? html`<div class="loading-card">No actions registered.</div>` : groups.map((group) => html`
             <section class="shortcut-group">
               <h3>${group.name}</h3>
@@ -95,6 +106,12 @@ export class SettingsShortcutsPanel extends LitElement {
         `}
       </settings-panel-frame>
     `;
+  }
+
+  private async saveSendBehavior(event: Event): Promise<void> {
+    const value = event.target instanceof HTMLSelectElement ? event.target.value : undefined;
+    if (value !== "steer" && value !== "followUp") return;
+    await this.onSave?.({ ...(this.configResponse?.config ?? {}), defaultStreamingBehavior: value });
   }
 
   private panelNotices(): readonly SettingsNotice[] {
@@ -299,7 +316,9 @@ export class SettingsShortcutsPanel extends LitElement {
     h3, p { margin: 0; }
     h3 { font-size: 13px; line-height: 1.3; }
     p { color: var(--pi-muted); line-height: 1.45; }
-    button, input { font: inherit; }
+    button, input, select { font: inherit; }
+    select { border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-bg); color: var(--pi-text); padding: 8px 9px; }
+    select:disabled { opacity: .55; cursor: not-allowed; }
     button { border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); color: var(--pi-text); padding: 7px 9px; cursor: pointer; }
     button:disabled, input:disabled { opacity: .55; cursor: not-allowed; }
     .primary { border-color: var(--pi-accent); background: var(--pi-selection-bg); color: var(--pi-text-bright); }

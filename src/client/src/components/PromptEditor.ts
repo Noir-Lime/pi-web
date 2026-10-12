@@ -44,6 +44,7 @@ type PromptSendHandler = ((...args: PromptSendArgs) => void | Promise<void>) | (
 export class PromptEditor extends LitElement {
   @property({ type: Boolean }) disabled = false;
   @property({ attribute: false }) shortcuts: ShortcutPreferenceConfig = {};
+  @property() defaultStreamingBehavior: "steer" | "followUp" = "steer";
   @property() sessionId?: string;
   @property() cwd?: string;
   @property() machineId = "local";
@@ -486,7 +487,7 @@ export class PromptEditor extends LitElement {
       return true;
     }
     if (send) {
-      this.send(this.canSteer || this.isCompacting ? "followUp" : undefined);
+      this.send(this.defaultSendBehavior());
       return true;
     }
     if (event.key === "Enter" && !event.ctrlKey && !event.metaKey && !event.altKey) {
@@ -532,6 +533,11 @@ export class PromptEditor extends LitElement {
       ...(item.argumentHint === undefined || item.argumentHint === "" ? {} : { effects: setPromptArgumentHint.of({ pos: cursor, text: item.argumentHint }) }),
     });
     this.completions = [];
+  }
+
+  private defaultSendBehavior(): "steer" | "followUp" | undefined {
+    if (this.isCompacting) return "followUp";
+    return this.canSteer ? this.defaultStreamingBehavior : undefined;
   }
 
   private send(streamingBehavior?: "steer" | "followUp") {

@@ -36,7 +36,7 @@ describe("settings-shortcuts-panel layout", () => {
     button(frame, "Reload").click();
     expect(panel.onReload).toHaveBeenCalledOnce();
     expect(panel.renderRoot.querySelector(".config-path-card")?.textContent).toContain("/tmp/pi-web/config.json");
-    expect(panel.renderRoot.querySelector("h3")?.textContent).toBe("Chat composer");
+    expect([...panel.renderRoot.querySelectorAll("h3")].map((heading) => heading.textContent)).toContain("Chat composer");
     expect(row(panel, COMPOSER_SEND_DESKTOP).textContent).toContain("Send message — desktop");
     expect(row(panel, COMPOSER_SEND_MOBILE).textContent).toContain("Send message — touch or narrow screen");
     expect(panel.renderRoot.querySelectorAll("article")).toHaveLength(2);
@@ -54,6 +54,25 @@ describe("settings-shortcuts-panel layout", () => {
     expect(panel.renderRoot.querySelector(".loading-card")?.textContent).toBe("Loading shortcuts…");
     expect(panel.renderRoot.querySelector(".config-path-card")).toBeNull();
     expect(panel.renderRoot.querySelector(".prompt-enter-card")).toBeNull();
+  });
+});
+
+describe("settings-shortcuts-panel send behavior", () => {
+  it("defaults to steer and saves either behavior without dropping other config", async () => {
+    const onSave = vi.fn<SaveHandler>();
+    const panel = await panelWithShortcuts({ shortcuts: { "core:other": "mod+o" } }, onSave);
+    const select = panel.renderRoot.querySelector<HTMLSelectElement>('select[aria-label="Send while agent is running"]');
+    if (select === null) throw new Error("Missing send behavior setting");
+    expect(select.value).toBe("steer");
+    select.value = "followUp";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onSave).toHaveBeenLastCalledWith({ shortcuts: { "core:other": "mod+o" }, defaultStreamingBehavior: "followUp" });
+    panel.configResponse = configResponse({ defaultStreamingBehavior: "followUp" });
+    await settle(panel);
+    expect(select.value).toBe("followUp");
+    select.value = "steer";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onSave).toHaveBeenLastCalledWith({ defaultStreamingBehavior: "steer" });
   });
 });
 

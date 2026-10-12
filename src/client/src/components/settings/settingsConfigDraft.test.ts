@@ -70,6 +70,12 @@ describe("settings config drafts", () => {
     })).toEqual({ allowedHosts: ["example.local", "192.168.1.20"] });
   });
 
+  it.each(["steer", "followUp"] as const)("preserves defaultStreamingBehavior %s during gateway edits", (defaultStreamingBehavior) => {
+    const draft = gatewayServerDraftFromConfig({ host: "gateway.local" });
+    expect(gatewayServerConfigFromDraft(draft, { defaultStreamingBehavior }).defaultStreamingBehavior).toBe(defaultStreamingBehavior);
+    expect(gatewayServerConfigFromDraft(draft)).not.toHaveProperty("defaultStreamingBehavior");
+  });
+
   it("builds selected-machine access/upload patches only from selected-machine-safe fields", () => {
     const patch = machineAccessConfigPatchFromDraft({
       allowedPathsText: "/tmp\n~/SDKs\n",

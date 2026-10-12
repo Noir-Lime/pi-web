@@ -64,8 +64,14 @@ Process restarts depend on the key:
 - `plugins`: browser-only changes apply after a browser-tab reload. Any enablement, global or project settings, package-source, or package-revision change affecting a `serverModule` requires a manual session-daemon restart, then a browser reload for its paired UI. Server-plugin settings are fixed snapshots, not live config; see [Project plugin settings](#project-plugin-settings).
 - `serverPlugins.safeStart`: persistent offline recovery state applied before server-plugin discovery/import on the next sessiond start; use the `pi-web plugins safe-start ...` CLI rather than hand-editing it.
 - Pi package install/remove/update: not a PI WEB config key; after a mutation, type `/reload` in each idle PI WEB session on the target machine to refresh ordinary Pi resources such as extensions, skills, prompt templates, themes, and context/system prompt files. For a PI WEB package with `serverModule`, manually restart `pi-web-sessiond.service`, then reload the browser. If a global Pi extension adds or removes a model provider, or changes a provider's connection settings, the same manual sessiond restart is required; `/reload` cannot change either startup snapshot. A known Pi model provider refreshing only its own model list is applied without a restart. See [Pi extension provider baseline](#pi-extension-provider-baseline).
-- `shortcuts`: saved settings apply in the browser after config refresh/save.
+- `shortcuts` / `defaultStreamingBehavior`: saved settings apply in the browser after config refresh/save; no service restart.
 - `defaultTheme`: applies after settings save or browser config refresh when the browser has no local theme override; no service restart.
+
+### Streaming send default
+
+In **Settings → Keyboard shortcuts → Send while agent is running**, choose **Steer** or **Follow-up** for the keyboard send shortcut. The chat buttons keep their fixed order and actions: Send/Follow-up, Steer, then Stop.
+
+`defaultStreamingBehavior` chooses the keyboard send action while the agent is streaming: `followUp` queues the message until the current response finishes; `steer` delivers it before the next model call. Omitting the setting defaults to `steer`. During compaction, messages remain queued as follow-ups. Only these two exact string values are accepted. This browser-facing preference lives in the global gateway config, including when a remote machine is selected; it is not a project-local setting.
 
 ## Global config example
 
@@ -74,6 +80,7 @@ Process restarts depend on the key:
   "host": "127.0.0.1",
   "port": 8504,
   "defaultTheme": { "themeId": "themes:pi-web-dark", "auto": true },
+  "defaultStreamingBehavior": "steer",
   "pathAccess": {
     "allowedPaths": ["~/SDKs", "/opt/reference"]
   },
@@ -194,6 +201,7 @@ Rows with JSON key `—` are runtime-only environment variables, not config-file
 | Git worktree discovery hooks | `plugins.git.settings.workspaceDiscoveryHooks` | — | Global + project | Project boolean overrides global; default `true` | Manually restart session daemon; browser reload alone does not apply changes |
 | Server-plugin safe start | `serverPlugins.safeStart` | — | Global/offline recovery | Not supported locally; manage with `pi-web plugins safe-start ...` | Applied before discovery/import on next sessiond start |
 | Default browser theme | `defaultTheme.themeId`, `defaultTheme.auto` | — | Gateway global | Not supported locally; device choices take precedence | Settings save / browser config refresh; no restart |
+| Streaming send default | `defaultStreamingBehavior` | — | Global gateway | Not supported locally | Applies after settings save/config refresh; defaults to `steer` |
 | Keyboard shortcuts | `shortcuts.<actionId>` | — | Global | Not supported locally | Applies after settings save/config refresh |
 | Project config version | `version` | — | Project | Project-local only; must be `1` when present | Next project-config read |
 | **Runtime-only environment variables** |  |  |  |  |  |

@@ -79,6 +79,37 @@ describe("config routes", () => {
     expect(service.write).not.toHaveBeenCalled();
   });
 
+  it.each(["steer", "followUp"] as const)("accepts defaultStreamingBehavior %s through config routes and response parsing", async (defaultStreamingBehavior) => {
+    const config = { defaultStreamingBehavior };
+    const response = await app.inject({ method: "PUT", url: "/api/config", payload: { config } });
+    expect(response.statusCode).toBe(200);
+    expect(savedConfig).toEqual(config);
+    expect(parsePiWebConfigResponseBody(response.json())).toMatchObject({ config, effectiveConfig: config });
+  });
+
+  it.each(["", "followup", "queue", null, false, 42, {}, []])("rejects invalid defaultStreamingBehavior %j before writing and in responses", async (defaultStreamingBehavior) => {
+    const config = { defaultStreamingBehavior };
+    const response = await app.inject({ method: "PUT", url: "/api/config", payload: { config } });
+    expect(response.statusCode).toBe(400);
+    expect(response.json<{ error: string }>().error).toContain("defaultStreamingBehavior");
+    expect(service.write).not.toHaveBeenCalled();
+    const valid = responseFor({}, true);
+    for (const field of ["config", "effectiveConfig"]) {
+      expect(() => parsePiWebConfigResponseBody({ ...valid, [field]: config })).toThrow("defaultStreamingBehavior");
+    }
+  });
+
+  it("keeps defaultStreamingBehavior gateway-only", async () => {
+    savedConfig.defaultStreamingBehavior = "steer";
+    const read = await app.inject({ method: "GET", url: "/api/machines/local/config" });
+    expect(read.json<PiWebConfigResponse>().config).not.toHaveProperty("defaultStreamingBehavior");
+    expect(read.json<PiWebConfigResponse>().effectiveConfig).not.toHaveProperty("defaultStreamingBehavior");
+    const write = await app.inject({ method: "PUT", url: "/api/machines/local/config", payload: { config: { defaultStreamingBehavior: "followUp" } } });
+    expect(write.statusCode).toBe(400);
+    expect(service.write).not.toHaveBeenCalled();
+    expect(savedConfig.defaultStreamingBehavior).toBe("steer");
+  });
+
   it("rejects malformed theme defaults before writing", async () => {
     const response = await app.inject({ method: "PUT", url: "/api/config", payload: { config: { defaultTheme: { themeId: "themes:pi-web-dark", auto: "yes" } } } });
     expect(response.statusCode).toBe(400);

@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
 import type { PiWebConfigValues, PiWebDeprecatedAgentInput } from "./shared/apiTypes.js";
 import { isPiWebPluginId, piWebPluginIdPattern } from "./shared/pluginIds.js";
 import { requireDefaultThemePreference } from "./shared/themePreference.js";
+import { requireDefaultStreamingBehavior } from "./shared/streamingBehavior.js";
 
 export type PiWebConfig = PiWebConfigValues;
 
@@ -225,6 +226,7 @@ export function savePiWebConfig(config: PiWebConfig, options: LoadOptions = {}):
   delete existing["allowedHosts"];
   delete existing["shortcuts"];
   delete existing["defaultTheme"];
+  delete existing["defaultStreamingBehavior"];
   delete existing["plugins"];
   delete existing["pathAccess"];
   delete existing["uploads"];
@@ -256,6 +258,7 @@ function piWebConfigRecord(config: PiWebConfig): Record<string, unknown> {
     ...(config.allowedHosts !== undefined ? { allowedHosts: config.allowedHosts } : {}),
     ...(config.shortcuts !== undefined ? { shortcuts: config.shortcuts } : {}),
     ...(config.defaultTheme !== undefined ? { defaultTheme: config.defaultTheme } : {}),
+    ...(config.defaultStreamingBehavior !== undefined ? { defaultStreamingBehavior: config.defaultStreamingBehavior } : {}),
     ...(config.plugins !== undefined ? { plugins: config.plugins } : {}),
     ...(config.pathAccess !== undefined ? { pathAccess: config.pathAccess } : {}),
     ...(config.uploads !== undefined ? { uploads: config.uploads } : {}),
@@ -276,6 +279,7 @@ function parsePiWebConfig(value: Record<string, unknown>, path: string): PiWebCo
     ...(value["allowedHosts"] !== undefined ? { allowedHosts: parseAllowedHosts(value["allowedHosts"], path) } : {}),
     ...(value["shortcuts"] !== undefined ? { shortcuts: parseShortcuts(value["shortcuts"], path) } : {}),
     ...(value["defaultTheme"] !== undefined ? { defaultTheme: requireDefaultThemePreference(value["defaultTheme"], path) } : {}),
+    ...(value["defaultStreamingBehavior"] !== undefined ? { defaultStreamingBehavior: requireDefaultStreamingBehavior(value["defaultStreamingBehavior"], path) } : {}),
     ...(value["plugins"] !== undefined ? { plugins: parsePlugins(value["plugins"], path) } : {}),
     ...(value["pathAccess"] !== undefined ? { pathAccess: parsePathAccessConfig(value["pathAccess"], path) } : {}),
     ...(value["uploads"] !== undefined ? { uploads: parseUploadsConfig(value["uploads"], path) } : {}),
