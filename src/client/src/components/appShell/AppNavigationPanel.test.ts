@@ -191,11 +191,11 @@ describe("navigation order controls", () => {
     expect(panel.onSelectSession).not.toHaveBeenCalled();
 
     panel.pinnedRootIds = ["root"];
-    panel.savingNavigationOrder = true;
     await panel.updateComplete;
     await sessions.updateComplete;
     expect(sessions.pinnedRootIds).toEqual(["root"]);
-    expect(panel.shadowRoot?.querySelector('[role="status"]')?.textContent).toContain("Saving navigation order");
+    expect(panel.shadowRoot?.textContent).not.toContain("Saving navigation order");
+    expect(panel.shadowRoot?.querySelector(".order-status")).toBeNull();
   });
 });
 
