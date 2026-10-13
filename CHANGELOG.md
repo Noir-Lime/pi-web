@@ -1,5 +1,15 @@
 # @jmfederico/pi-web
 
+## 1.202610.3
+
+### Patch Changes
+
+- 5c682d1: Add opt-in instance namespaces for Git workspace-discovery hooks and ownership records without changing existing production registrations. Docker dev defaults to the `dev` namespace.
+- 493841b: Update runtime dependencies and keep Captain's Log and the session-bridge example compatible with Pi 1.2 custom-message startup events.
+- f25db9a: Add copy, recall, remove, and Steer/Queue controls to pending session messages. Recall restores only the text and clears later messages in delivery order, with an attachment-loss warning only when the recalled message has attachments. Switching modes appends to the destination queue. Show attachment indicators and counts on queued messages without loading previews, and use consistent control icons with accessible labels and tooltips. When the runtime cannot safely support individual queue controls, disable Recall, Remove, and Steer/Queue switches and show the reason while keeping Copy and Clear queue available.
+- 5843f4f: Remove the sidebar preference-saving notice to prevent flickering when opening a project for the first time after a page reload.
+- 5e3013f: Preserve streaming message elements when replies are finalized to prevent the chat viewport from jumping to the previous message.
+
 ## 1.202610.2
 
 ### Patch Changes
