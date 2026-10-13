@@ -55,6 +55,20 @@ describe("queued message actions", () => {
     await view.updateComplete;
     expect(view.shadowRoot?.querySelector(".queued-attachments")?.textContent).toContain("2 attachments");
   });
+  it("renders named icon-only queue controls, including both switch destinations", async () => {
+    const view = await queuedView();
+    view.onClearServerQueue = vi.fn();
+    await view.updateComplete;
+    for (const label of ["Clear queue", "Copy queued message", "Switch to Queue", "Switch to Steer", "Recall queued message", "Remove queued message"]) {
+      const control = button(view, `[aria-label="${label}"]`);
+      expect(control.title).not.toBe("");
+      expect(control.querySelector('[aria-hidden="true"]')).not.toBeNull();
+      expect(control.textContent.trim()).toBe(label === "Copy queued message" ? "⧉" : "");
+    }
+    button(view, '[aria-label="Switch to Steer"]').click();
+    expect(view.onQueuedMessageAction).toHaveBeenCalledWith({ machineId: "remote", sessionId: "session", action: "toggle", index: 2, expectedQueue: messages });
+  });
+
   it("copies text without mutating the queue and reports the outcome", async () => {
     const view = await queuedView();
     button(view, '[aria-label="Copy queued message"]').click();
@@ -79,7 +93,7 @@ describe("queued message actions", () => {
     const visibleReason = reason || "Individual queue controls are unavailable with this runtime.";
     expect(serverQueue?.textContent).toContain(visibleReason);
     expect(view.shadowRoot?.querySelector(".queued-messages")?.textContent).not.toContain(visibleReason);
-    const dependentControls = Array.from(serverQueue?.querySelectorAll<HTMLButtonElement>(".queued-action") ?? []).filter((control) => control.textContent !== "Copy");
+    const dependentControls = Array.from(serverQueue?.querySelectorAll<HTMLButtonElement>(".queued-action") ?? []).filter((control) => control.getAttribute("aria-label") !== "Copy queued message");
     expect(dependentControls).toHaveLength(messages.length * 3);
     for (const control of dependentControls) {
       expect(control.disabled).toBe(true);
