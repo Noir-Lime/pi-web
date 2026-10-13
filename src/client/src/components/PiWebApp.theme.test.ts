@@ -64,7 +64,7 @@ describe("app theme defaults and device overrides", () => {
     const panel = themePanel(app);
     selectTheme(panel, "themes:classic");
     await panel.updateComplete;
-    button(panel, "Use on this device").click();
+    button(panel, "Use in this browser").click();
     await app.updateComplete;
     expect(document.documentElement.dataset["piWebTheme"]).toBe("themes:classic");
     expect(JSON.parse(localStorage.getItem(THEME_STORAGE_KEY) ?? "null")).toEqual({ themeId: "themes:classic", auto: false });
@@ -86,7 +86,7 @@ describe("app theme defaults and device overrides", () => {
     const panel = themePanel(app);
     selectTheme(panel, "themes:pi-web-dark");
     await panel.updateComplete;
-    button(panel, "Set as default").click();
+    button(panel, "Set gateway default").click();
     await vi.waitFor(() => { expect(config.defaultTheme).toEqual({ themeId: "themes:pi-web-dark", auto: false }); });
     await app.updateComplete;
     expect(document.documentElement.dataset["piWebTheme"]).toBe("themes:classic");

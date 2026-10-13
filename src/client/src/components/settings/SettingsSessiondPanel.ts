@@ -1,5 +1,6 @@
 import { css, html, LitElement, type TemplateResult } from "lit";
 import { customElement, property } from "lit/decorators.js";
+import { live } from "lit/directives/live.js";
 import type { PiWebConfigResponse, PiWebConfigValues } from "../../api";
 import "./SettingsPanelFrame";
 import type { SettingsNotice } from "./SettingsPanelFrame";
@@ -31,8 +32,8 @@ export class SettingsSessiondPanel extends LitElement {
       <settings-panel-frame
         heading="Session daemon"
         .description=${sessiondDescription(this.targetLabel)}
-        actionLabel="Reload"
-        .actionDisabled=${this.loading}
+        actionLabel="Refresh settings"
+        .actionDisabled=${this.loading || this.saving}
         .notices=${this.panelNotices()}
         .onAction=${this.onReload}
       >
@@ -42,56 +43,60 @@ export class SettingsSessiondPanel extends LitElement {
             <code>${config.path}</code>
           </div>
           <div class="field">
-            <span class="field-heading">
-              <span>Allow agents to start sessions</span>
-              ${spawnOverridden ? html`<span class="override-badge">environment override</span>` : null}
-            </span>
             <label class="toggle">
               <input
                 type="checkbox"
-                .checked=${effectiveSpawn}
+                id="spawn-sessions"
+                aria-describedby="spawn-sessions-help"
+                .checked=${live(effectiveSpawn)}
                 ?disabled=${this.loading || this.saving || spawnOverridden}
                 @change=${(event: Event) => { void this.toggleSpawnSessions(event); }}
               >
-              <span>Enable the <code>spawn_session</code> tool</span>
+              <span>Allow agents to start sessions</span>
             </label>
-            <small>When enabled, LLMs can start new sessions, constrained to a workspace (any worktree) of the same registered project so every spawned session stays visible here. On by default.</small>
+            <small id="spawn-sessions-help">
+              Agents can start sessions in any workspace of the same registered project with <code>spawn_session</code>.
+              ${spawnOverridden ? html`Read-only because <code>PI_WEB_SPAWN_SESSIONS</code> overrides this setting. Change or remove it in the daemon environment to edit here.` : null}
+            </small>
           </div>
           <div class="field">
-            <span class="field-heading">
-              <span>Allow agents to start tracked subsessions</span>
-              ${subsessionsOverridden ? html`<span class="override-badge">environment override</span>` : null}
-            </span>
             <label class="toggle">
               <input
                 type="checkbox"
-                .checked=${effectiveSubsessions}
+                id="subsessions"
+                aria-describedby="subsessions-help"
+                .checked=${live(effectiveSubsessions)}
                 ?disabled=${this.loading || this.saving || subsessionsOverridden || !effectiveSpawn}
                 @change=${(event: Event) => { void this.toggleSubsessions(event); }}
               >
-              <span>Enable the <code>spawn_subsession</code> tools</span>
+              <span>Allow agents to track child sessions</span>
             </label>
-            <small>Agents can start child sessions they stay attached to (<code>spawn_subsession</code>, <code>list_subsessions</code>, <code>check_subsession</code>, <code>read_subsession</code>) and are notified when a child finishes. Requires "Allow agents to start sessions". On by default.</small>
+            <small id="subsessions-help">
+              Agents can start child sessions, check progress, and receive completion notifications with <code>spawn_subsession</code>, <code>list_subsessions</code>, <code>check_subsession</code>, and <code>read_subsession</code>.
+              ${!effectiveSpawn ? html`Enable “Allow agents to start sessions” first.` : html`Requires “Allow agents to start sessions”.`}
+              ${subsessionsOverridden ? html`Read-only because <code>PI_WEB_SUBSESSIONS</code> overrides this setting. Change or remove it in the daemon environment to edit here.` : null}
+            </small>
           </div>
           <div class="field">
-            <span class="field-heading">
-              <span>Allow agents to ask questions</span>
-              ${askUserOverridden ? html`<span class="override-badge">environment override</span>` : null}
-            </span>
             <label class="toggle">
               <input
                 type="checkbox"
-                aria-label="Enable Ask Questions"
-                .checked=${effectiveAskUser}
+                id="ask-user"
+                aria-describedby="ask-user-help"
+                .checked=${live(effectiveAskUser)}
                 ?disabled=${this.loading || this.saving || askUserOverridden}
                 @change=${(event: Event) => { void this.toggleAskUser(event); }}
               >
-              <span>Enable the <code>ask_user</code> tool</span>
+              <span>Allow agents to ask you questions</span>
             </label>
-            <small>Agents can post a structured question form and pause until the user responds. On by default.</small>
+            <small id="ask-user-help">
+              Agents can show a question form and wait for your answers with <code>ask_user</code>.
+              ${askUserOverridden ? html`Read-only because <code>PI_WEB_ASK_USER</code> overrides this setting. Change or remove it in the daemon environment to edit here.` : null}
+            </small>
           </div>
-          <section class="effective-card" aria-label="Desired session daemon configuration summary">
-            <h3>Desired after environment overrides</h3>
+          <section class="effective-card" aria-labelledby="restart-summary-heading" aria-describedby="restart-summary-help">
+            <h3 id="restart-summary-heading">After the next daemon restart</h3>
+            <small id="restart-summary-help">Saved settings with environment overrides applied. This does not show the running daemon’s active settings.</small>
             <dl>
               <div><dt>Spawn sessions</dt><dd>${effectiveSpawn ? "Enabled" : html`<span class="muted">Disabled</span>`}</dd></div>
               <div><dt>Subsessions</dt><dd>${effectiveSubsessions ? "Enabled" : html`<span class="muted">Disabled</span>`}</dd></div>
@@ -111,7 +116,7 @@ export class SettingsSessiondPanel extends LitElement {
   }
 
   private renderUnavailableConfigState(): TemplateResult {
-    return html`<div class="loading-card">${this.loading ? "Loading configuration…" : "Configuration is unavailable. Reload to try again."}</div>`;
+    return html`<div class="loading-card">${this.loading ? "Loading configuration…" : "Configuration is unavailable. Refresh settings to try again."}</div>`;
   }
 
   private async toggleSpawnSessions(event: Event): Promise<void> {
@@ -135,15 +140,13 @@ export class SettingsSessiondPanel extends LitElement {
     .loading-card, .config-path-card, .effective-card { border: 1px solid var(--pi-border); border-radius: 10px; background: var(--pi-surface); padding: 12px; }
     .loading-card { color: var(--pi-muted); }
     .config-path-card { display: grid; gap: 5px; }
-    .config-path-card span, .field-heading, dt { color: var(--pi-muted); font-size: 12px; font-weight: 700; text-transform: uppercase; }
+    .config-path-card span, dt { color: var(--pi-muted); font-size: 12px; font-weight: 700; text-transform: uppercase; }
     code { border: 1px solid var(--pi-border-muted); border-radius: 5px; background: var(--pi-bg); padding: 1px 4px; color: var(--pi-text); font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
     .field { display: grid; gap: 7px; }
-    .field small { color: var(--pi-muted); line-height: 1.45; }
-    .field-heading { display: flex; align-items: center; gap: 8px; }
+    .field small, .effective-card small { color: var(--pi-muted); line-height: 1.45; }
     .toggle { display: flex; align-items: center; gap: 9px; cursor: pointer; }
     .toggle input { width: 16px; height: 16px; }
     .toggle input:disabled { cursor: not-allowed; }
-    .override-badge { border: 1px solid var(--pi-warning-border); border-radius: 999px; color: var(--pi-warning); background: var(--pi-warning-surface); padding: 2px 7px; font-size: 11px; font-weight: 600; text-transform: none; }
     .effective-card { display: grid; gap: 10px; }
     .effective-card dl { display: grid; gap: 8px; margin: 0; }
     .effective-card dl > div { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 12px; align-items: baseline; }
@@ -157,7 +160,7 @@ export class SettingsSessiondPanel extends LitElement {
 }
 
 export function sessiondDescription(targetLabel: string): string {
-  return `Agent tool capabilities for sessions on ${targetLabel}. Changes are saved immediately but only take effect after the session daemon on that machine restarts.`;
+  return `Choose what agents can do on ${targetLabel}. Changes save immediately and take effect after that machine’s session daemon restarts. Restarting interrupts active sessions and running work.`;
 }
 
 export interface SessiondPanelNoticeContext {

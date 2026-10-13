@@ -29,8 +29,8 @@ export class SettingsPackagesPanel extends LitElement {
       <settings-panel-frame
         heading="Pi packages"
         .description=${packagesDescription(targetLabel)}
-        actionLabel="Reload"
-        actionTitle=${`Reload Pi packages from ${targetLabel}`}
+        actionLabel="Refresh package list"
+        actionTitle=${`Refresh Pi packages from ${targetLabel}`}
         .actionDisabled=${this.loading || this.isOperating}
         .notices=${this.panelNotices(showPackageControls)}
         .onAction=${this.onReload}
@@ -57,7 +57,7 @@ export class SettingsPackagesPanel extends LitElement {
 
   private renderPanelContent(packages: PiPackageInfo[], target: PiPackageTargetContext, targetLabel: string): TemplateResult | null {
     if (this.packagesResponse === undefined) {
-      return html`<div class="loading-card">${this.loading ? `Loading Pi packages from ${targetLabel}…` : `Pi package list unavailable for ${targetLabel}. Use Reload to try again.`}</div>`;
+      return html`<div class="loading-card">${this.loading ? `Loading Pi packages from ${targetLabel}…` : `Pi package list unavailable for ${targetLabel}. Choose Refresh package list to try again.`}</div>`;
     }
     return html`
       ${this.renderInstallableKnownPackages(targetLabel)}
@@ -72,7 +72,7 @@ export class SettingsPackagesPanel extends LitElement {
     return html`
       <section class="known-package-section" aria-label="Available known Pi packages">
         <h3>Available packages</h3>
-        <p>PI WEB ships these packages so you can install them on ${targetLabel} with one click, with no path to type — including one you previously removed.</p>
+        <p>Install a package included with PI WEB on ${targetLabel}.</p>
         <div class="known-package-list">
           ${suggestions.map((suggestion) => this.renderInstallableKnownPackage(suggestion))}
         </div>
@@ -88,7 +88,7 @@ export class SettingsPackagesPanel extends LitElement {
           <strong>${suggestion.label}</strong>
           <small>${suggestion.description}</small>
         </div>
-        <button title=${`Install ${suggestion.label}`} ?disabled=${this.isOperating} @click=${() => { void this.installKnownPackage(suggestion.source); }}>${installing ? "Installing…" : "Install"}</button>
+        <button title=${`Install ${suggestion.label}`} aria-label=${`Install ${suggestion.label}`} ?disabled=${this.isOperating} @click=${() => { void this.installKnownPackage(suggestion.source); }}>${installing ? "Installing…" : "Install"}</button>
       </article>
     `;
   }
@@ -98,11 +98,11 @@ export class SettingsPackagesPanel extends LitElement {
       <form class="install-card" @submit=${(event: Event) => { void this.installPackage(event); }}>
         <label for="package-source">Pi package source</label>
         <div class="install-row">
-          <input id="package-source" .value=${this.installSource} ?disabled=${this.isOperating} placeholder="npm:@scope/package, git URL, or local path" @input=${(event: Event) => { this.updateInstallSource(event); }}>
+          <input id="package-source" aria-describedby="package-source-help package-source-error" aria-invalid=${this.validationMessage !== "" ? "true" : "false"} .value=${this.installSource} ?disabled=${this.isOperating} placeholder="npm:@scope/package, git URL, or local path" @input=${(event: Event) => { this.updateInstallSource(event); }}>
           <button type="submit" title="Install this Pi package" ?disabled=${this.isOperating}>${isPiPackageOperationPending(this.operation, "install") ? "Installing…" : "Install"}</button>
         </div>
-        ${this.validationMessage === "" ? null : html`<div class="field-error">${this.validationMessage}</div>`}
-        <small>Installs run on ${targetLabel} and use Pi's default package location, equivalent to <code>pi install &lt;source&gt;</code>. PI WEB does not ask you to choose an install location.</small>
+        <div id="package-source-error" class="field-error" role="alert">${this.validationMessage}</div>
+        <small id="package-source-help">Enter an npm package, Git URL, or path on ${targetLabel}. Packages install in Pi’s default location, as with <code>pi install &lt;source&gt;</code>.</small>
       </form>
     `;
   }
@@ -153,8 +153,8 @@ export class SettingsPackagesPanel extends LitElement {
           ${updateReason === undefined ? null : html`<small class="action-note">${updateReason}</small>`}
         </div>
         <div class="package-actions">
-          <button class="secondary" title=${updateReason ?? "Update this Pi package"} ?disabled=${this.isOperating || updateReason !== undefined} @click=${() => { void this.updatePackage(packageInfo.source); }}>${updating ? "Updating…" : "Update"}</button>
-          <button class="danger" title="Remove this Pi package" ?disabled=${this.isOperating} @click=${() => { void this.removePackage(packageInfo); }}>${removing ? "Removing…" : "Remove"}</button>
+          <button class="secondary" aria-label=${`Update ${packageInfo.source}`} title=${updateReason ?? "Update this Pi package"} ?disabled=${this.isOperating || updateReason !== undefined} @click=${() => { void this.updatePackage(packageInfo.source); }}>${updating ? "Updating…" : "Update"}</button>
+          <button class="danger" aria-label=${`Remove ${packageInfo.source}`} title="Remove this Pi package" ?disabled=${this.isOperating} @click=${() => { void this.removePackage(packageInfo); }}>${removing ? "Removing…" : "Remove"}</button>
         </div>
       </article>
     `;
@@ -242,7 +242,7 @@ export class SettingsPackagesPanel extends LitElement {
     .package-list { display: grid; gap: 10px; }
     .package-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; }
     .package-card.filtered { opacity: .82; }
-    .package-main strong, .package-main small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .package-main strong, .package-main small { overflow-wrap: anywhere; }
     .package-actions { display: flex; align-items: center; gap: 8px; }
     code { border: 1px solid var(--pi-border-muted); border-radius: 5px; background: var(--pi-bg); padding: 1px 4px; color: var(--pi-text); font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
 

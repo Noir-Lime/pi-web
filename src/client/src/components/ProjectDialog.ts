@@ -24,6 +24,7 @@ export class ProjectDialog extends LitElement {
   @state() private suggestions: FileSuggestion[] = [];
   @state() private selected = 0;
   @state() private loading = false;
+  @state() private suggestionError = false;
   @state() private trust: ProjectTrustState | undefined;
   @state() private trustTouched = false;
   @query("input") private pathInput?: HTMLInputElement;
@@ -42,13 +43,15 @@ export class ProjectDialog extends LitElement {
   private async loadSuggestions() {
     const requestId = ++this.suggestionRequestId;
     this.loading = true;
+    this.suggestionError = false;
+    this.suggestions = [];
     try {
       const suggestions = await api.projectDirectories(this.path, this.machineId);
       if (requestId !== this.suggestionRequestId) return;
       this.suggestions = suggestions;
       this.selected = Math.min(this.selected, Math.max(0, suggestions.length - 1));
     } catch {
-      if (requestId === this.suggestionRequestId) this.suggestions = [];
+      if (requestId === this.suggestionRequestId) this.suggestionError = true;
     } finally {
       if (requestId === this.suggestionRequestId) this.loading = false;
     }
@@ -97,8 +100,9 @@ export class ProjectDialog extends LitElement {
       // Keep the previous value visible (cosmetic continuity) while the read
       // for the new path is in flight; the result replaces it either way.
       this.trust = {
-        ...(this.trust ?? { path: trimmed, decision: null, trusted: false }),
         path: trimmed,
+        decision: this.trust?.decision ?? null,
+        trusted: this.trust?.trusted ?? false,
         loading: true,
       };
     }
@@ -121,14 +125,18 @@ export class ProjectDialog extends LitElement {
     const unavailable = this.trust === undefined || this.trust.loading || this.trust.error !== undefined;
     return html`
       <label class="check">
-        <input type="checkbox" .checked=${this.trust?.trusted ?? false} ?disabled=${unavailable} @change=${(event: InputEvent) => { if (event.target instanceof HTMLInputElement) this.onTrustChange(event.target.checked); }} />
+        <input type="checkbox" aria-describedby=${this.trust?.error === undefined ? "project-trust-help" : "project-trust-help project-trust-error"} .checked=${this.trust?.trusted ?? false} ?disabled=${unavailable} @change=${(event: InputEvent) => { if (event.target instanceof HTMLInputElement) this.onTrustChange(event.target.checked); }} />
         <span>Trust this project</span>
       </label>
-      <small class="trust-hint">
+      <small id="project-trust-help" class="trust-hint">
         Trusting lets pi load this project's .pi settings, extensions, skills, and packages.
+        Extensions and packages can execute code on this machine. Only trust projects you know and trust.
         <a href="https://pi.dev/docs/latest/security" target="_blank" rel="noreferrer">Learn about project trust</a>
       </small>
-      ${this.trust?.error === undefined ? null : html`<small class="trust-error">Trust state unavailable: ${this.trust.error}</small>`}
+      ${this.trust?.error === undefined ? null : html`
+        <small id="project-trust-error" class="trust-error" role="alert">Could not check project trust: ${this.trust.error}. Retry to load the existing trust decision.</small>
+        <button type="button" @click=${() => { void this.loadTrust(); }}>Retry trust check</button>
+      `}
     `;
   }
 
@@ -165,21 +173,26 @@ export class ProjectDialog extends LitElement {
       >
         <header>
           <strong>Add project</strong>
-          <button @click=${() => { this.onCancel?.(); }} aria-label="Close">×</button>
+          <button @click=${() => { this.onCancel?.(); }} aria-label="Close add project">×</button>
         </header>
         <div class="body">
+          <small id="project-machine-help" class="machine-hint">${this.machineId === "local" ? "Folders on the local machine (where PI WEB runs)." : `Folders on remote machine: ${this.machineId}.`} Paths are on this machine, not your browser's device.</small>
           <label>
             Project folder
-            <input .value=${this.path} @input=${(event: InputEvent) => { this.onPathInput(event); }} placeholder="/path/to/project or ~/code/project" />
+            <input aria-describedby=${this.suggestionError ? "project-machine-help project-folder-error" : "project-machine-help project-folder-status"} .value=${this.path} @input=${(event: InputEvent) => { this.onPathInput(event); }} placeholder="/path/to/project or ~/code/project" />
           </label>
-          <div class="suggestions">
+          ${this.suggestionError ? html`
+            <div id="project-folder-error" class="trust-error" role="alert">Could not load folders on this machine. Check the connection and retry, or enter a folder path.</div>
+            <button type="button" @click=${() => { void this.loadSuggestions(); }}>Retry folder lookup</button>
+          ` : null}
+          <div id="project-folder-status" class="suggestions" aria-live="polite">
             ${this.loading ? html`<div class="hint">Loading folders…</div>` : null}
             ${this.suggestions.map((suggestion, index) => html`
               <button class=${index === this.selected ? "selected" : ""} @click=${() => { this.pick(suggestion); }}>
                 ${suggestion.path}
               </button>
             `)}
-            ${!this.loading && this.suggestions.length === 0 ? html`<div class="hint">No matching folders. Enter a new path to create it.</div>` : null}
+            ${!this.loading && !this.suggestionError && this.suggestions.length === 0 ? html`<div class="hint">No matching folders. Enter a new path to create it.</div>` : null}
           </div>
           <label class="check">
             <input type="checkbox" .checked=${this.createMissing} @change=${(event: InputEvent) => { this.onCreateMissingChange(event); }} />
@@ -209,7 +222,7 @@ export class ProjectDialog extends LitElement {
     .suggestions button.selected, .suggestions button:hover { background: var(--pi-selection-bg); }
     .hint { padding: 12px; color: var(--pi-muted); }
     .trust-error { color: var(--pi-danger, #c0392b); }
-    .trust-hint { color: var(--pi-muted); line-height: 1.3; }
+    .trust-hint, .machine-hint { color: var(--pi-muted); line-height: 1.3; }
     .trust-hint a { color: var(--pi-accent); }
     button { border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); color: var(--pi-text); padding: 7px 9px; cursor: pointer; }
     header button { border: 0; background: transparent; color: var(--pi-muted); font-size: 22px; padding: 0 8px; }

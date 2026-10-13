@@ -32,7 +32,7 @@ describe("saving a theme default", () => {
     vi.mocked(configApi.config).mockResolvedValue(configResponse(current));
     const save = vi.spyOn(configApi, "saveConfig").mockResolvedValue(configResponse({ ...current, defaultTheme }));
     vi.mocked(configApi.config).mockClear();
-    button(themePanel(dialog), "Set as default").click();
+    button(themePanel(dialog), "Set gateway default").click();
     await vi.waitFor(() => { expect(save).toHaveBeenCalledWith({ ...current, defaultTheme }); });
     await vi.waitFor(() => { expect(onSaved).toHaveBeenCalledWith({ ...current, defaultTheme }); });
     expect(vi.mocked(configApi.config).mock.calls).toContainEqual([]);
@@ -44,8 +44,8 @@ describe("saving a theme default", () => {
     const onSaved = vi.fn();
     dialog.onConfigSaved = onSaved;
     vi.spyOn(configApi, "saveConfig").mockRejectedValue(new Error("Disk is read-only"));
-    button(themePanel(dialog), "Set as default").click();
-    await vi.waitFor(() => { expect(generalPanel(dialog).error).toContain("Failed to save default theme: Disk is read-only"); });
+    button(themePanel(dialog), "Set gateway default").click();
+    await vi.waitFor(() => { expect(generalPanel(dialog).error).toContain("Couldn't save the default theme: Disk is read-only"); });
     expect(onSaved).not.toHaveBeenCalled();
     expect(themePanel(dialog).defaultPreference).toEqual({ themeId: "themes:pi-web-dark", auto: true });
   });
