@@ -198,6 +198,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     if (expanded.has(parentId)) expanded.delete(parentId);
     else expanded.add(parentId);
     this.expandedAgentParents = expanded;
+    if (!expanded.has(parentId)) this.selectedSessionIds = this.includeCollapsedChildren(this.selectedSessionIds);
     this.openMenuSessionId = undefined;
   }
 
@@ -260,7 +261,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
 
   override render() {
     const tree = this.sessionTree();
-    const { currentRows, currentSelectableSessions, archivedRows, archivedSessions, currentAgentOffsets, archivedAgentOffsets } = this.visibleSessionTree();
+    const { currentRows, archivedRows, currentAgentOffsets, archivedAgentOffsets } = this.visibleSessionTree();
     // The collapsed heading still needs tree counts, but never descendant actions.
     if (!this.collapsed) tree.descendantCounts ??= unarchivedDescendantCounts(this.sessions);
     const descendantCounts = tree.descendantCounts;
@@ -270,16 +271,16 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     const agentAttention = needsAgentAttention ? this.agentGroupAttention(tree.currentRows, tree.currentAgentGroups) : undefined;
     return html`
       <section>
-        ${this.renderHeading(tree.currentRows.length + tree.archivedRows.length, currentSelectableSessions, unreadCount)}
+        ${this.renderHeading(tree.currentRows.length + tree.archivedRows.length, tree.currentSelectableSessions, unreadCount)}
         ${this.collapsed ? null : html`
           <div class="list-body">
-            ${this.renderCurrentSelectionToolbar(currentSelectableSessions)}
+            ${this.renderCurrentSelectionToolbar(tree.currentSelectableSessions)}
             ${this.startingCount > 0 ? this.renderStartingSession() : null}
             ${repeat(currentRows, (row) => row.session.id, (row) => this.renderSession(row, "current", tree.currentAgentGroups.countByParentId.get(row.session.id) ?? 0, currentAgentOffsets.get(row.session.id) ?? 0, agentAttention?.get(row.session.id)))}
             ${tree.archivedRows.length > 0 ? html`
-              ${this.renderArchivedHeading(archivedSessions, tree.archivedRows.length)}
+              ${this.renderArchivedHeading(tree.archivedRows.length)}
               ${this.archivedExpanded ? html`
-                ${this.renderArchivedSelectionToolbar(archivedSessions)}
+                ${this.renderArchivedSelectionToolbar(tree.archivedSessions)}
                 ${repeat(archivedRows, (row) => row.session.id, (row) => this.renderSession(row, "archived", tree.archivedAgentGroups.countByParentId.get(row.session.id) ?? 0, archivedAgentOffsets.get(row.session.id) ?? 0))}
               ` : null}
             ` : null}
@@ -325,7 +326,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
   private renderCurrentSelectionButton(currentSessions: SessionInfo[]) {
     if (this.collapsed || currentSessions.length === 0) return null;
     const active = this.selectionScopes.has("current");
-    return html`<button class="bulk-select-entry ${active ? "selected" : ""}" title=${active ? "Close current session selection" : "Select current sessions"} aria-label=${active ? "Close current session selection" : "Select current sessions"} aria-expanded=${String(active)} aria-pressed=${String(active)} @click=${(event: MouseEvent) => { event.stopPropagation(); this.toggleSelection("current", currentSessions); }}>☑</button>`;
+    return html`<button class="bulk-select-entry ${active ? "selected" : ""}" title=${active ? "Close current session selection" : "Select current sessions"} aria-label=${active ? "Close current session selection" : "Select current sessions"} aria-expanded=${String(active)} aria-pressed=${String(active)} @click=${(event: MouseEvent) => { event.stopPropagation(); this.toggleSelection("current"); }}>☑</button>`;
   }
 
   private renderCleanupButton() {
@@ -349,19 +350,19 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     `;
   }
 
-  private renderArchivedHeading(archivedSessions: SessionInfo[], sessionCount: number) {
+  private renderArchivedHeading(sessionCount: number) {
     const active = this.selectionScopes.has("archived");
     return html`
       <h2 class="subheading">
         <button class="section-toggle" aria-expanded=${String(this.archivedExpanded)} @click=${() => { this.toggleArchived(); }}><span>${this.archivedExpanded ? "▾" : "▸"} Archived</span></button>
-        ${this.archivedExpanded ? html`<button class="bulk-select-entry ${active ? "selected" : ""}" title=${active ? "Close archived session selection" : "Select archived sessions"} aria-label=${active ? "Close archived session selection" : "Select archived sessions"} aria-expanded=${String(active)} aria-pressed=${String(active)} @click=${() => { this.toggleSelection("archived", archivedSessions); }}>☑</button>` : null}
+        ${this.archivedExpanded ? html`<button class="bulk-select-entry ${active ? "selected" : ""}" title=${active ? "Close archived session selection" : "Select archived sessions"} aria-label=${active ? "Close archived session selection" : "Select archived sessions"} aria-expanded=${String(active)} aria-pressed=${String(active)} @click=${() => { this.toggleSelection("archived"); }}>☑</button>` : null}
         <small class="section-count">${sessionCount}</small>
       </h2>
     `;
   }
 
-  private renderCurrentSelectionToolbar(visibleSessions: SessionInfo[]) {
-    if (visibleSessions.length === 0 || !this.selectionScopes.has("current")) return null;
+  private renderCurrentSelectionToolbar(sessions: SessionInfo[]) {
+    if (sessions.length === 0 || !this.selectionScopes.has("current")) return null;
 
     const selectedSessions = this.selectedSessions("current");
     const archivableSessions = selectedSessions.filter((session) => isArchivableSessionInfo(session, this.statuses[session.id]));
@@ -369,7 +370,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     return html`
       <div class="selection-toolbar">
         <div class="bulk-row selecting">
-          ${this.renderSelectionControls("current", visibleSessions)}
+          ${this.renderSelectionControls("current")}
           <div class="bulk-actions">
             <button ?disabled=${archivableSessions.length === 0} @click=${() => { this.archiveSelectedCurrent(); }}>Archive</button>
             <button ?disabled=${unreadSelectedSessions.length === 0} @click=${() => { this.markSelectedCurrentRead(); }}>Mark read</button>
@@ -379,14 +380,14 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     `;
   }
 
-  private renderArchivedSelectionToolbar(visibleSessions: SessionInfo[]) {
-    if (visibleSessions.length === 0 || !this.selectionScopes.has("archived")) return null;
+  private renderArchivedSelectionToolbar(sessions: SessionInfo[]) {
+    if (sessions.length === 0 || !this.selectionScopes.has("archived")) return null;
 
     const selectedSessions = this.selectedSessions("archived");
     return html`
       <div class="selection-toolbar">
         <div class="bulk-row selecting">
-          ${this.renderSelectionControls("archived", visibleSessions)}
+          ${this.renderSelectionControls("archived")}
           <div class="bulk-actions">
             <button class="danger" title="Permanently delete selected archived sessions" ?disabled=${selectedSessions.length === 0} @click=${() => { this.confirmDeleteSelectedArchived(); }}>Delete</button>
           </div>
@@ -397,16 +398,16 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
 
   /**
    * Shared selection toggle for both scopes. The toggle is binary: an empty
-   * selection offers to select every visible session, and any existing
+   * selection offers to select every session in the section, and any existing
    * selection offers to clear the whole scope. The selected count stays inside
    * the clear action so it cannot become a separate wrapping flex item.
    * Selection mode itself is exited from the same ☑ heading button that opened
    * it, so the toolbar carries no separate Done or Clear buttons.
    */
-  private renderSelectionControls(scope: SessionSelectionScope, visibleSessions: SessionInfo[]) {
+  private renderSelectionControls(scope: SessionSelectionScope) {
     const selectedCount = this.selectedSessions(scope).length;
     return selectedCount === 0
-      ? html`<button @click=${() => { this.selectVisibleSessions(visibleSessions); }}>Select visible</button>`
+      ? html`<button @click=${() => { this.selectAllSessions(scope); }}>Select all</button>`
       : html`<button @click=${() => { this.clearSelection(scope); }}>Clear selected (${selectedCount})</button>`;
   }
 
@@ -549,18 +550,20 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     void this.onArchiveMany?.(sessions);
   }
 
-  private toggleSelection(scope: SessionSelectionScope, visibleSessions: SessionInfo[]): void {
+  private toggleSelection(scope: SessionSelectionScope): void {
     if (this.selectionScopes.has(scope)) {
       this.closeSelection(scope);
       return;
     }
-    this.startSelection(scope, visibleSessions);
+    this.startSelection(scope);
   }
 
-  private startSelection(scope: SessionSelectionScope, visibleSessions: SessionInfo[]): void {
+  private startSelection(scope: SessionSelectionScope): void {
     this.selectionScopes = new Set([...this.selectionScopes, scope]);
+    const visible = this.visibleSessionTree();
+    const visibleSessions = scope === "current" ? visible.currentSelectableSessions : visible.archivedSessions;
     const onlyVisibleSession = visibleSessions.length === 1 ? visibleSessions[0] : undefined;
-    if (onlyVisibleSession !== undefined) this.selectedSessionIds = new Set([...this.selectedSessionIds, onlyVisibleSession.id]);
+    if (onlyVisibleSession !== undefined) this.selectedSessionIds = this.includeCollapsedChildren(new Set([...this.selectedSessionIds, onlyVisibleSession.id]));
   }
 
   private closeSelection(scope: SessionSelectionScope): void {
@@ -574,13 +577,47 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
   }
 
   private toggleSelected(sessionId: string): void {
+    const group = this.includeCollapsedChildren(new Set([sessionId]));
+    const selected = this.selectedSessionIds.has(sessionId);
     const next = new Set(this.selectedSessionIds);
-    if (next.has(sessionId)) next.delete(sessionId);
-    else next.add(sessionId);
+    for (const id of group) {
+      if (selected) next.delete(id);
+      else next.add(id);
+    }
     this.selectedSessionIds = next;
   }
 
-  private selectVisibleSessions(sessions: SessionInfo[]): void {
+  /** Materialize hidden children so counts, bulk actions, and later expansion agree. */
+  private includeCollapsedChildren(sessionIds: ReadonlySet<string>): ReadonlySet<string> {
+    if (sessionIds.size === 0) return sessionIds;
+    const tree = this.sessionTree();
+    const visible = this.visibleSessionTree();
+    const scopeById = new Map(this.sessions.map((session) => [session.id, sessionSelectionScope(session)]));
+    const next = new Set(sessionIds);
+    for (const scope of ["current", "archived"] as const) {
+      const inherited = new Set([...sessionIds].filter((id) => scopeById.get(id) === scope));
+      if (inherited.size === 0) continue;
+      for (const [rows, visibleRows, groups] of [
+        [tree.currentRows, visible.currentRows, tree.currentAgentGroups],
+        [tree.archivedRows, visible.archivedRows, tree.archivedAgentGroups],
+      ] as const) {
+        const visibleIds = new Set(visibleRows.map((row) => row.session.id));
+        // Parent-first order includes nested hidden groups even if their own toggle is expanded.
+        for (const { session } of rows) {
+          const parentId = groups.parentByAgentId.get(session.id);
+          if (parentId === undefined || visibleIds.has(session.id) || !inherited.has(parentId)) continue;
+          // Carry inheritance through mixed archive states without selecting outside the scope.
+          inherited.add(session.id);
+          if (sessionSelectionScope(session) === scope) next.add(session.id);
+        }
+      }
+    }
+    return next.size === sessionIds.size ? sessionIds : next;
+  }
+
+  private selectAllSessions(scope: SessionSelectionScope): void {
+    const tree = this.sessionTree();
+    const sessions = scope === "current" ? tree.currentSelectableSessions : tree.archivedSessions;
     this.selectedSessionIds = new Set([...this.selectedSessionIds, ...sessions.map((session) => session.id)]);
   }
 
@@ -592,6 +629,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     const existing = new Set(this.sessions.map((session) => session.id));
     const next = new Set([...this.selectedSessionIds].filter((sessionId) => existing.has(sessionId)));
     if (next.size !== this.selectedSessionIds.size) this.selectedSessionIds = next;
+    this.selectedSessionIds = this.includeCollapsedChildren(this.selectedSessionIds);
     if (this.selectionScopes.has("archived") && !this.sessions.some((session) => session.archived === true)) this.closeSelection("archived");
     if (this.selectionScopes.has("current") && !this.sessions.some((session) => session.archived !== true)) this.closeSelection("current");
   }

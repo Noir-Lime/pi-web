@@ -9,6 +9,7 @@ afterEach(() => {
   document.body.replaceChildren();
   localStorage.clear();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 function session(id: string, overrides: Partial<SessionInfo> = {}): SessionInfo {
@@ -222,23 +223,154 @@ describe("SessionList agent subsession controls", () => {
     expect(row(list, "user-agent")).not.toBeNull();
   });
 
-  it("Select visible excludes collapsed children while tree and descendant counts include them", async () => {
+  it("Select all includes collapsed descendants in counts and bulk actions without selecting archived sessions", async () => {
     const parent = session("parent");
     const agent = child("agent", parent, true);
+    const nested = child("nested", agent, true);
     const user = child("user", agent);
-    const list = await mount([parent, agent, user]);
+    const archived = session("archived", { archived: true });
+    const list = await mount([parent, agent, nested, user, archived]);
+    const archive = vi.fn();
+    const markRead = vi.fn();
+    list.onArchiveMany = archive;
+    list.onMarkReadMany = markRead;
+    list.unreadSessionIds = new Set([nested.id]);
     button(list.shadowRoot, "h2 .bulk-select-entry").click();
     await settle(list);
-    toolbarButton(list, "Select visible").click();
+    toolbarButton(list, "Select all").click();
     await settle(list);
     expect(list.shadowRoot?.querySelectorAll(".session-checkbox:checked")).toHaveLength(2);
-    expect(toolbarButton(list, "Clear selected (2)")).toBeDefined();
+    expect(toolbarButton(list, "Clear selected (4)")).toBeDefined();
+    toolbarButton(list, "Mark read").click();
+    expect(markRead).toHaveBeenCalledWith([nested]);
+
+    toolbarButton(list, "Clear selected (4)").click();
+    await settle(list);
     agentToggle(list, "parent").click();
     await settle(list);
     expect(row(list, "agent")?.querySelector<HTMLInputElement>("input")?.checked).toBe(false);
-    button(row(list, "parent"), ".action-menu-toggle").click();
+    toolbarButton(list, "Select all").click();
     await settle(list);
-    expect(list.shadowRoot?.querySelector(".action-menu-panel")?.textContent).toContain("Archive with descendants (2)");
+    agentToggle(list, "agent").click();
+    await settle(list);
+    expect(list.shadowRoot?.querySelectorAll(".session-checkbox:checked")).toHaveLength(4);
+    toolbarButton(list, "Archive").click();
+    expect(archive).toHaveBeenCalledWith([parent, agent, nested, user]);
+  });
+
+  it("toggles a collapsed parent's hidden descendants together but leaves visible children independent", async () => {
+    const parent = session("parent");
+    const agent = child("agent", parent, true);
+    const nested = child("nested", agent, true);
+    const user = child("user", agent);
+    const other = session("other");
+    const list = await mount([parent, agent, nested, user, other]);
+    button(list.shadowRoot, "h2 .bulk-select-entry").click();
+    await settle(list);
+    row(list, "parent")?.click();
+    await settle(list);
+    expect(toolbarButton(list, "Clear selected (3)")).toBeDefined();
+    expect(row(list, "user")?.querySelector<HTMLInputElement>("input")?.checked).toBe(false);
+    expect(row(list, "other")?.querySelector<HTMLInputElement>("input")?.checked).toBe(false);
+
+    agentToggle(list, "parent").click();
+    await settle(list);
+    expect(row(list, "agent")?.querySelector<HTMLInputElement>("input")?.checked).toBe(true);
+    agentToggle(list, "agent").click();
+    await settle(list);
+    const nestedCheckbox = row(list, "nested")?.querySelector<HTMLInputElement>("input");
+    expect(nestedCheckbox?.checked).toBe(true);
+    nestedCheckbox?.click();
+    await settle(list);
+    expect(toolbarButton(list, "Clear selected (2)")).toBeDefined();
+
+    // Collapsing a selected parent includes its hidden descendants even when
+    // a nested group was expanded and an individual child had been unchecked.
+    agentToggle(list, "parent").click();
+    await settle(list);
+    expect(toolbarButton(list, "Clear selected (3)")).toBeDefined();
+    row(list, "parent")?.querySelector<HTMLInputElement>("input")?.click();
+    await settle(list);
+    expect(toolbarButton(list, "Select all")).toBeDefined();
+    row(list, "parent")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, composed: true }));
+    await settle(list);
+    expect(toolbarButton(list, "Clear selected (3)")).toBeDefined();
+  });
+
+  it("selects expanded rows individually while a nested collapsed parent selects its own hidden children", async () => {
+    const parent = session("parent");
+    const agent = child("agent", parent, true);
+    const nested = child("nested", agent, true);
+    const list = await mount([parent, agent, nested]);
+    agentToggle(list, "parent").click();
+    await settle(list);
+    button(list.shadowRoot, "h2 .bulk-select-entry").click();
+    await settle(list);
+    row(list, "parent")?.querySelector<HTMLInputElement>("input")?.click();
+    await settle(list);
+    expect(toolbarButton(list, "Clear selected (1)")).toBeDefined();
+    expect(row(list, "agent")?.querySelector<HTMLInputElement>("input")?.checked).toBe(false);
+    row(list, "agent")?.querySelector<HTMLInputElement>("input")?.click();
+    await settle(list);
+    expect(toolbarButton(list, "Clear selected (3)")).toBeDefined();
+    row(list, "parent")?.querySelector<HTMLInputElement>("input")?.click();
+    await settle(list);
+    expect(toolbarButton(list, "Clear selected (2)")).toBeDefined();
+    expect(row(list, "agent")?.querySelector<HTMLInputElement>("input")?.checked).toBe(true);
+  });
+
+  it("includes collapsed children when auto-selecting the only visible row and when new children arrive", async () => {
+    const parent = session("parent");
+    const agent = child("agent", parent, true);
+    const list = await mount([parent, agent]);
+    button(list.shadowRoot, "h2 .bulk-select-entry").click();
+    await settle(list);
+    expect(toolbarButton(list, "Clear selected (2)")).toBeDefined();
+
+    const nested = child("nested", agent, true);
+    list.sessions = [parent, agent, nested];
+    await settle(list);
+    expect(toolbarButton(list, "Clear selected (3)")).toBeDefined();
+    button(list.shadowRoot, "h2 .bulk-select-entry").click();
+    await settle(list);
+    agentToggle(list, "parent").click();
+    await settle(list);
+    button(list.shadowRoot, "h2 .bulk-select-entry").click();
+    await settle(list);
+    expect(toolbarButton(list, "Select all")).toBeDefined();
+    expect(list.shadowRoot?.querySelectorAll(".session-checkbox:checked")).toHaveLength(0);
+  });
+
+  it("inherits current selection through a hidden archived ancestor without selecting that ancestor", async () => {
+    const parent = session("parent");
+    const archivedAgent = { ...child("archived-agent", parent, true), archived: true };
+    const nested = child("nested", archivedAgent, true);
+    const list = await mount([parent, archivedAgent, nested, session("other")]);
+    const archive = vi.fn();
+    list.onArchiveMany = archive;
+    button(list.shadowRoot, "h2 .bulk-select-entry").click();
+    await settle(list);
+    row(list, "parent")?.querySelector<HTMLInputElement>("input")?.click();
+    await settle(list);
+    expect(toolbarButton(list, "Clear selected (2)")).toBeDefined();
+    toolbarButton(list, "Archive").click();
+    expect(archive).toHaveBeenCalledWith([parent, nested]);
+  });
+
+  it("offers current Select all when the only visible row is an archived ancestor", async () => {
+    const parent = session("parent", { archived: true });
+    const agent = child("agent", parent, true);
+    const list = await mount([parent, agent]);
+    const archive = vi.fn();
+    list.onArchiveMany = archive;
+    button(list.shadowRoot, "h2 .bulk-select-entry").click();
+    await settle(list);
+    expect(row(list, "parent")?.querySelector("input")).toBeNull();
+    toolbarButton(list, "Select all").click();
+    await settle(list);
+    expect(toolbarButton(list, "Clear selected (1)")).toBeDefined();
+    toolbarButton(list, "Archive").click();
+    expect(archive).toHaveBeenCalledWith([agent]);
   });
 
   it("reveals a selected nested agent on navigation but not same-id refresh churn", async () => {
@@ -265,23 +397,53 @@ describe("SessionList agent subsession controls", () => {
     expect(row(list, "nested")).not.toBeNull();
   });
 
-  it("keeps archived child controls reachable and selects only visible archived rows", async () => {
+  it("Select all includes hidden archived children but excludes archived ancestors shown in the current tree", async () => {
     const parent = session("parent", { archived: true });
     const agent = session("agent", { parentSessionPath: parent.path, agentSubsession: true, archived: true });
     const other = session("other", { archived: true });
-    const list = await mount([parent, agent, other]);
+    const currentParent = session("current-parent", { archived: true });
+    const currentChild = child("current-child", currentParent, true);
+    const list = await mount([currentParent, currentChild, parent, agent, other]);
+    const deleteMany = vi.fn();
+    const confirmDelete = vi.fn(() => true);
+    vi.stubGlobal("confirm", confirmDelete);
+    list.onDeleteArchivedMany = deleteMany;
     button(list.shadowRoot, ".subheading .section-toggle").click();
     await settle(list);
     expect(list.shadowRoot?.querySelector(".subheading .section-count")?.textContent).toBe("3");
     expect(row(list, "agent")).toBeNull();
     button(list.shadowRoot, ".subheading .bulk-select-entry").click();
     await settle(list);
-    toolbarButton(list, "Select visible").click();
+    toolbarButton(list, "Select all").click();
     await settle(list);
     expect(list.shadowRoot?.querySelectorAll(".session-checkbox:checked")).toHaveLength(2);
-    list.selected = agent;
+    expect(toolbarButton(list, "Clear selected (3)")).toBeDefined();
+    toolbarButton(list, "Delete").click();
+    expect(confirmDelete).toHaveBeenCalledWith("Permanently delete 3 selected archived sessions? This cannot be undone.");
+    expect(deleteMany).toHaveBeenCalledWith([parent, agent, other]);
     await settle(list);
-    expect(row(list, "agent")).not.toBeNull();
+    agentToggle(list, "parent").click();
+    await settle(list);
+    expect(list.shadowRoot?.querySelectorAll(".session-checkbox:checked")).toHaveLength(0);
+  });
+
+  it("selects and deselects hidden archived children with their collapsed parent's checkbox", async () => {
+    const parent = session("parent", { archived: true });
+    const agent = { ...child("agent", parent, true), archived: true };
+    const list = await mount([parent, agent, session("other", { archived: true })]);
+    button(list.shadowRoot, ".subheading .section-toggle").click();
+    await settle(list);
+    button(list.shadowRoot, ".subheading .bulk-select-entry").click();
+    await settle(list);
+    row(list, "parent")?.querySelector<HTMLInputElement>("input")?.click();
+    await settle(list);
+    expect(toolbarButton(list, "Clear selected (2)")).toBeDefined();
+    row(list, "parent")?.querySelector<HTMLInputElement>("input")?.click();
+    await settle(list);
+    expect(toolbarButton(list, "Select all")).toBeDefined();
+    agentToggle(list, "parent").click();
+    await settle(list);
+    expect(row(list, "agent")?.querySelector<HTMLInputElement>("input")?.checked).toBe(false);
   });
 
   it("renders unavailable-parent agents and restores conservative collapsing when a parent arrives", async () => {
