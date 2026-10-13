@@ -2,4 +2,4 @@
 "@jmfederico/pi-web": patch
 ---
 
-Add plugin-defined chat message actions with per-message availability and scoped workflow helpers. Fork and Go back now use the same public contribution point, retaining their confirmations and guarded history behavior; Copy is unchanged.
+Let plugins add chat message actions, including actions on streaming messages and temporary success feedback. Move Copy, Fork, and Go back onto the shared plugin API while preserving their existing safeguards.

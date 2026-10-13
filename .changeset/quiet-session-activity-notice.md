@@ -2,4 +2,4 @@
 "@jmfederico/pi-web": patch
 ---
 
-Report recent activity in another PI WEB instance as session status rather than a diagnostic warning. The browser shows a dismissible notice over the blocked chat input, preserving drafts and attachments while keeping the transcript readable.
+Show a dismissible notice when another PI WEB instance is using a session, keeping the transcript readable and preserving drafts and attachments.

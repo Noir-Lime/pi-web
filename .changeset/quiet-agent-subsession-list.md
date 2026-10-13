@@ -2,4 +2,4 @@
 "@jmfederico/pi-web": patch
 ---
 
-Collapse verified agent subsessions by default, with centered expand/collapse chips hanging below each parent session card. User-created forks, clones, and sessions with unknown origin remain visible.
+Collapse agent subsessions by default while keeping user-created forks and clones visible. Show activity and unread indicators for hidden descendants, keep collapsed chips stable, and fix session-list scrollbar and menu overlap.

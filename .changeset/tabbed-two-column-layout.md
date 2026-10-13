@@ -2,4 +2,4 @@
 "@jmfederico/pi-web": patch
 ---
 
-Switch wide screens to a tabbed two-column layout when the workspace column is collapsed, and restore three columns when expanded. Remember both columns’ collapsed state in the browser across reloads.
+Use a tabbed two-column layout when the workspace column is collapsed, and remember collapsed columns across reloads. Keep panel tabs a consistent height with or without icons and badges.

@@ -151,7 +151,7 @@
 </tr>
 <tr>
 <th scope="row"><code>plugins.&lt;id&gt;.settings</code></th>
-<td>Overrides top-level setting keys over the plugin’s machine settings; nested objects are replaced, not deep-merged. For server plugins supporting project settings. <code>plugins.&lt;id&gt;.enabled</code> and project-level disablement are not supported. See <a href="#project-plugin-settings">snapshot and restart rules</a>.</td>
+<td>For supporting server plugins, project top-level keys override machine settings; nested objects are replaced rather than deep-merged. Enablement stays global. See <a href="#project-plugin-settings">scope and restart rules</a>.</td>
 </tr>
 <tr>
 <th scope="row"><code>version</code></th>
@@ -193,12 +193,12 @@
 <td>Rerun that same install command so both services use the same config.</td>
 </tr>
 <tr>
-<th scope="row">systemd cannot verify the loaded service environment</th>
-<td>The command fails rather than guesses if manager state is stale, the loaded fragment differs, or a PI WEB-managed environment value cannot be verified. Managed <code>Environment=</code> values (currently <code>PI_WEB_CONFIG</code>) must match the installed definition; unrelated variables are ignored. Drop-ins that leave managed values unchanged are allowed.</td>
+<th scope="row">systemd cannot verify the loaded service config</th>
+<td>The command stops. Reinstall services with the intended config path and reload the service manager before retrying.</td>
 </tr>
 <tr>
 <th scope="row">systemd uses <code>EnvironmentFile=</code></th>
-<td>Accepted with a nonfatal warning. File contents are not included in systemctl's <code>Environment</code> property and PI WEB does not inspect them, so config overrides in those files cannot be verified.</td>
+<td>Accepted with a warning; config-path overrides in that file cannot be verified.</td>
 </tr>
 <tr>
 <th scope="row">launchd has an old config path or a label loaded from another plist</th>
@@ -245,7 +245,7 @@
 <th scope="row">Streaming send default<br><code>defaultStreamingBehavior</code></th>
 <td>Global gateway; not project-local</td>
 <td><code>steer</code></td>
-<td>Choose in Settings → Keyboard shortcuts → Send while agent is running. Applies only to the keyboard send shortcut. Chat buttons keep their fixed order and actions: Send/Follow-up, Steer, then Stop. Keyboard send while streaming: <code>followUp</code> queues until the current response finishes; <code>steer</code> delivers before the next model call. Only these exact strings are accepted; omission uses <code>steer</code>. During compaction, messages remain queued as follow-ups.</td>
+<td>In Settings → Keyboard shortcuts → Send while agent is running, choose Steer (<code>steer</code>) to deliver input before the next model call, or Follow-up (<code>followUp</code>) to queue it until the response finishes. Changes only the keyboard shortcut, not the chat buttons. During compaction, messages queue as follow-ups.</td>
 <td>Settings save / browser config refresh; no restart</td>
 </tr>
 <tr>
@@ -270,8 +270,15 @@
 <td>Settings save / config refresh</td>
 </tr>
 </tbody></table></div>
-<details class="config-details"><summary>Default selection and shortcut rules</summary><ul><li>Model/thinking stars change new-session defaults, not the current session. Resumed sessions keep saved choices.</li><li>Project Pi settings, explicit startup choices, and per-model thinking settings can override defaults. If the default model is disabled, startup falls back to the first enabled model.</li><li><code>mod</code> means Ctrl or ⌘. App shortcuts support sequences; composer send bindings support one combination only.</li><li>Unassigned Enter/Shift+Enter insert newlines; Enter accepts a selected completion first. <code>null</code> disables keyboard submission, not the send button.</li><li>Existing browser-local Enter preferences remain the fallback until a composer binding is configured. Reset restores that fallback.</li></ul><p><a href="config.md#shortcut-config">Full shortcut matching rules →</a></p></details>
-<details class="config-details"><summary>Theme defaults and device choices</summary><p>In <strong>Settings → General → Theme</strong>, choose a theme and Auto mode, then select <strong>Use on this device</strong>, <strong>Set as default</strong>, or <strong>Use the default</strong>. The action palette’s Select theme action opens the same controls.</p><ul><li>Use on this device saves a browser-local override. Existing browser choices remain overrides.</li><li>Set as default writes global gateway config without changing saved device choices. Browsers following the default pick it up after a page reload or config refresh.</li><li>Use the default clears this browser’s override. Precedence is device choice → configured default → built-in default.</li><li>Use a qualified theme contribution ID, not a display name or theme-pair ID. Built-in IDs are <code>themes:pi-web-dark</code>, <code>themes:pi-web-light</code>, and <code>themes:classic</code>.</li><li>Auto must be a boolean. It follows this device’s light/dark preference for paired themes; unpaired themes stay selected. Auto off keeps the theme fixed.</li><li>Unavailable themes fall back to Classic without erasing the requested choice. Applying a default never creates a device override.</li><li>The default stays on the gateway, even with a remote machine selected. Project-local theme defaults and remote theme contributions are unsupported.</li></ul><pre><code>{ "defaultTheme": { "themeId": "themes:pi-web-dark", "auto": true } }</code></pre><p><a href="config.md#theme-default-and-device-choices">Full theme preference reference →</a></p></details>
+<details class="config-details"><summary>Default selection and shortcut rules</summary><ul><li>Model/thinking stars change new-session defaults, not the current session. Resumed sessions keep saved choices.</li><li>Project Pi settings, explicit startup choices, and per-model thinking settings can override defaults. If the default model is disabled, startup falls back to the first enabled model.</li><li><code>mod</code> means Ctrl or ⌘. App shortcuts support sequences; composer send bindings support one combination only.</li><li>Unassigned Enter/Shift+Enter insert newlines; Enter accepts a selected completion first. <code>null</code> disables keyboard submission, not the send button.</li><li>Existing browser-local Enter preferences remain the fallback until a composer binding is configured. Reset restores that fallback.</li></ul><p>App shortcuts do not start with unmodified or Shift-only keys while editing text. Avoid conflicting bindings and browser-reserved combinations. New bindings are saved in gateway config.</p></details>
+<details class="config-details"><summary>Theme defaults and device choices</summary>
+<p>In <strong>Settings → General → Theme</strong>, choose a theme and <strong>Auto</strong> mode, then:</p>
+<ul><li><strong>Use on this device</strong> saves a choice for this browser only.</li><li><strong>Set as default</strong> shares a default without replacing existing device choices.</li><li><strong>Use the default</strong> clears this browser’s override.</li></ul>
+<p>Device choices take precedence over the configured default, then the built-in default (PI WEB Dark with Auto on). Auto follows the device’s light/dark preference for paired themes; unpaired themes stay selected. Unavailable themes temporarily fall back to Classic without erasing the choice.</p>
+<p>The default belongs to the gateway, not a project or remote machine. Changes apply after settings save or browser config refresh, with no service restart.</p>
+<pre><code>{ "defaultTheme": { "themeId": "themes:pi-web-dark", "auto": true } }</code></pre>
+<p>Use a theme contribution ID rather than a display name. Built-in IDs are <code>themes:pi-web-dark</code>, <code>themes:pi-web-light</code>, and <code>themes:classic</code>.</p>
+</details>
 <h3 id="prompt-completions">Composer shortcuts (not config keys)</h3>
 <div class="table-scroll" role="region" aria-label="Completion triggers" tabindex="0">
 <table class="reference-table ">
@@ -343,7 +350,7 @@
 </tr>
 </tbody></table></div>
 <div class="callout warning"><strong>External paths are not an agent sandbox.</strong> The allowlist controls PI WEB browser/API file exposure, not the underlying agent’s or OS user’s permissions.</div>
-<details class="config-details"><summary>Path formats, overwrite behavior, and folder rules</summary><ul><li><strong>External roots:</strong> existing directories using absolute paths or <code>~</code>, such as <code>/opt/reference</code>, <code>~/SDKs</code>, or Windows absolute paths on Windows hosts. Relative roots are not supported; symlink escapes are rejected.</li><li><strong>Upload/attachment folders:</strong> nonempty workspace-relative paths. Absolute paths and <code>..</code> traversal are rejected; repeated separators and backslashes are normalized.</li><li><strong>Uploads:</strong> create parent folders; existing files are preserved unless overwrite is enabled in the review dialog. Direct drops never overwrite.</li><li><strong>Upload dialog only:</strong> clear the destination field to upload that batch to the workspace root.</li><li><strong>Attachments API:</strong> an explicit per-request folder overrides the configured default.</li></ul></details>
+<details class="config-details"><summary>Path formats, overwrite behavior, and folder rules</summary><ul><li><strong>External roots:</strong> existing directories using absolute paths or <code>~</code>, such as <code>/opt/reference</code>, <code>~/SDKs</code>, or Windows absolute paths on Windows hosts. Relative roots are not supported; symlink escapes are rejected.</li><li><strong>Upload/attachment folders:</strong> nonempty workspace-relative paths. Absolute paths and <code>..</code> traversal are rejected.</li><li><strong>Uploads:</strong> create parent folders; existing files are preserved unless overwrite is enabled in the review dialog. Direct drops never overwrite.</li><li><strong>Upload dialog only:</strong> clear the destination field to upload that batch to the workspace root.</li><li><strong>Attachments API:</strong> an explicit per-request folder overrides the configured default.</li></ul></details>
 </section>
 <section id="session-tools"><h2>Session daemon</h2>
 <p>Edit capability toggles in <strong>Settings → Session daemon</strong>. Timeout and environment-facts settings can be edited in machine config.</p>
@@ -394,13 +401,16 @@
 <td>Sessiond restart</td>
 </tr>
 </tbody></table></div>
-<details class="config-details"><summary>Independent sessions vs. tracked subsessions</summary><ul><li><strong>Independent:</strong> fire-and-forget work in a workspace of the same project; output is not returned to the parent.</li><li><strong>Tracked:</strong> work in the parent’s working directory; the parent can continue independent work or join its children.</li><li><strong>Model:</strong> both tools accept an exact <code>provider/model-id</code>; otherwise they inherit the parent’s model. Thinking level is inherited and clamped to model capabilities.</li></ul>
-<p>In the session list, verified agent-created subsessions are collapsed by default under their direct parent, with a separate <strong>Agent subsessions</strong> toggle for each parent. User-created forks and clones, sessions with unknown origin (including external sessions), and children whose parent is unavailable stay visible. Collapsing agent subsessions never hides user-created or unknown-origin descendants. Independent sessions remain visible.</p>
-<p>Receiving a completed result marks it read; checking status alone does not. Read results remain available for deliberate retrieval but are not automatically delivered again.</p>
-<p>Call <code>yield_to_subsessions</code> alone and last at a join point:</p>
-<ul><li><code>yield_to_subsessions</code> returns unread completed results immediately, even while other children are working. If there are no unread completed results but children are still working, it ends the current run; completion delivery wakes the parent. If neither unread results nor working children remain, it continues.</li><li><code>check_subsession</code> on a completed child returns its latest result and acknowledges that completion, so it is not automatically replayed later. The latest result remains available for explicit retrieval; later runs of the same child have separate completions.</li><li><code>list_subsessions</code> reports status only and does not acknowledge results.</li><li><code>read_subsession</code> acknowledges a completion only when the current final output is actually returned. Reads that filter out that output, show only history, or truncate it leave the completion unread.</li></ul>
-<p>Automatic completion delivery uses the same inbox as these tools and wakes an idle parent for unread results. No polling is needed.</p></details>
-<details class="config-details"><summary>Question forms and extension dialogs are different</summary><ul><li><strong>Question forms:</strong> up to 20 questions, up to 12 choices per question, custom text, and optional answers. A form is open only at the active conversation’s tail. Answers, skips, and other conversation entries close it; earlier forms remain expandable and read-only in place.</li><li><strong>Persistence:</strong> questions are saved conversation entries, so forms can be rendered again after browser, web/API, or session-daemon restarts. Returning the active branch to a question reopens it; archived conversations remain read-only.</li><li><strong>Responses:</strong> answering or skipping wakes the agent. Partial submissions are confirmed, and late or repeated human responses remain in the conversation.</li><li><strong>Extension dialogs:</strong> always supported, independently of <code>askUser</code>. The sooner of the extension’s timeout and the configured daemon timeout wins.</li><li><strong>Timeout result:</strong> <code>false</code> for confirmation; <code>undefined</code> for selection/text input.</li></ul></details>
+<details class="config-details"><summary>Independent sessions vs. tracked subsessions</summary>
+<p>Independent sessions run in a workspace of the same project without returning output to their parent. Tracked subsessions run in the parent’s working directory and return results automatically; the parent can keep working or wait for them. Delivered results are not automatically repeated, but remain available for review.</p>
+<p>Agent-created tracked subsessions are collapsed under their parent. Use <strong>Agent subsessions</strong> to expand them. User-created forks and clones, unknown-origin sessions, children without an available parent, and independent sessions remain visible.</p>
+<p>New sessions inherit the parent’s model and thinking level unless another model is requested, for example with a <code>#provider/model-id</code> prompt reference. Thinking levels are limited to what the chosen model supports.</p>
+</details>
+<details class="config-details"><summary>Question forms and extension dialogs are different</summary>
+<p>Agents can ask questions with choices or free-text answers. You may leave questions unanswered; partial submissions are confirmed before sending. Answering or skipping resumes the agent.</p>
+<p>Forms are saved in the conversation and survive restarts. Only a form at the end of the active conversation is open; answering, skipping, or sending another message closes it. Earlier forms remain expandable for read-only review. Returning the conversation to a question reopens it; archived conversations remain read-only.</p>
+<p>Extension dialogs are always supported, independently of <code>askUser</code>. The sooner of the extension’s timeout and the configured daemon timeout cancels an unanswered dialog.</p>
+</details>
 </section>
 <section id="plugin-config"><h2>Plugins & packages</h2>
 <p>Use <strong>Settings → PI WEB plugins</strong> for enablement/settings and <strong>Settings → Pi packages</strong> for package installation. These are separate operations.</p>
@@ -433,7 +443,7 @@
 <th scope="row"><a href="#git-worktree-discovery-hooks">Git worktree discovery hooks</a><br><code>plugins.git.settings.workspaceDiscoveryHooks</code></th>
 <td>Machine + project</td>
 <td><code>true</code></td>
-<td>Install and repair native named hooks on supported Git builds (introduced in Git 2.54), preserving existing hooks.</td>
+<td>Automatically discover worktrees on supported Git builds (Git 2.54+), preserving existing hooks.</td>
 <td>Manual sessiond restart; browser reload alone is insufficient</td>
 </tr>
 <tr>
@@ -444,9 +454,14 @@
 <td>Next sessiond start</td>
 </tr>
 </tbody></table></div>
-<p><strong>Saved ≠ active:</strong> Settings shows desired and active plugin state. A server plugin can remain active after you disable it until sessiond restarts. Global server settings are captured at startup; project settings are fixed snapshots too, not live config.</p>
-<details class="config-details" id="project-plugin-settings"><summary>Project plugin settings: scope, merge, and restarts</summary><p>Server plugins that support project settings, including Git, can use <code>plugins.&lt;id&gt;.settings</code> in <code>&lt;project&gt;/.pi-web/config.json</code>. Each project’s top-level setting keys override the plugin’s machine settings; nested objects are replaced, not deep-merged. Omitted keys keep their global values. Only settings are allowed: plugin enablement/disablement stays global, and project <code>plugins.&lt;id&gt;.enabled</code> is not supported.</p><p>PI WEB reads the file at the <strong>registered project’s path</strong>, not an override file in an arbitrary newly created worktree. Sessiond snapshots project plugin settings at startup for existing registered projects and at first use for newly registered projects. These snapshots, including absent config files, stay fixed until a manual session-daemon restart. Global server settings remain the startup snapshot; project/workspace list access does not reload either settings scope.</p><p>After editing global or project server-plugin settings, manually restart the target session daemon, then reload the browser. Browser reload, web/API restart, or Pi’s <code>/reload</code> alone does not update server settings. A daemon restart can interrupt active sessions and terminals; inspect work first and restart from outside its hosted sessions.</p></details>
-<details class="config-details" id="git-worktree-discovery-hooks"><summary>Git worktree discovery hooks: opt out</summary><p>The Git provider owns the boolean <code>plugins.git.settings.workspaceDiscoveryHooks</code>, default <code>true</code>. On Git builds supporting native config-based named hooks (introduced in Git 2.54), it installs and repairs its discovery hook automatically while preserving <code>core.hooksPath</code> and existing hook scripts. See <a href="plugins#automatic-git-worktree-discovery">Automatic Git worktree discovery</a> for notification behavior and catch-up paths.</p><p>Merge this into the global config selected by <code>PI_WEB_CONFIG</code> (or its default path) for the machine, or into <code>&lt;project&gt;/.pi-web/config.json</code> at the registered project’s path for just that project:</p><div class="code-card"><div class="copy-row"><strong>Git hook opt-out</strong><button class="copy-button" data-copy="#git-discovery-opt-out">Copy</button></div><pre id="git-discovery-opt-out"><code>{
+<p><strong>Saved ≠ active:</strong> Settings shows desired and active plugin state. A server plugin can remain active after you disable it until sessiond restarts.</p>
+<details class="config-details" id="project-plugin-settings"><summary>Project plugin settings: scope, merge, and restarts</summary>
+<p>Supporting server plugins, including Git, accept <code>plugins.&lt;id&gt;.settings</code> in <code>&lt;project&gt;/.pi-web/config.json</code> at the registered project’s path, not in individual worktrees. Project top-level keys override global settings; nested objects are replaced rather than deep-merged. Plugin enablement stays global.</p>
+<p>After changing global or project server-plugin settings, manually restart the target session daemon, then reload the browser. A browser reload, web/API restart, or Pi’s <code>/reload</code> is insufficient. The daemon restart can interrupt sessions and terminals; finish important work and restart from outside its hosted sessions.</p>
+</details>
+<details class="config-details" id="git-worktree-discovery-hooks"><summary>Git worktree discovery hooks: opt out</summary>
+<p><code>plugins.git.settings.workspaceDiscoveryHooks</code> enables automatic worktree discovery on supported Git builds (Git 2.54+). It defaults to <code>true</code> and preserves existing hooks. See <a href="plugins#automatic-git-worktree-discovery">Automatic Git worktree discovery</a>.</p>
+<p>To opt out, merge this into machine config or the registered project’s <code>.pi-web/config.json</code>:</p><div class="code-card"><div class="copy-row"><strong>Git hook opt-out</strong><button class="copy-button" data-copy="#git-discovery-opt-out">Copy</button></div><pre id="git-discovery-opt-out"><code>{
   "plugins": {
     "git": {
       "settings": {
@@ -454,7 +469,7 @@
       }
     }
   }
-}</code></pre></div><p>A project value overrides the global value; <code>true</code> can enable hooks for one project when the global value is <code>false</code>. Every change requires a <strong>manual session-daemon restart</strong>; browser reload alone is insufficient. This opts out of the discovery hook, not the Git plugin or ordinary workspace discovery.</p></details>
+}</code></pre></div><p>Project values override the machine default. Changes require a manual session-daemon restart. Disabling hooks leaves the Git plugin and ordinary workspace discovery available.</p></details>
 <div class="table-scroll" role="region" aria-label="After installing or updating a Pi package" tabindex="0">
 <table class="reference-table ">
 <caption>After installing or updating a Pi package</caption>
@@ -635,8 +650,8 @@
 <td>Sessiond restart</td>
 </tr>
 </tbody></table></div>
-<details class="config-details"><summary>Changing directories or running a second instance</summary><ul><li><strong>State migration:</strong> a new PI WEB data directory starts with empty registries and no archives. Stop PI WEB before copying state. For archives, copy both <code>archived-sessions.json</code> and <code>archived-sessions/</code>.</li><li><strong>Second instance:</strong> use a distinct data directory, daemon endpoint, and web port. One live session daemon owns each data directory.</li><li><strong>Agent state:</strong> uses the bundled Pi SDK’s data layout. PI WEB does not convert profiles or move PI WEB-managed archives when the agent directory changes.</li><li><strong>Active path:</strong> sessiond keeps the agent directory resolved at startup. Web/API-only restarts do not change it.</li></ul></details>
-<details class="config-details"><summary>Environment inherited by agent processes</summary><ul><li>Agent shells, terminals, and child sessions inherit the daemon environment, including its resolved Pi state paths.</li><li><code>NODE_ENV</code> and <code>PORT</code> are removed from the environment given to agent processes.</li><li><code>PI_WEB_SESSION=1</code> marks nested processes. Inherited <code>PI_WEB_*</code> values still point to the live hosting instance.</li><li>Do not restart the hosting session daemon from inside an active session you need to preserve.</li></ul></details>
+<details class="config-details"><summary>Changing directories or running a second instance</summary><ul><li><strong>State migration:</strong> a new PI WEB data directory starts with empty registries and no archives. Stop PI WEB before copying state. For archives, copy both <code>archived-sessions.json</code> and <code>archived-sessions/</code>.</li><li><strong>Second instance:</strong> use a distinct data directory, daemon endpoint, and web port. One live session daemon owns each data directory.</li><li><strong>Agent state:</strong> uses the bundled Pi SDK’s data layout. PI WEB does not convert profiles or move PI WEB-managed archives when the agent directory changes.</li><li><strong>Active paths:</strong> changing Pi state or session paths requires a sessiond restart; web/API-only restarts do not apply it. Sessions, terminals, and package operations use the daemon’s active paths. If those paths are unavailable, profile-dependent operations are unavailable too.</li></ul></details>
+<details class="config-details"><summary>Environment inherited by agent processes</summary><ul><li>Agent shells, terminals, and child sessions inherit the daemon environment, including its Pi state paths.</li><li><code>NODE_ENV</code> and <code>PORT</code> are removed so they do not interfere with development commands.</li><li><code>PI_WEB_SESSION=1</code> marks nested processes. Inherited <code>PI_WEB_*</code> values still point to the hosting instance. Use a separate data directory, daemon endpoint, and web port for a second instance.</li><li>Do not restart the hosting session daemon from inside an active session you need to preserve.</li><li><code>environmentFacts</code> includes nesting and deployment guidance in session system prompts by default. Set it to <code>false</code>, or use <code>PI_WEB_ENVIRONMENT_FACTS=false</code>, to omit that guidance. Restart sessiond after changing it.</li></ul></details>
 </section>
 <section id="providers"><h2>Providers, catalogs & project trust</h2>
 <div class="table-scroll" role="region" aria-label="Provider and trust configuration" tabindex="0">
@@ -664,7 +679,7 @@
 <tr>
 <th scope="row"><span id="catalog-refresh"></span>Background catalog refresh</th>
 <td>Automatic on sessiond</td>
-<td>On; refresh starts 15 seconds after startup, then checks hourly.</td>
+<td>On; refreshes provider catalogs in the background and after login or logout.</td>
 <td>Automatic; reopen model selector to see changes</td>
 </tr>
 <tr>
@@ -718,8 +733,8 @@
 </tr>
 </tbody></table></div>
 </details>
-<details class="config-details"><summary>Catalog refresh timing and failures</summary><ul><li><strong>Freshness:</strong> Pi treats catalogs as fresh for four hours, so most hourly checks make no network request.</li><li><strong>Login/logout:</strong> refresh immediately, bypassing the freshness window (except in offline mode).</li><li><strong>Timeout:</strong> 60 seconds. Timeout or unreachable provider gets one retry after five minutes; an HTTP error waits until the next scheduled refresh.</li><li><strong>Failure:</strong> retain the last successful catalog and log the problem.</li><li><strong>While refreshing:</strong> session startup can briefly wait on shared runtime state. The activity line reports concurrent refreshes.</li></ul></details>
-<p>Pi virtual models are unsupported in PI WEB, even from global extensions: their routers capture session-bound context that cannot safely be shared across sessions. Calls to <code>registerVirtualModel()</code> or <code>unregisterVirtualModel()</code> on the shared runtime raise explicit errors, reported in bootstrap diagnostics or session extension errors. Disable the extension's virtual-model feature and select a physical model instead; restarting the daemon does not enable it.</p>
+<p>Failed catalog refreshes keep the last successful catalog and report problems in daemon logs. A refresh can briefly delay session startup; the activity line reports when model lists are refreshing.</p>
+<p>Pi virtual models are unsupported, including from global extensions. Disable the extension’s virtual-model feature and select a physical model instead; restarting the daemon does not enable virtual models.</p>
 <details class="config-details"><summary>Provider safety and logging</summary><ul><li>Provider registrations/configuration are a startup snapshot. <code>/reload</code> cannot rebuild it.</li><li>Accepted model-list updates are machine-wide; if two workspaces register lists for one provider, the last registration wins.</li><li>Model entries can override provider URLs/headers. Pi extensions remain trusted code; this is not a security boundary.</li><li>Provider decisions are recorded in daemon logs, not browser notifications. Entries omit provider configuration and credentials. See <a href="faq#provider-extension-no-effect">provider extension troubleshooting</a> for ignored changes.</li></ul></details>
 </section>
 <section id="environment"><h2>Environment overrides</h2>
@@ -811,9 +826,9 @@
 <td>Visible in the workspace deletion terminal run.</td>
 </tr>
 </tbody></table></div>
-<p><a href="config.md#worktree-pre-remove-hook">Script example and execution details →</a></p>
+<p><a href="config.md#worktree-pre-remove-hook">Workspace cleanup hook in Markdown →</a></p>
 </section>
-<div class="doc-actions"><a class="button" href="config.md">Detailed Markdown reference</a></div></div></div></main>
+<div class="doc-actions"><a class="button" href="config.md">Markdown version</a></div></div></div></main>
 
     <footer class="site-footer">
       <div class="container footer-inner">

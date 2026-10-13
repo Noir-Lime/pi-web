@@ -47,258 +47,79 @@ A plugin package declares a browser entry, a server entry, or both:
 - **Package peers** connect a plugin's browser and server entries. The host handles the selected machine and workspace; a plugin does not need to own that workspace to serve it.
 - **Capabilities** let a plugin declare the host or plugin functionality it requires. Dependencies must be available at the requested version before the plugin starts.
 
-Plugins declare contributions in `activate()`, initialize dependency-backed work in `start()`, and release resources in `dispose()`. Long-lived work follows the plugin's `lifetimeSignal`. Simple browser plugins only need to return their contributions.
+For entry declarations and lifecycle details, use the [public contracts and examples](#agent-development).
 
 ### Tabs without a workspace
 
-Use `applicationPanels` for machine dashboards and other tabs that should remain usable before a project, workspace, or session is selected. They share the third-column tool tabs and existing navigation with `workspacePanels`; workspace panels still require a selected workspace.
+Application panels can show machine dashboards before a project, workspace, or session is selected. Workspace panels require a selected workspace. Both appear in the tool tabs and follow selection changes; terminal-backed actions also require an available Terminal provider.
 
-```ts
-activate: ({ html }) => ({
-  contributions: {
-    applicationPanels: [{
-      id: "dashboard",
-      title: "Dashboard",
-      render: (context) => html`<p>${context.machine.name}: ${context.state.selectedProject?.name ?? "No project selected"}</p>`,
-    }],
-  },
-})
-```
-
-`ApplicationPanelContext` supplies the current `machine`, basic selection `state`, `navigate`, `prompt`, and `host.requestRender()`. `state.selectedProject`, `state.selectedWorkspace`, and `state.selectedSession` are optional snapshots, refreshed as selections change without reactivating the plugin. `workspace` is available only when a workspace is selected; its workspace-bound `terminal` is supplied only when that machine also has an available Terminal provider (not in Terminal-disabled recovery mode). Render callbacks may run repeatedly; an inactive tab need not stay mounted. Portable gateway panels follow the selected machine, while machine-specific panels use the existing per-machine availability rules.
+Older hosts may omit application tabs; update PI WEB to use them.
 
 ### Follow selection while a tab is closed
 
-Capture `selection` from the public activation context to observe basic machine, project, workspace, and session information independently of panel mounting. `getSnapshot()` reads the current selection synchronously. `subscribe(listener)` reports changes after the host commits its UI state; several changes in one commit may be coalesced. It does not call the listener immediately, and unrelated status updates, tool changes, and route queries are not selection notifications. Snapshots are detached from host state and other subscribers; they contain no transcript or private session-file path.
-
-```ts
-export default {
-  apiVersion: 4,
-  name: "Selection observer",
-  activate: ({ selection }) => {
-    console.log("Current selection", selection?.getSnapshot());
-    const unsubscribe = selection?.subscribe((snapshot) => {
-      console.log("Selection changed", snapshot.selectedMachine?.name, snapshot.selectedProject?.path);
-    });
-    return { contributions: {}, dispose: () => unsubscribe?.() };
-  },
-};
-```
-
-The returned unsubscribe function is idempotent and can be called as soon as observation is no longer needed. The host also stops subscriptions when the plugin lifetime ends, including failed activation/start rollback; retaining the service cannot start a new subscription after that point. A throwing or rejected subscriber is logged with its plugin identity without blocking other subscribers. For rendering alone, use the panel's fresh `state` instead of subscribing. `selection` is optional on older hosts; update PI WEB when the service is needed.
+Plugins can follow the selected machine, project, workspace, and session even while their tab is closed. This provides basic selection information, not the transcript or private session-file path. Older hosts may lack selection observation; update PI WEB when a plugin needs it.
 
 ### Read public session metadata
 
-Session snapshots can include optional `metadata`: JSON objects keyed by a package/plugin namespace, for example `metadata["example.workflow"]`. This is explicitly browser-public data saved with the conversation, available in listings and after reopening without a live Pi messaging connection. Snapshots are detached from host state. Missing metadata means no public data is available; it is not inferred from the title or conversation text.
+Plugins can publish namespaced session metadata to identify workflows and link to saved context. It is browser-public data saved with the conversation, available after reopening without a live Pi connection. Missing metadata is not inferred from titles or conversation text.
 
 Only deliberately published session metadata is exposed, not arbitrary Pi custom entries. Keep secrets and private extension state out of it. Namespaces organize data rather than enforce ownership or authorization, and plugins must validate their own schema and render values as untrusted input. Browser API v4 remains unchanged; older hosts omit the field.
 
 ### Dispatch a session from a Pi extension
 
-Trusted Pi extensions hosted by PI WEB can emit `pi-web:session-dispatch:v1` on their session-local `pi.events` bus. Pass `{ input, accept }`; the host synchronously calls `accept(promise)` with a promise for `{ sessionId, cwd, model? }`. If no callback runs before `emit()` returns, this host lacks the bridge: report that no dispatch occurred rather than waiting or retrying. Await the accepted promise to observe validation/startup failures. This in-process callback protocol is for extensions, not browser JSON messaging.
+Trusted hosted Pi extensions can start an independent conversation in a workspace of the same registered project, with a prompt, name, and public metadata. Model and thinking settings inherit from the initiating conversation unless explicitly overridden. Dispatch respects the same delegation restrictions as `spawn_session`.
 
-`input` requires a non-empty `prompt` (at most 64 KiB of UTF-8). Optional fields are `cwd` (a workspace of the same registered project), `name` (a trimmed, non-empty display name of at most 60 characters with no control characters), `metadata` (namespaced public JSON objects, at most 16 KiB), `model` (exact `provider/model-id`), and `thinkingLevel`. No caller-supplied session identity or inherited model object is accepted. Omit model/thinking overrides to inherit from the dispatching session; set overrides only when instructed. Pi clamps valid thinking levels to the chosen model.
-
-The host validates and snapshots metadata, installs metadata and name before extensions, publication and the first prompt, and returns an independent session. Dispatch obeys the same global and tracked-child delegation gates as `spawn_session`; it is not a bypass. The model-visible `spawn_session` schema remains unchanged. Loading this host capability after an upgrade requires a manual session-daemon restart when safe; restarting interrupts active sessions and terminals.
+Older hosts may lack this capability. After upgrading, restart the session daemon when safe to load it; restarting interrupts active sessions and terminals.
 
 ### Add indicators to session-list rows
 
-Contribute `sessionLabels` to label individual conversations, including unselected and archived rows. Each contribution has a local `id`, optional `order` and `visible(context)`, and `items(context)`. Items support `{ type: "text", text, title? }`, `{ type: "link", text, href, title?, target? }`, and `{ type: "render", render }`, where `render()` returns a Lit template. Contributions are ordered by `order` then qualified ID, with the same machine availability and portable/machine-specific precedence as workspace labels.
+Plugins can add text, links, or custom indicators to conversations, including unselected and archived rows. Indicators can use public session metadata to open saved workflow context on the row's machine and workspace without a live Pi connection.
 
-`SessionLabelContext.session` is the row's detached basic snapshot (`id`, `cwd`, optional `name` and `metadata`, `archived`, `pending`), not necessarily `state.selectedSession`. The context supplies the row's `machine` and `workspace`, basic selection `state`, file/project helpers, any package-paired `peer`, `navigate`, and `host.requestRender()`. It exposes no transcript or private session-file path. Read your namespace and validate its schema before showing membership; no live Pi connection is required.
-
-Keep `visible` and `items` synchronous and side-effect-free. Own asynchronous loading in a component and request a refresh through `host.requestRender()`. Links open a new tab by default with `noopener noreferrer`; HTTP(S), mail, and telephone links are allowed, while unsafe schemes display plain text. Custom buttons and links can use `context.navigate()` from event handlers without selecting the row. Session-label navigation defaults to the context's captured machine; supply the workspace and tool explicitly to open an exact item, using the query support below.
-
-If `visible` or `items` throws, the host skips that contribution for the row; if an item's `render()` throws, it skips only that item. Failures are logged in the browser console with the contribution, session, and machine identity, while the session list stays usable. Callbacks are tried again on the next render.
-
-Indicators appear only on session-list rows, not the top Session pill or transcript bubbles. Browser API v4 is unchanged; older hosts ignore `sessionLabels`, so update PI WEB to use them.
+They appear only in the session list, not the top Session pill or transcript bubbles. Older hosts ignore session labels; update PI WEB to use them.
 
 ### Discover projects on the context's machine
 
-Action, application-panel, and workspace contexts supply read-only `projects` access directly. `listProjects()` returns registered projects with `id`, `name`, and `path`; `suggestDirectories(query)` returns directory suggestions with `path`, using the same path-search rules as the host's Add Project picker. Discovery works without a selected project or workspace. Call these asynchronous methods from an action, event handler, or component that owns loading and error display, not from the synchronous panel render itself.
-
-```ts
-const access = context.projects;
-if (access === undefined) throw new Error("Update PI WEB to use project discovery");
-const registered = await access.listProjects();
-const suggestions = await access.suggestDirectories("/home/me/projects/");
-// Keep the discovery target when later navigating to a result.
-if (registered[0]) {
-  await context.navigate({ machineId: access.machineId, projectId: registered[0].id, view: "navigation" });
-}
-```
-
-Each service captures its `machineId` when the host creates the context. Retaining it, or completing an in-flight request after selection changes, still targets that machine. A fresh context follows the selected machine for portable gateway plugins; machine-specific instances receive contexts only on their registration machine, under the existing loading and visibility rules. Remote request failures reject rather than substituting gateway projects. Results contain detached basic information, and the service exposes no project mutation or generic HTTP methods. `projects` is optional on older hosts; update PI WEB when it is needed.
-
-Browser API v4 remains unchanged. No capability requirement is needed for application panels, selection observation, or project discovery. Older hosts may omit the tab silently; update PI WEB to use it. Current hosts warn at registration about unknown contribution names, attributing the warning to the plugin, and ignore them while keeping recognized contributions.
+Plugins can list registered projects and suggest directories using the same search as **Add Project**, even before a project is selected. Discovery is read-only and stays on the initiating machine; remote failures do not substitute gateway projects. Older hosts may lack project discovery; update PI WEB when a plugin needs it.
 
 ### Attach text context to a message
 
-Action, application-panel, and workspace-panel contexts provide optional `prompt.setChip(chip)` and `prompt.removeChip(id)` methods. Use them to stage labeled, removable text context in the existing composer. Feature-detect these methods on older hosts; browser API v4 is unchanged.
+Plugins can stage labeled, removable text chips in a ready, non-archived conversation's composer. Chips stay with that conversation when you switch tabs or selections. **Send** appends their text verbatim to your message; chips can also be sent alone. Messages with chips are ordinary prompts, even if typed text starts with `/` or `!`.
 
-Each prompt facade captures the machine and conversation when its context is created. Staging requires a ready, non-archived conversation at that point; calls throw when there is no such target or the owning plugin is unavailable. Retaining a facade never redirects its chips to a later selection. Call from an action or event handler, not from a render callback.
-
-```ts
-const prompt = context.prompt;
-if (!prompt.setChip) throw new Error("Update PI WEB to attach text context");
-prompt.setChip({
-  id: "selected-note", // local to this plugin and captured conversation
-  label: "Selected note",
-  text: savedNote.text,
-  onRemove: (reason) => {
-    // "user" means removal in the composer; "submitted" means server acceptance.
-    forgetSavedNote(savedNote.id);
-  },
-});
-// Withdraw without calling onRemove:
-// prompt.removeChip?.("selected-note");
-```
-
-Setting the same id replaces its text, label, and callback without notifying the old callback. Chips remain available when a panel closes or the user navigates away, and reappear on return to their conversation. **Send** appends their text verbatim after the user's message, separated by blank lines; chips alone can be sent. Chip-bearing messages are ordinary prompts, even when the typed text starts with `/` or `!`. Existing attachment delivery and steer/follow-up controls still apply.
-
-Server acceptance consumes the submitted versions and calls their `onRemove("submitted")` handlers. Failed sends retain chips and composition for retry. Acceptance means the server accepted the prompt, not that the agent finished answering; a browser-local pending-session queue is not acceptance. Updating a chip while Send is in flight retains the new version; the submitted version's callback still receives its notification. Callback failures are logged with the owner identity without blocking other owners.
-
-Host staging is browser-memory-only and clears on reload. Plugins own any saved chip data. To restore it, obtain a fresh context for the saved machine/conversation (navigate there first if needed), then call `setChip` with the saved id, label, text, and newly created callback. Store ordinary data, not callback functions or host objects; repeated restoration replaces rather than duplicates the same chip. No host persistence or callback reconstruction is performed.
+Chips clear when the server accepts the prompt, not when the agent finishes. Failed sends retain them for retry. Staging is browser-memory-only and clears on reload unless the plugin restores its own saved data. Older hosts may lack chip support; update PI WEB to use it.
 
 ### Opening workspace files from chat
 
 Chat Markdown links to relative files (including `./file`) or absolute paths inside the session workspace open in the bundled Files panel. The link retains a download URL for modifier/new-tab clicks and when no panel accepts it. File access still uses server-side workspace containment checks.
 
-A workspace panel can opt in with `fileOpenQuery(context, path)`. This synchronous hook receives its contribution-scoped context and a decoded workspace-relative path; return a navigation query such as `{ file: path }`, or `undefined` to decline. Keep the hook free of side effects: the host opens the first accepting visible, enabled panel for the selected machine, ordered by panel `order` then title, and applies its namespaced query through normal panel navigation. The panel reads the selection from `context.navigation.query`; no Files-plugin dependency is required.
+Other workspace panels can handle these links too, letting a plugin open a file in its own viewer.
 
 ### Panel and tab navigation
 
 **Panel ID migration.** `routeAliases` and `navigationAliases` have been removed from application and workspace panel contributions. Remove these options from plugins; declarations that still supply them fail registration. Update saved links to the current qualified contribution ID and its query namespace. Short tool names such as `files` and historical IDs such as `core:workspace.files` or `core:workspace.terminal` no longer select the bundled panels; use `pi-web.files:workspace.files` and `pi-web.terminal:workspace.terminal`. Remote plugins still use the host's source-to-runtime ID mapping; this is not an author-configurable alias mechanism. Action `shortcutAliases` are unchanged.
 
-The URL's `view` selects a responsive panel: `navigation`, `chat`, or `workspace`. The independent `tool` parameter selects an application or workspace tab by contribution ID. Opening a workspace tool sets `view=workspace` and `tool` to its ID; switching to chat keeps the selected tool. Contribution IDs are not accepted in `view`. Browser plugins use `selectMainView("workspace")` to show the workspace panel without changing its selected tab, or `selectWorkspaceTool(panelId)` to select and show a particular tool.
+Links use `view` for `navigation`, `chat`, or `workspace`, and `tool` for a qualified application or workspace tab ID. Contribution IDs do not belong in `view`. Invalid destinations show a warning or unavailable-tab message rather than silently selecting another tool.
 
-Invalid values remain in the URL rather than triggering a redirect. An invalid `view` shows a warning and displays navigation on mobile; on two-column layouts, navigation remains alongside a valid requested tool or, otherwise, chat. Desktop keeps its normal columns. A valid workspace view with an invalid tool shows an unavailable-tab message inside the workspace panel, without selecting another tab or adding a duplicate warning. Omitted parameters use defaults and are not errors.
-
-Action, message-action, application-panel, workspace-panel, and session-label contexts expose `navigate(destination, options?: PluginNavigationOptions): Promise<void>` to open a complete destination or patch the current URL:
-
-```ts
-interface PluginNavigationOptions {
-  mode?: "replace" | "patch";
-  history?: "push" | "replace";
-}
-```
-
-The defaults are `mode: "replace"` and `history: "push"`, preserving existing behavior. All destination fields are optional: `machineId`, `projectId`, `workspaceId`, `sessionId`, `view` (`navigation`, `chat`, or `workspace`), `tool` (a qualified contribution ID), and `query` (local tool-query keys).
+Plugin navigation can open a complete destination or patch the current URL, select a saved item within a tab, and push or replace browser history. Complete destinations use host restoration defaults for omitted fields; patches preserve omitted URL fields. When opening a known session elsewhere, supply its machine, project, and workspace explicitly.
 
 **Session IDs.** Browser URLs, plugin navigation, and PI WEB session APIs use exact, case-sensitive IDs. Pass the full `session.id` returned by the session catalog or creation response. Abbreviated IDs produce a missing-session destination instead of matching or expanding a prefix; update old shortened links and integrations to use full IDs. Short IDs shown in labels are display-only.
-
-**Complete destinations (`mode: "replace"`).** Omitted location, tool, and view fields use normal host restoration defaults rather than copying the current URL's session, tool, or contribution query. Those defaults can select a remembered session. Omitted `machineId` means the machine selected at invocation, except session-label and message-action contexts use their captured machine. Supply the project/workspace scope when opening a known session; the host does not search for IDs or create missing destinations. For a selected workspace:
-
-```ts
-await context.navigate({
-  machineId: context.machine.id,
-  projectId: context.workspace.projectId,
-  workspaceId: context.workspace.id,
-  sessionId: sourceSessionId,
-  view: "chat",
-});
-```
-
-**Route patches (`mode: "patch"`).** A patch starts from the current URL at invocation, not a potentially stale component-state snapshot. Omitted or `undefined` fields preserve their URL values; session-label and message-action contexts still default to their captured machine. Scope changes follow these rules:
-
-- Changing machine clears inherited project, workspace, session, tool, and all contribution query.
-- Changing project clears inherited workspace, session, and all contribution query.
-- Changing workspace clears inherited session and all contribution query.
-
-Explicit child fields supplied in the destination win over these clearing rules. Tool and view are retained across project/workspace changes; a machine change clears the inherited tool but retains view. In patch mode only, `null` clears a route field; `machineId: null` resets to the local machine. Removing URL fields still invokes normal host restoration defaults: clearing `sessionId`, for example, is not a promise to deselect a remembered session.
-
-For TypeScript consumers, `PluginNavigationDestination` retains non-null fields. Use `PluginNavigationPatchDestination` for a patch containing `null`; the `navigate` overload requires explicit `{ mode: "patch" }` options for that type. This distinction does not change the runtime preservation, clearing, or restoration behavior described above.
-
-**Tool queries.** Add `query` with the tool's **local** keys, for example `query: { item: "saved-item-id" }`. The host namespaces and encodes the values and exposes them through the target panel's `context.navigation.query`, including after browser history restoration. Values can be strings, numbers, booleans, or arrays of those values; existing panel-query limits apply. Invalid keys, values, or scope reject before navigation.
-
-In replace mode, a query requires explicit `tool`, `projectId`, and `workspaceId` and replaces **all** contribution query. In patch mode, the host validates the effective target tool/project/workspace after applying the route patch; these fields may be inherited from the URL. It merges only the supplied local keys into the target tool's namespace: omitted keys remain and `null` query values remove keys. Unrelated tools' query state is retained only within the same machine/project/workspace. A scope change discards the old contribution query before applying the supplied query.
-
-**Browser history.** `history: "replace"` replaces the current history entry instead of pushing a new one. It is independent of mode: `mode: "replace"` controls destination semantics, not history. Either mode can push or replace history.
-
-For a URL with a project and workspace, open a tab and its saved context without changing the conversation, replacing the history entry:
-
-```ts
-await context.navigate({
-  tool: "example:workspace.review",
-  view: "workspace",
-  query: { item: savedItemId, filter: null },
-}, { mode: "patch", history: "replace" });
-```
-
-Open a session in the current URL's workspace, retaining its tool and contribution query:
-
-```ts
-await context.navigate({
-  sessionId: sourceSessionId,
-  view: "chat",
-}, { mode: "patch" });
-```
-
-Open a known session in another workspace with explicit scope, also suitable for a cross-machine target:
-
-```ts
-await context.navigate({
-  machineId: targetMachineId,
-  projectId: targetProjectId,
-  workspaceId: targetWorkspaceId,
-  sessionId: sourceSessionId,
-  view: "chat",
-}, { mode: "patch" });
-```
-
-The promise settles after host restoration, or normally when newer navigation supersedes it. Missing or unavailable destinations use the normal host UI and do not also reject the promise. Malformed argument types and invalid `view` values reject with `TypeError` before changing the URL or UI. Captain's Log uses this API for **Open source session** on translations that record a source session.
 
 Older hosts ignore the options argument and still treat the destination as a complete replacement; upgrade PI WEB before relying on patch behavior or history replacement. Hosts without destination-query support also ignore `query`; upgrade before relying on exact item selection.
 
 ### Message actions
 
-Contribute `messageActions` to put a plugin-defined button beside a displayed transcript message. Each action has a plugin-local `id`, a `title`, an optional Lit `icon`, and a `run(context)` callback. The callback performs your own workflow; it is not a choice from a host operation catalog. PI WEB adds no confirmation. Fork, Go back, and Copy are core plugin contributions using these generic APIs; Fork and Go back retain their existing confirmations.
+Plugins can add buttons beside transcript messages, for example to quote text into the next prompt or start a review. Actions can target a saved entry or displayed text, including a streaming message. They receive the clicked message's ordinary text, not thinking, image data, tool payloads, or a whole-transcript subscription.
 
-```ts
-return {
-  contributions: {
-    messageActions: [{
-      target: "display",
-      id: "quote",
-      title: "Quote in next prompt",
-      ariaLabel: ({ message }) => `Quote ${message.role} text in next prompt`,
-      visible: ({ message }) => message.role === "user" && message.text !== "",
-      enabled: ({ session }) => !session.archived && !session.pending,
-      run: ({ message, prompt }) => {
-        if (!prompt.setChip) throw new Error("Update PI WEB to attach text context");
-        prompt.setChip({ id: "quote", label: "Quoted message", text: message.text });
-        return { title: "Quoted", ariaLabel: "Message text attached to next prompt" };
-      },
-    }],
-  },
-};
-```
+**Plugin actions do not automatically ask for confirmation.** Plugins must provide any needed safeguards. Built-in **Fork** and **Go back** retain their confirmations. On a non-user message, they retain its checkpoint and intervening history before the next checkpoint; on a user message, they act before that entry and restore its text to the editor. Neither action reruns commands or reverses filesystem changes.
 
-`target` defaults to `"entry"`: the host chooses one canonical rendered header per durable entry, preferring an ordinary user/assistant reply over its attached thinking or technical projections. Plugins still control button visibility and enabled state through their callbacks. A required `message.entryId` identifies the whole stored entry, and text is its ordinary text parts joined with blank lines, not thinking, image data, or tool payloads. Optimistic/in-flight messages have no entry actions.
-
-Use `target: "display"` to act on one displayed header's slice, including optimistic or streaming messages. `message.entryId` is optional and absent before a durable entry exists. `message.text` contains that slice's original ordinary text parts, trimmed individually, with empty parts removed and the rest joined with blank lines; it excludes thinking, image data, and tool payloads, and does not use Markdown-transformed text. Display-action contexts omit `history`. Core Copy uses this target, a role-specific accessible label, and successful-action feedback.
-
-`visible` and `enabled` are optional synchronous, side-effect-free checks (both default to true). Their small context contains `machine`, `session` (basic identity plus `archived`, `pending`, and `busy`), and `message` (`entryId`, `role`, and `text`, according to the target). Role follows the displayed header (including grouped skill reads). The optional `ariaLabel(context)` callback uses the same inputs and rules; when omitted, the accessible label is `title`. Availability is cached for unchanged historical messages. It is refreshed when the message, these machine/session inputs, or active contributions change, and rechecked at invocation. Do not depend on unrelated mutable plugin state or perform requests in these callbacks. Streaming an unrelated message does not repeat historical checks, and rendering makes no request per message.
-
-`run` receives a fresh message/session snapshot plus `prompt`, `navigate`, and machine-bound `projects`. With a selected workspace it also receives `workspace`, `files`, an optional `terminal`, and any exact package-paired `peer` capabilities. Helpers use the initiating machine/workspace. Navigation defaults to that machine unless explicitly overridden. Prompt chips target the initiating conversation; cursor insertion and reads apply only while it remains selected. For entry actions, `history.fork()` and `history.goBack()` are workflow helpers on the clicked message: they load fresh history and retain guarded tree mutations and initiating-client result/draft behavior. They reject if that conversation is no longer selected or the plugin is unavailable. An action's rejected promise appears beside the message. Pending entry actions temporarily disable other entry-action buttons; display actions, including Core Copy, can run independently alongside them, with only the invoked display-action button disabled while it is pending.
-
-Message-level **Fork** and **Go back**, including `history.fork()` and `history.goBack()`, retain a non-user checkpoint's complete stored entry and all intervening history on the same active branch, stopping before the next distinct user/assistant checkpoint. Attached thinking and a reply in one stored message share one checkpoint; a separate thinking-only message can have its own. Tool-only assistant work, recorded results, notices, and metadata between checkpoints are retained. Checkpoint boundaries do not depend on transient button availability. Selecting a user message still forks or rewinds before that entry and restores its text to the editor. Neither action reruns commands or rolls back filesystem changes. The tree navigator still targets exact entries, and cloning is unchanged.
-
-For either target, `run` may return nothing or a `MessageActionFeedback` object, synchronously or through a promise. Feedback requires `title` and optionally supplies `ariaLabel` and a Lit `icon`. The host shows this successful-workflow feedback on the clicked button for **1.2 seconds**, then restores its usual presentation. The feedback's accessible label defaults to its `title`; omitting `icon` retains the action's usual icon or text. Feedback is generic, not limited to copying.
-
-Browser API v4 remains compatible; older hosts may ignore `messageActions`. Update PI WEB to use this contribution point and before relying on `target: "display"`, `ariaLabel`, or feedback. It does not expose a whole-transcript subscription.
+Older hosts may ignore message actions or lack newer display-action features; update PI WEB before relying on them.
 
 ### Content previews in chat and Files
 
-Chat displays native code blocks with horizontal scrolling and a shared normal-flow frame/header for ordinary code and renderer-backed blocks. The header shows the selected renderer label/chooser, otherwise the fence language when provided, and an icon-only Copy control. Built-in Mermaid remains click-to-render. Files previews retain the behavior described below. Chat's independent source and preview controls are documented in [composing chat behavior](chat-behaviors.md).
+Plugins can preview diagrams and other text formats in chat code blocks, Markdown files, and standalone Files previews. Manual rendering is the default: choose **Render** to view a preview. Plugins may opt into automatic rendering. If several renderers match, use the chooser to compare them.
 
-Browser plugins can contribute `contentRenderers` with an `id`, `languages` (Markdown fence labels), `fileExtensions` (without a dot), and a synchronous `render(input)` returning a Lit template. Selectors are case-insensitive and match by language OR file extension. `renderMode?: 'manual' | 'automatic'` defaults to `manual`: raw source and a **Render** button appear without calling the renderer. This is the initial policy, not a restriction on explicit user intent; unrelated prose updates retain activation. Authors may explicitly opt into `automatic` and are responsible for efficient activation and asynchronous work. The same renderer serves chat fences, Files Markdown preview fences, and standalone text files. Selection follows the effective machine's plugin availability and portable/machine-specific precedence. When several renderers match, a chooser lets you compare alternatives for each diagram or file, with only the selected renderer mounted. Choices default to alphabetical source plugin ID order (not remote runtime prefixes), then local contribution ID, using locale-independent, case-sensitive code-unit comparison. The chooser labels identify the plugin and contribution. Chat remembers explicit renderer and Raw/Preview choices per code block in this browser tab for 15 minutes from the last explicit choice. Viewing or remounting never extends that deadline; expiry applies on revisit, without removing a visible preview. Entries are bounded to the 128 most recently chosen blocks and scoped by machine, session, message/entry, part, block and exact source. Changed source or an unavailable selected renderer invalidates the choice and restores the deterministic default and its policy. Automatic rendering alone creates no remembered override. DOM is not cached; previews render again on remount. Reloading or closing the tab clears this memory. Files Markdown previews do not use chat intent memory. For standalone files, the plugin policy supplies the initial default only when no browser-local Raw/Preview preference exists. Saved Preview authorizes all file rendering, including manual renderers inside Markdown fences; saved Raw suppresses previews. Per-block Raw and renderer choices remain available within Markdown Preview. URL mode still takes precedence. Defaults are not automatically saved as explicit choices. Built-in file previews retain their existing defaults. There is no plugin order field or sorting UI.
+**Raw** shows source; **Copy** copies source even while a preview is visible. Files uses **Raw**/**Preview** beside **Download** and remembers your file-view preference; Preview also permits manual renderers in Markdown files. Chat choices are temporary and clear on reload.
 
-When chat previews are enabled, supported diagram blocks offer **Raw** and **Render**/**Preview** controls; the **Copy** icon always copies source, even while showing a preview, and follows the independent chat copy policy. Standalone Files previews use the file header's **Raw**/**Preview** controls beside **Download** and follow the saved file-view mode; diagrams within Markdown files retain per-block controls. Incomplete fences stay raw, with copying controlled by the consumer's source policy; closed fences become eligible for preview before the message finishes. Appending prose does not restart an unchanged completed block. Preview failure shows the source instead. Unknown formats retain the configured source presentation.
-
-`input` contains `text`, an abort `signal`, and `fail(error)`. Render synchronously, own async work in a component, clean up on disconnect or abort, and report asynchronous failures with `fail`. Obsolete failures are ignored. Renderers receive untrusted text: escape or sanitize output, avoid executing source, and do not relax the surrounding Markdown policy. The host skips plugin rendering for truncated input and blocks over 100,000 UTF-16 code units; Files also retains its inline byte-size limit. Ordinary chat Markdown and Files Markdown retain their distinct sanitizers.
-
-A browser consumer such as Files declares the host capability `{ pluginId: "pi-web", id: "content-rendering", version: 1, parse }` in `requires`, then resolves it in `start`. The exported `ContentRenderingCapability` type describes `listRenderers(request)`, `renderText(request)`, and `renderMarkdown({ machineId, text, truncated?, toSafeHtml, allowManualPreview? })`. `listRenderers` returns sorted eligible `{ id, label, renderMode }` choices without invoking renderers. `renderText` accepts an optional `rendererId` only with `controls: "external"`; absent or unavailable IDs select the first match. Embedded controls own their selection and ignore externally supplied IDs. Use `controls: "external"` when the consumer owns the renderer chooser, mode switching, and raw-source access (as Files does in its header beside Download); otherwise controls remain embedded. Consumers own their user-intent policy and may pass `allowManualPreview: true` to `renderText` or `renderMarkdown` to authorize manual previews (for example, an explicit Render click or Files’ saved or URL Preview preference). For Markdown this applies to eligible fences without overriding per-block Raw choices. Omitting it or passing false retains renderer defaults, including automatic previews. Chat never passes this override. External Raw controls must remove the preview. The public capability stores no remembered intent. Chat’s bounded per-block memory is private host policy, not a plugin option. Markdown requests have their own shape without file-path or language selectors; languages come from fences. Creating a `renderText` template does not invoke a renderer. Markdown diagrams each own an independent chooser. Switching renderers cancels the previous preview and clears its failure state. `renderMarkdown` requires the consumer's trusted sanitizer; it is not permission to insert untrusted HTML. See the [Files consumer](https://github.com/jmfederico/pi-web/blob/main/pi-web-plugins/files/pi-web-plugin.ts) and [Mermaid contribution](https://github.com/jmfederico/pi-web/tree/main/pi-web-plugins/mermaid) for complete implementations.
+Incomplete, truncated, or oversized input is not rendered. Files also limits the size of inline previews. Failed previews fall back to source. Renderers must treat text as untrusted, sanitize output, and avoid executing source. For implementation, see the [Files consumer](https://github.com/jmfederico/pi-web/blob/main/pi-web-plugins/files/pi-web-plugin.ts) and [Mermaid contribution](https://github.com/jmfederico/pi-web/tree/main/pi-web-plugins/mermaid).
 
 ### Conversations and companion extensions
 
@@ -320,17 +141,13 @@ A provider decides which workspaces belong to a project. A primary provider can 
 
 Conflicting claims produce a visible error. A provider that claims a project and then fails does not silently hand ownership to another provider. Providers can also offer workspace removal, which runs as a visible terminal operation.
 
-Workspace discovery must be available before host session services start. If a package needs both a provider and session-backed features, use two plugin entries in the same package. There is no need to split the distribution into separate packages.
-
 External integrations can send a project-scoped discovery hint through the core CLI on the project's machine:
 
 ```sh
 pi-web workspaces notify --project ID --plugin git
 ```
 
-`ID` is the registered project ID, not a filesystem path. `--plugin` identifies the workspace provider (`git` here). PI WEB verifies current provider ownership and publishes a hint only when that provider's `workspaceProvider.integration.acceptNotification()` accepts it. Connected browsers then re-read the workspace list; this does not register projects or workspaces.
-
-Providers can opt into external integrations with `workspaceProvider.integration`: `reconcile(project, signal)` maintains their setup after owner selection at startup and catalog access, while `acceptNotification(project, signal)` applies their notification policy. Use activation-context `workspaceNotifications.command(project.id)` for host-attributed, daemon-targeted argv rather than guessing executable paths or transport settings. `resolveProjectSettings(project, signal)` supplies the plugin's merged global/project snapshot when available. Integration failures do not change workspace-discovery authority.
+`ID` is the registered project ID, not a filesystem path. `--plugin` identifies the provider (`git` here), which must own the project and accept notifications. Connected browsers re-read the workspace list; the command does not register projects or workspaces.
 
 ## Install and manage
 
@@ -351,7 +168,7 @@ systemctl --user restart pi-web-sessiond
 
 A browser reload, web/API restart, or Pi's `/reload` does not activate server-plugin changes. Until the daemon restarts, Settings can show different desired and active states. A paired browser entry is withheld when it no longer matches the active server entry, rather than running incompatible code.
 
-Most plugins are enabled by default. Packages can opt out, and Settings can override the default. Plugin settings live in the normal [PI WEB configuration](https://pi-web.dev/config), not inside the package's installed files. Enablement stays global; server plugins supporting project settings, including Git, can use `plugins.<id>.settings` overrides in the registered project's `.pi-web/config.json`. See [Project plugin settings](https://pi-web.dev/config#project-plugin-settings) for top-level merge and fixed-snapshot restart rules.
+Most plugins are enabled by default. Packages can opt out, and Settings can override the default. Plugin settings live in the normal [PI WEB configuration](https://pi-web.dev/config), not inside the package's installed files. Enablement stays global; server plugins supporting project settings, including Git, can use `plugins.<id>.settings` overrides in the registered project's `.pi-web/config.json`. See [Project plugin settings](https://pi-web.dev/config#project-plugin-settings) for override and restart rules.
 
 ### Local development
 
@@ -384,17 +201,11 @@ Keep gateways and targets compatible. During this plugin API transition, upgrade
 
 ### Automatic Git worktree discovery
 
-New worktrees created by an agent, a terminal, or another local tool can appear in PI WEB without a browser reload. On Git builds supporting native config-based named hooks (introduced in Git 2.54), the bundled Git provider installs and repairs its own named `post-checkout` hook in local Git config at session-daemon startup and on project/workspace list access.
+New worktrees can appear without a browser reload or loss of the current conversation or draft. On Git builds supporting native config-based named hooks (introduced in Git 2.54), the bundled Git provider registers a local `post-checkout` hook. Existing hook scripts and `core.hooksPath` are preserved, and notification failures do not fail Git operations.
 
-The initial checkout of a new worktree notifies PI WEB about the project. Connected browsers re-read that project's workspace list without replacing the current conversation or draft. Discovery is event-driven, with no polling or refresh at the end of agent turns.
+`workspaceDiscoveryHooks` defaults to `true`. See [Git hook opt-out configuration](https://pi-web.dev/config#git-worktree-discovery-hooks) to disable it globally or per project. Setting changes require a manual session-daemon restart, which can interrupt active sessions and terminals; a browser reload is insufficient.
 
-PI WEB preserves `core.hooksPath` and existing hook scripts: it does not wrap project scripts or install an alternate hook manager. All new registrations invoke one helper shipped inside the PI WEB npm package; project-specific notification arguments live in Git configuration, not generated helper files in the data directory. Missing helper files or an unavailable runtime/daemon never fail Git operations.
-
-Removing the PI WEB npm package removes this helper: remaining registrations check for it and become no-ops without launching Node. Native `pi-web uninstall` only removes services, so the package/helper remains and notification attempts still run with a two-second bound. Older generated helpers and their registrations are left untouched.
-
-The Git setting `workspaceDiscoveryHooks` defaults to `true`; see [Git hook opt-out configuration](https://pi-web.dev/config#git-worktree-discovery-hooks) to turn it off globally or for one registered project. All changes to this setting require a manual session-daemon restart, which can interrupt active sessions; a browser reload alone does not update server settings.
-
-Git builds without native named-hook support are left untouched. `git worktree add --no-checkout` skips the initial hook notification. When hooks are skipped, disabled, or unavailable, ordinary discovery still catches up on browser focus, navigation, manual refresh, and socket reconnect.
+Unsupported Git builds are left untouched, and `git worktree add --no-checkout` skips the notification. When hooks are skipped, disabled, or unavailable, discovery catches up on browser focus, navigation, manual refresh, or reconnect.
 
 ### Workspace Tasks
 
@@ -427,13 +238,9 @@ PI WEB installs Workflows automatically for the active agent profile at session-
 
 ### Relays
 
-The shipped Relay package adds `/relay` and `/relay-worktree` to clarify a goal and its boundaries with you, then dispatch after explicit approval. Each fresh session chooses the next useful slice, records progress, and hands off until the finish line is reached or human help is needed. Project instructions and skills govern the work; the development route remains adaptive. The runner requires a fresh-context review of the whole result before completion, with at most three attempts total. Further attempts follow concrete corrections; unresolved blockers after the third stop the relay for human help. These are limits, not three mandatory reviews.
+The shipped Relay package adds `/relay` for the current checkout and `/relay-worktree` for a fresh worktree. It clarifies a goal and boundaries with you, then starts only after explicit approval. Fresh sessions record progress and hand off until the goal is reached or human help is needed. Project instructions and skills govern the work, and completion requires a fresh-context review.
 
-The package's `dispatch_relay` tool takes `packet` (saved directory), `leg` (a string identity such as `"2"` or `"R1-a"`; non-string values are rejected, not converted), and optional `cwd` (target workspace), `model` and `thinkingLevel` overrides. It validates non-empty UTF-8 `charter.md`, `status.md` and `log.md` files inside the target workspace (up to 256 KiB each), generates the handover instructions, and records explicit public Relay membership and a predictable session name. The charter supplies the goal; saved `status.md` is the actual baton. Save progress, gaps, decisions and blockers there before dispatch; no separate handover prompt is accepted. Dispatch is the final operational action. Packet validation is not proof of human approval; initial dispatch still requires your explicit approval.
-
-The read-only **Relays** tab lists packets under `.pi-web/relays/` and shows the goal (`charter.md`), current baton (`status.md`), and history (`log.md`). An optional `decisions.md` keeps consequential decisions and their reasons outside the baton; revisions are recorded in the log. The tab does not start or edit a relay. `/relay` uses the current checkout by default; `/relay-worktree` prepares a fresh worktree.
-
-The Relay plugin also adds a clickable session-list row indicator from saved Relay metadata. It opens the exact packet in **Relays** on that row's machine and workspace, including user-chosen packet locations inside the workspace. It works without a live Pi connection. Older sessions without Relay metadata are not identified from titles or handover prose.
+The read-only **Relays** tab lists saved packets under `.pi-web/relays/` and shows their goal, current baton, history, and any recorded decisions. It does not start or edit a relay. A session-list indicator opens the associated packet on that conversation's machine and workspace, including custom packet locations inside the workspace. Older sessions without public Relay metadata have no indicator.
 
 PI WEB installs Relay automatically for the active agent profile if it is not configured. Removing it through **Settings → Pi packages** is remembered; it will not be silently reinstalled. Reinstall from **Available packages** if you change your mind. Disabling just the Relays plugin hides its tab and row indicators but leaves its agent resources available.
 
