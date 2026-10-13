@@ -1,5 +1,45 @@
 # @jmfederico/pi-web
 
+## 1.202610.2
+
+### Patch Changes
+
+- 1e15853: Add application-wide plugin tabs, making Info and Updates available without a selected workspace. Expand the browser plugin API with selection subscriptions, project listings, and directory suggestions.
+- 951686d: Automatically discover new Git worktrees on supported Git builds (Git 2.54+), with configurable opt-out settings. Keep workspace lists up to date after reconnects and prevent deleted worktrees from reappearing.
+- b5d734a: Prevent duplicate session rows when recovering an empty browser-cached session.
+- 4106a4f: Keep long skill paths scrollable inside their cards without creating horizontal scrolling in the chat area.
+- 5362e78: Fix session selection so “Select all” includes collapsed subsessions in the current or archived section. Selecting a collapsed parent also selects its hidden children, keeping selection counts and bulk actions consistent.
+- f51147b: Add a configurable theme default and Theme controls in Settings → General: use a theme on this device, set it as the default, or follow the default without overriding saved device choices.
+- dc40959: Fix native checkout updates when run from another project by installing dependencies and building in the PI WEB checkout.
+- 6d68caa: Save agent question forms in the conversation so they survive session-daemon restarts. Keep earlier forms available for read-only review, with only the latest pending questions open for answers.
+- d9f0db5: Require full session IDs in URLs, plugin navigation, and session API lookups. Update abbreviated bookmarks and integrations; shortened IDs no longer resolve sessions.
+- 061ac7e: Fix extension commands that fork or rewind conversations, and recover conversation changes after reconnects without replacing drafts. Show message actions once per message, preserve intervening history when navigating, and restore Go back text without overwriting unsent input.
+- 15c13a4: Fix Markdown files getting stuck on “Loading…” in Preview mode when the Files plugin runs alongside the development web UI.
+- dfdd09e: Fix iPhone keyboards treating the empty prompt hint as existing input.
+- 90fc32f: Update runtime dependencies and bundled diagram rendering, and verify the Pi integration against SDK 1.1.0.
+- 00c964f: Let plugins add chat message actions, including actions on streaming messages and temporary success feedback. Move Copy, Fork, and Go back onto the shared plugin API while preserving their existing safeguards.
+- bf7af9f: Add the removable Workflows package with a `/worktree` prompt and a Create Worktree shortcut for preparing new worktrees from a task description.
+- 4a45865: Let plugins update individual navigation selections without resetting unrelated panels or sessions. Opening a Relay from its session label no longer reloads the current chat.
+- 3cde79a: Save custom project and workspace ordering, and add pinning and reordering for top-level session trees.
+- 02d24ec: Let plugins add removable context chips to the chat composer. Include their text when sending, and keep them available if a send fails.
+- bebe715: Collapse agent subsessions by default while keeping user-created forks and clones visible. Show activity and unread indicators for hidden descendants, keep collapsed chips stable, and fix session-list scrollbar and menu overlap.
+- 9f104dd: Make ignored extension provider changes easier to diagnose with clearer daemon-log warnings and recovery guidance, without repeated warnings for unchanged providers.
+- f685d2a: Show a dismissible notice when another PI WEB instance is using a session, keeping the transcript readable and preserving drafts and attachments.
+- 280124d: Restore diagram rendering controls when plugins finish loading after a session reload, without requiring navigation away and back.
+- 4bd0953: Add `dispatch_relay` to hand off Relay work from saved packets, with session links back to the packet. Simplify Relay guidance around an agreed goal, compact handovers, and a fresh-context final review.
+- 6ed051e: Remove legacy panel aliases and historical panel links. Plugins must remove `routeAliases` and `navigationAliases` to register, and saved links must use current panel IDs; see the [panel migration guide](https://pi-web.dev/plugins#panel-and-tab-navigation).
+- 93817d7: Avoid Pi's host-provided TypeBox dependency warning when loading PI WEB as a Pi package, while preserving the standalone server's TypeBox dependency.
+- 0438390: Let plugins add compact labels and links to session rows, backed by public metadata saved with conversations and available in archived listings.
+- b50ca79: Improve iPad chat scrolling with code-block headers and accessible Copy controls, including when a rendered preview is visible.
+- 70049c9: Automatically recover temporary conversation and session-list network failures when returning to the app or reconnecting, showing Retry only if recovery fails.
+- f6afa1a: Keep chat reading positions stable when loading older history, returning to a conversation, or loading images. Prevent repeated automatic history loading while the view stays at the top.
+- c6ae2d3: Recover session and subsession activity indicators after returning to a backgrounded tab or reconnecting, without opening each session.
+- 5275ca4: Default the keyboard send shortcut to Steer while the agent is responding, with a setting to choose Follow-up instead. Highlight the action currently assigned to the shortcut.
+- 7a7d6ea: Use a tabbed two-column layout when the workspace column is collapsed, and remember collapsed columns across reloads. Keep panel tabs a consistent height with or without icons and badges.
+- 13e59fb: Fix repeated Terminal panel reloads when navigating to a terminal that is no longer available.
+- 485a861: Prevent duplicate delivery of tracked subsession results. Return completed results promptly even while other subsessions are still working.
+- 33fd87f: Add jump-to-top and jump-to-end controls that show when chat is following live updates. Keep following reliably as content changes without interrupting paused reading.
+
 ## 1.202610.1
 
 ### Patch Changes
