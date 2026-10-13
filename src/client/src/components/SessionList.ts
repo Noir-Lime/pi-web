@@ -9,6 +9,7 @@ import { renderSessionLabelItems } from "./sessionLabel";
 import { isArchivableSessionInfo, isTransientNewSessionInfo } from "../sessionPersistence";
 import { normalizeSessionPath } from "../sessionPaths";
 import { isSessionActive } from "../../../shared/activity";
+import { CORE_STATUS_FLAGS, type StatusFlags } from "../../../shared/machineStatus";
 import { actionMenuPanelStyle } from "./actionMenu";
 import { renderActionActivityIndicator, type ActivityIndicatorKind } from "./activityBadge";
 import type { KeyboardNavigableSection } from "./navigationFocus";
@@ -49,6 +50,8 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
   @property({ attribute: false }) onMovePin?: (session: SessionInfo, direction: -1 | 1) => void;
   @property({ attribute: false }) statuses: Record<string, SessionStatus> = {};
   @property({ attribute: false }) activities: Record<string, SessionActivity> = {};
+  // Undefined is an older daemon; an empty map is an authoritative idle snapshot.
+  @property({ attribute: false }) sessionFlags: Readonly<Record<string, StatusFlags>> | undefined;
   @property({ attribute: false }) sending: Record<string, true> = {};
   @property({ attribute: false }) unreadSessionIds: ReadonlySet<string> = new Set();
   @property({ attribute: false }) selected?: SessionInfo;
@@ -88,6 +91,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     rows: readonly SessionRow[];
     statuses: SessionList["statuses"];
     activities: SessionList["activities"];
+    sessionFlags: SessionList["sessionFlags"];
     sending: SessionList["sending"];
     unreadSessionIds: SessionList["unreadSessionIds"];
     attention: ReadonlyMap<string, AgentAttention>;
@@ -160,7 +164,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
   private agentGroupAttention(rows: readonly SessionRow[], groups: AgentSessionGroups): ReadonlyMap<string, AgentAttention> {
     const cached = this.agentAttentionCache;
     if (cached?.rows === rows && cached.statuses === this.statuses && cached.activities === this.activities
-      && cached.sending === this.sending && cached.unreadSessionIds === this.unreadSessionIds) return cached.attention;
+      && cached.sessionFlags === this.sessionFlags && cached.sending === this.sending && cached.unreadSessionIds === this.unreadSessionIds) return cached.attention;
     const attention = new Map<string, AgentAttention>();
     // Parent-first tree order lets nested agent activity roll up in one reverse pass.
     // User/unknown children are always visible and do not contribute to these chips.
@@ -172,14 +176,14 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
       if (parentId === undefined) continue;
       const nested = attention.get(session.id);
       const parent = attention.get(parentId);
-      const ownKind = sessionRowActivityKind(session, this.statuses[session.id], this.activities[session.id], this.sending[session.id] === true);
+      const ownKind = sessionRowActivityKind(session, this.statuses[session.id], this.activities[session.id], this.sending[session.id] === true, this.sessionFlags);
       const kind = ownKind === "sending" || nested?.kind === "sending" || parent?.kind === "sending"
         ? "sending" : ownKind ?? nested?.kind ?? parent?.kind;
       const unread = sessionRowUnread(session, this.unreadSessionIds) || nested?.unread === true || parent?.unread === true;
       if (kind !== undefined || unread) attention.set(parentId, { kind, unread });
     }
     this.agentAttentionCache = {
-      rows, statuses: this.statuses, activities: this.activities, sending: this.sending,
+      rows, statuses: this.statuses, activities: this.activities, sessionFlags: this.sessionFlags, sending: this.sending,
       unreadSessionIds: this.unreadSessionIds, attention,
     };
     return attention;
@@ -460,7 +464,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     const bulkSelected = showsCheckbox && this.selectedSessionIds.has(session.id);
     const status = this.statuses[session.id];
     const activity = this.activities[session.id];
-    const indicatorKind = sessionRowActivityKind(session, status, activity, this.sending[session.id] === true);
+    const indicatorKind = sessionRowActivityKind(session, status, activity, this.sending[session.id] === true, this.sessionFlags);
     const unread = sessionRowUnread(session, this.unreadSessionIds);
     const labelItems = this.sessionLabelItems(session);
     return html`
@@ -498,6 +502,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     const { session } = row;
     const status = this.statuses[session.id];
     const canArchive = isArchivableSessionInfo(session, status);
+    const isWorking = sessionRowActivityKind(session, status, this.activities[session.id], false, this.sessionFlags) === "session";
     const canDeleteTransient = isTransientNewSessionInfo(session, status);
     const descendantCount = descendantCounts?.get(session.id) ?? 0;
     // Fixed overlays are siblings of the isolated scroller, not trapped in its paint context.
@@ -521,7 +526,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
                 ${descendantCount > 0 ? html`<button title="Archive this session and its descendants" @click=${() => { this.openMenuSessionId = undefined; this.confirmArchiveWithDescendants(session, descendantCount); }}>Archive with descendants (${descendantCount})</button>` : null}
               ` : null}
               ${session.parentSessionPath !== undefined ? html`<button title="Detach from parent" @click=${() => { this.openMenuSessionId = undefined; this.onDetachParent?.(session); }}>Detach from parent</button>` : null}
-              ${canArchive ? html`<button title=${isSessionActive(this.statuses[session.id], this.activities[session.id]) ? "Stop current session activity before reloading from disk" : "Reload session from disk without refreshing Pi runtime resources"} ?disabled=${isSessionActive(this.statuses[session.id], this.activities[session.id])} @click=${() => { this.openMenuSessionId = undefined; this.onReload?.(session); }}>Reload from disk</button>` : null}
+              ${canArchive ? html`<button title=${isWorking ? "Stop current session activity before reloading from disk" : "Reload session from disk without refreshing Pi runtime resources"} ?disabled=${isWorking} @click=${() => { this.openMenuSessionId = undefined; this.onReload?.(session); }}>Reload from disk</button>` : null}
             `}
       </div>
     `;
@@ -930,10 +935,16 @@ export function sessionRowActivityKind(
   status: SessionStatus | undefined,
   activity: SessionActivity | undefined,
   sending: boolean,
+  sessionFlags?: Readonly<Record<string, StatusFlags>>,
 ): ActivityIndicatorKind | undefined {
   if (isCachedNewSessionInfo(session) || session.archived === true) return undefined;
   if (sending) return "sending";
-  if (isSessionActive(status, activity)) return "session";
+  // The complete daemon projection owns navigation activity. Live chat events
+  // are only a compatibility fallback, not a second writer of this state.
+  const working = sessionFlags === undefined
+    ? isSessionActive(status, activity)
+    : sessionFlags[session.id]?.[CORE_STATUS_FLAGS.working] === true;
+  if (working) return "session";
   return undefined;
 }
 

@@ -33,6 +33,16 @@ describe("sessionRowActivityKind", () => {
     expect(sessionRowActivityKind(session("s"), { ...idle, isStreaming: true }, undefined, false)).toBe("session");
   });
 
+  it("uses the complete daemon projection instead of stale chat status and activity", () => {
+    const staleStatus = { ...idle, isStreaming: true };
+    const staleActivity = { sessionId: "s", phase: "active" as const, label: "Working", at: "now" };
+    expect(sessionRowActivityKind(session("s"), staleStatus, staleActivity, false, {})).toBeUndefined();
+    expect(sessionRowActivityKind(session("s"), idle, undefined, false, { s: { "core:working": true } })).toBe("session");
+    expect(sessionRowActivityKind(session("s"), idle, undefined, true, {})).toBe("sending");
+    // Older daemons omit the projection and retain event-based compatibility.
+    expect(sessionRowActivityKind(session("s"), staleStatus, staleActivity, false, undefined)).toBe("session");
+  });
+
   it("shows no active-work indicator for a session that is only starting up", () => {
     const startup = { sessionId: "s", phase: "active" as const, label: "Opening session", detail: "Starting the Pi session", at: "now", startup: true };
 

@@ -52,7 +52,7 @@ describe("header identity", () => {
 
 describe("machine status wiring", () => {
   it("gives machine sections every snapshot and project and workspace sections the selected machine's", async () => {
-    const local = machineStatusSnapshot({ machine: { "core:working": true } });
+    const local = machineStatusSnapshot({ machine: { "core:working": true }, sessions: { "child-1": { "core:working": true } } });
     const remote = machineStatusSnapshot({ machine: { "core:unread": true } });
     const panel = await mountPanel({ local, "remote-a": remote }, machine("local"));
 
@@ -60,6 +60,11 @@ describe("machine status wiring", () => {
     expect(section(panel, "machine-list", MachineList).statusSnapshots).toEqual({ local, "remote-a": remote });
     expect(section(panel, "project-list", ProjectList).statusSnapshot).toBe(local);
     expect(section(panel, "workspace-list", WorkspaceList).statusSnapshot).toBe(local);
+    expect(section(panel, "session-list", SessionList).sessionFlags).toBe(local.sessions);
+
+    panel.selectedMachine = machine("remote-a");
+    await panel.updateComplete;
+    expect(section(panel, "session-list", SessionList).sessionFlags).toBe(remote.sessions);
   });
 
   it("reads the local machine's snapshot before a machine has been selected", async () => {
@@ -79,6 +84,7 @@ describe("machine status wiring", () => {
 
     expect(section(panel, "project-list", ProjectList).statusSnapshot).toBeUndefined();
     expect(section(panel, "workspace-list", WorkspaceList).statusSnapshot).toBeUndefined();
+    expect(section(panel, "session-list", SessionList).sessionFlags).toBeUndefined();
   });
 });
 

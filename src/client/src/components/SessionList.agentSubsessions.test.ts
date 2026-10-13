@@ -158,6 +158,31 @@ describe("SessionList agent subsession controls", () => {
     expect(toggle.querySelector(".action-activity")).toBeNull();
   });
 
+  it("clears completed child rows and collapsed chips from a recovered snapshot without selecting them", async () => {
+    const parent = session("parent");
+    const agent = child("agent", parent, true);
+    const nested = child("nested", agent, true);
+    const list = await mount([parent, agent, nested]);
+    list.activities = {
+      agent: { sessionId: agent.id, phase: "active", label: "Working", at: "now" },
+      nested: { sessionId: nested.id, phase: "active", label: "Working", at: "now" },
+    };
+    list.sessionFlags = { agent: { "core:working": true }, nested: { "core:working": true } };
+    await settle(list);
+    expect(agentToggle(list, "parent").querySelector(".activity-indicator.session")).not.toBeNull();
+
+    // Both completion events were missed while backgrounded; the complete
+    // reconnect/resume projection is sufficient, even with stale chat caches.
+    list.sessionFlags = {};
+    await settle(list);
+    expect(agentToggle(list, "parent").querySelector(".action-activity")).toBeNull();
+    agentToggle(list, "parent").click();
+    await settle(list);
+    expect(row(list, "agent")?.querySelector(".activity-indicator.session")).toBeNull();
+    expect(agentToggle(list, "agent").querySelector(".action-activity")).toBeNull();
+    expect(list.selected).toBeUndefined();
+  });
+
   it("does not roll parent, visible user-child, unrelated, or archived activity into a chip", async () => {
     const parent = session("parent");
     const agent = child("agent", parent, true);
