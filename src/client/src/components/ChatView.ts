@@ -11,6 +11,7 @@ import { machineSessionKey } from "../machineKeys";
 import { canonicalEntryActionHeaders, chatMessageHasHeader, groupChatMessages, summarizeChatGroup, type ChatGroup } from "../chatGroups";
 import { openTranscriptQuestion, transcriptQuestionOutcomes } from "../chatQuestions";
 import { ChatScrollFlows } from "../ChatScrollFlows";
+import { ChatRenderKeys } from "../chatRenderKeys";
 import { DEFAULT_CHAT_BEHAVIORS, type ChatBehaviors } from "../chatBehaviors";
 import type { AskUserSubmission, PendingExtensionDialog, QueuedSessionMessage, SessionActivity, SessionRef, SessionStatus, SessionWarningSeverity } from "../api";
 import type { ClosedExtensionDialog } from "../appState";
@@ -442,6 +443,8 @@ export class ChatView extends LitElement {
     return notificationTargetKey(previous) !== notificationTargetKey(currentInbox);
   }
 
+  private readonly renderKeys = new ChatRenderKeys();
+
   override render() {
     const groups = this.groupedMessages();
     const entryActionHeaders = canonicalEntryActionHeaders(groups);
@@ -450,6 +453,15 @@ export class ChatView extends LitElement {
     // DOM reuse, clearing the part reclaims the end markers that the current Lit
     // build retains when repeat items are removed.
     const transcriptIdentity = machineSessionKey(this.machineId, this.sessionId);
+    const keys = this.renderKeys.reconcile(transcriptIdentity, groups.map((group) => {
+      const index = group.kind === "group" ? group.startIndex : group.index;
+      const message = group.kind === "group" ? group.messages[0]?.message : group.message;
+      const identity = chatLineScrollIdentity(message);
+      return {
+        slot: JSON.stringify([group.kind, index, message?.role]),
+        ...(identity === undefined ? {} : { identity: JSON.stringify([group.kind, identity]) }),
+      };
+    }));
     const following = this.behaviors.followTail && this.followingLive;
     return html`
       ${this.renderTopNotices()}
@@ -466,7 +478,7 @@ export class ChatView extends LitElement {
           ${this.renderHistoryBoundary()}
           ${keyed(transcriptIdentity, repeat(
             groups,
-            (group) => group.kind === "group" ? this.groupRenderKey(group) : `m:${chatLineIdentity(group.index, group.message)}`,
+            (_group, index) => keys[index],
             (group, index) => {
               if (group.kind === "group") return this.renderMessageGroup(group, this.isLiveTailGroup(groups, index), entryActionHeaders);
               if (group.kind === "tool-image") return this.renderToolImageOutput(group.message, group.index, entryActionHeaders, group.toolName);
@@ -1157,9 +1169,6 @@ export class ChatView extends LitElement {
       : `${this.sessionId}:${chatLineIdentity(group.endIndex, group.messages.at(-1)?.message)}`;
   }
 
-  private groupRenderKey(group: Extract<ChatGroup, { kind: "group" }>): string {
-    return `g:${chatLineIdentity(group.startIndex, group.messages[0]?.message)}`;
-  }
 
   private groupAnchorKey(group: Extract<ChatGroup, { kind: "group" }>, live: boolean): string | undefined {
     // Historical groups can absorb earlier events; live groups grow at the end.
