@@ -15,7 +15,7 @@ import { AuthController } from "../controllers/authController";
 import { MachineController } from "../controllers/machineController";
 import { MachineStatusController } from "../controllers/machineStatusController";
 import { NavigationOrderController, type NavigationOrderScope } from "../controllers/navigationOrderController";
-import { navigationOrderApi } from "../api/navigationOrder";
+import { navigationOrderPort } from "../api/navigationOrder";
 import { moveOrderedId, orderItems } from "../navigationOrder";
 import { ProjectController, type ProjectTrustChoice } from "../controllers/projectController";
 import { PiWebStatusController } from "../controllers/piWebStatusController";
@@ -179,7 +179,7 @@ export class PiWebApp extends LitElement {
 
   @state() private navigationOrderVersion = 0;
   private navigationOrderConnected = false;
-  private readonly navigationOrder = new NavigationOrderController(navigationOrderApi, {
+  private readonly navigationOrder = new NavigationOrderController(navigationOrderPort, {
     onChange: () => { this.navigationOrderVersion += 1; },
     onError: (scope, error) => {
       this.browserErrors.report(machineBrowserErrorScope(scope.machineId), `Failed to load or save navigation order: ${errorMessage(error)}`);

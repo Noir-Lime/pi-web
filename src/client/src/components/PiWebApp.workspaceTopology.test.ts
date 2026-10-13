@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, type Project } from "../api";
+import { navigationOrderPort } from "../api/navigationOrder";
 import type { AppState } from "../appState";
 import { SessionController } from "../controllers/sessionController";
 import { RealtimeSocket, type BrowserRealtimeEvent } from "../sessionSocket";
@@ -272,6 +273,7 @@ function selectSessionForPolling(app: PiWebApp, isStreaming = false): void {
  * observes only whether the resume/app-data paths include workspace topology.
  */
 function stubBackgroundRefreshes(app: PiWebApp): void {
+  vi.spyOn(navigationOrderPort, "load").mockResolvedValue({ ids: [], revision: 0 });
   const result = () => Promise.resolve();
   for (const name of [
     "refreshMachineStatusSnapshots",

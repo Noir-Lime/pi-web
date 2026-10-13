@@ -35,5 +35,3 @@ export const navigationOrderPort: NavigationOrderPort = {
     return request(navigationOrderPath(scope), parseNavigationOrderSnapshot, { method: "PUT", body: JSON.stringify(preference) });
   },
 };
-
-export const navigationOrderApi = navigationOrderPort;
