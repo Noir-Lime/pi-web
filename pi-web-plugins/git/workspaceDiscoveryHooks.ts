@@ -17,7 +17,11 @@ export function createWorkspaceDiscoveryHooks(
   context: ServerPluginActivationContext,
   runGit: RunGit,
   nodeExecutable = process.execPath,
+  instanceNamespace = "",
 ): WorkspaceProviderIntegration {
+  if (instanceNamespace !== "" && !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,31}$/u.test(instanceNamespace)) {
+    throw new Error("PI_WEB_INSTANCE_NAMESPACE must be 1–32 letters, digits, underscores or hyphens, starting with a letter or digit");
+  }
   if (!isAbsolute(nodeExecutable)) throw new Error("Git hook runtime must be an absolute executable path");
   // Serialize this activation's config edits, including registrations sharing a
   // common Git config. Git itself locks writes from other processes.
@@ -51,7 +55,10 @@ export function createWorkspaceDiscoveryHooks(
     const identity = createHash("sha256")
       .update(JSON.stringify(["packaged-helper", context.pluginId, resolve(context.dataDirectory), project.id]))
       .digest("hex");
-    const name = `pi-web-workspace-discovery-${identity}`;
+    // Keep the unnamespaced production identity byte-for-byte compatible.
+    // The name also scopes ownership records; never adopt another instance's hook.
+    const prefix = instanceNamespace === "" ? "" : `${instanceNamespace}-`;
+    const name = `pi-web-workspace-discovery-${prefix}${identity}`;
     const helper = join(context.packageRoot, "workspace-discovery-notify.cjs");
     const registration = join(context.dataDirectory, "workspace-discovery", `${name}.registration.json`);
     const notifier = context.workspaceNotifications?.command(project.id);

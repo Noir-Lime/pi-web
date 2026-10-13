@@ -178,6 +178,7 @@ Rows with JSON key `—` are runtime-only environment variables, not config-file
 | **Runtime-only environment variables** |  |  |  |  |  |
 | Global config file path | — | `PI_WEB_CONFIG` (`XDG_CONFIG_HOME` affects the default path) | Process/env | Selects the global config file; not a project config | Restart services/processes after changing env |
 | Managed data directory | — | `PI_WEB_DATA_DIR` | Process/env | Not supported locally | Restart web/API and session daemon |
+| Git hook instance namespace | — | `PI_WEB_INSTANCE_NAMESPACE` | Session daemon env | Not supported locally | Restart session daemon; see [running multiple instances](#git-instance-namespace) |
 | Session daemon socket | — | `PI_WEB_SESSIOND_SOCKET` | Web/API + session daemon env | Not supported locally | Restart daemon and web/API; both must match |
 | Session daemon TCP port | — | `PI_WEB_SESSIOND_PORT` | Session daemon env | Not supported locally | Restart session daemon; set `PI_WEB_SESSIOND_URL` for web/API too |
 | Session daemon TCP host | — | `PI_WEB_SESSIOND_HOST` | Session daemon env | Not supported locally | Restart session daemon |
@@ -406,6 +407,17 @@ To opt out, merge this into machine config or the registered project's `.pi-web/
 ```
 
 Project values override the machine default. Changes require a manual session-daemon restart. Disabling hooks leaves the Git plugin and ordinary workspace discovery available.
+
+<a id="git-instance-namespace"></a>
+#### Git worktree discovery when running multiple instances
+
+Most installations need no changes. Docker dev automatically uses `dev` to keep its worktree notifications separate from production; production keeps its existing behavior.
+
+For a custom setup where instances share a PI WEB data directory, set `PI_WEB_INSTANCE_NAMESPACE=dev` in the dev session daemon's environment and leave it unset in production. Use a different name for each additional instance: 1–32 letters, digits, underscores or hyphens, starting with a letter or digit.
+
+Restart the affected daemon to apply the change; for Docker, recreate the affected containers. This interrupts active sessions and terminals, so finish important work first. This setting separates Git notifications only; separate data directories are still recommended for independent instances.
+
+Keep the name stable. If you need to retire a name, disable [discovery hooks](#git-worktree-discovery-hooks) while still using that name before switching, so the old notifications are removed.
 
 #### Desired versus active plugin state
 

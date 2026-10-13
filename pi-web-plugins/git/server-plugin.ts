@@ -45,7 +45,7 @@ const plugin: PiWebServerPlugin = {
   name: "Git",
   activate(context) {
     return {
-      workspaceProvider: createGitWorkspaceProvider(context),
+      workspaceProvider: createGitWorkspaceProvider(context, process.env["PI_WEB_INSTANCE_NAMESPACE"] ?? ""),
       peer: { request: (request) => requestGitBackend(context, request) },
     };
   },
@@ -53,10 +53,10 @@ const plugin: PiWebServerPlugin = {
 
 export default plugin;
 
-export function createGitWorkspaceProvider(context: ServerPluginActivationContext): WorkspaceProvider {
+export function createGitWorkspaceProvider(context: ServerPluginActivationContext, instanceNamespace = ""): WorkspaceProvider {
   return Object.freeze({
     fallback: true,
-    integration: createWorkspaceDiscoveryHooks(context, (cwd, args, signal) => runGit(context, cwd, args, signal)),
+    integration: createWorkspaceDiscoveryHooks(context, (cwd, args, signal) => runGit(context, cwd, args, signal), process.execPath, instanceNamespace),
     async probe(project: ProjectInput, signal: AbortSignal): Promise<ProviderClaim> {
       const result = await runGit(context, project.path, ["rev-parse", "--is-inside-work-tree"], signal);
       if (result.signal !== null) throw new Error(`git repository probe ended from signal ${result.signal}`);

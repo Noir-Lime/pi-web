@@ -470,6 +470,12 @@
     }
   }
 }</code></pre></div><p>Project values override the machine default. Changes require a manual session-daemon restart. Disabling hooks leaves the Git plugin and ordinary workspace discovery available.</p></details>
+<details class="config-details" id="git-instance-namespace"><summary>Git worktree discovery when running multiple instances</summary>
+<p>Most installations need no changes. Docker dev automatically uses <code>dev</code> to keep its worktree notifications separate from production; production keeps its existing behavior.</p>
+<p>For a custom setup where instances share a PI WEB data directory, set <code>PI_WEB_INSTANCE_NAMESPACE=dev</code> in the dev session daemon’s environment and leave it unset in production. Use a different name for each additional instance: 1–32 letters, digits, underscores or hyphens, starting with a letter or digit.</p>
+<p>Restart the affected daemon to apply the change; for Docker, recreate the affected containers. This interrupts active sessions and terminals, so finish important work first. This setting separates Git notifications only; separate data directories are still recommended for independent instances.</p>
+<p>Keep the name stable. If you need to retire a name, disable <a href="#git-worktree-discovery-hooks">discovery hooks</a> while still using that name before switching, so the old notifications are removed.</p>
+</details>
 <div class="table-scroll" role="region" aria-label="After installing or updating a Pi package" tabindex="0">
 <table class="reference-table ">
 <caption>After installing or updating a Pi package</caption>
@@ -620,6 +626,13 @@
 <td><code>~/.pi-web</code></td>
 <td>Registries, plugins, daemon socket, and session archives.</td>
 <td>Stop services before switching; then restart</td>
+</tr>
+<tr>
+<th scope="row"><code>PI_WEB_INSTANCE_NAMESPACE</code></th>
+<td>Sessiond</td>
+<td>Empty (Docker dev: <code>dev</code>)</td>
+<td>Keep dev worktree notifications separate from production. See <a href="#git-instance-namespace">running multiple instances</a>.</td>
+<td>Sessiond restart</td>
 </tr>
 <tr>
 <th scope="row"><code>PI_WEB_PROJECTS_FILE</code></th>

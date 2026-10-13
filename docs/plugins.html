@@ -280,6 +280,7 @@ ln -s /path/to/plugin-folder ~/.pi-web/plugins/my-plugin</code></pre></div>
 </ul>
 <h3 id="automatic-git-worktree-discovery">Automatic Git worktree discovery</h3>
 <p>New worktrees can appear without a browser reload or loss of the current conversation or draft. On Git builds supporting native config-based named hooks (introduced in Git 2.54), the bundled Git provider registers a local <code>post-checkout</code> hook. Existing hook scripts and <code>core.hooksPath</code> are preserved, and notification failures do not fail Git operations.</p>
+<p>Running dev and production on the same repositories? Docker dev handles this automatically. For other setups, see <a href="config#git-instance-namespace">running multiple instances</a>.</p>
 <p><code>workspaceDiscoveryHooks</code> defaults to <code>true</code>. See <a href="config#git-worktree-discovery-hooks">Git hook opt-out configuration</a> to disable it globally or per project. Setting changes require a manual session-daemon restart, which can interrupt active sessions and terminals; a browser reload is insufficient.</p>
 <p>Unsupported Git builds are left untouched, and <code>git worktree add --no-checkout</code> skips the notification. When hooks are skipped, disabled, or unavailable, discovery catches up on browser focus, navigation, manual refresh, or reconnect.</p>
 <h3 id="workspace-tasks">Workspace Tasks</h3>

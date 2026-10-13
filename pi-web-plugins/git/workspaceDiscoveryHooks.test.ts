@@ -3,7 +3,7 @@ import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ProjectInput,
   ServerPluginActivationContext,
@@ -34,7 +34,10 @@ const gitAvailable = configHelp.error === undefined && configHelp.status !== nul
 const namedHooksSupported = configHelp.status === 0
   && advertisedConfig.includes("hook.<friendly-name>.command") && advertisedConfig.includes("hook.<friendly-name>.event");
 
+beforeEach(() => { vi.stubEnv("PI_WEB_INSTANCE_NAMESPACE", ""); });
+
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await Promise.all(temporaryRoots.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
@@ -81,6 +84,38 @@ describe.skipIf(process.platform === "win32" || !namedHooksSupported)("Git-owned
     expect(await readFile(traditionalMarker, "utf8")).toBe("traditional");
     expect(await readFile(otherMarker, "utf8")).toBe("other");
     expect(fixture.git(["hook", "list", "post-checkout"])).toContain("other");
+  });
+
+  it("namespaces dev routing and ownership without changing or removing production hooks", async () => {
+    const fixture = await repositoryFixture();
+    const production = await fixture.activate();
+    await production.integration.reconcile(fixture.project, signal());
+    const productionKeys = fixture.ownedKeys();
+    const productionCommandKey = productionKeys.find((key) => key.endsWith(".command"));
+    if (productionCommandKey === undefined) throw new Error("Expected production hook");
+    const productionCommand = fixture.git(["config", "--local", productionCommandKey]);
+    const productionRecord = fixture.registrationForProject(production.context.dataDirectory, fixture.project.id);
+    const originalRecord = await readFile(productionRecord, "utf8");
+    expect(productionCommandKey).toBe(`hook.${basename(productionRecord).replace(".registration.json", "")}.command`);
+
+    vi.stubEnv("PI_WEB_INSTANCE_NAMESPACE", "dev");
+    const dev = await fixture.activate({ workspaceNotifications: { command: () => ["dev-notifier", "--socket=dev.sock"] } });
+    await dev.integration.reconcile(fixture.project, signal());
+    const devKey = fixture.ownedKeys().find((key) => key.startsWith("hook.pi-web-workspace-discovery-dev-") && key.endsWith(".command"));
+    if (devKey === undefined) throw new Error("Expected dev hook");
+    expect(fixture.git(["config", "--local", devKey])).toContain("dev-notifier");
+    expect(await fixture.registrations(dev.context.dataDirectory)).toHaveLength(2);
+
+    // Reconciliation in either order must retain both routes and records.
+    await production.integration.reconcile(fixture.project, signal());
+    await dev.integration.reconcile(fixture.project, signal());
+    expect(fixture.git(["config", "--local", productionCommandKey])).toBe(productionCommand);
+    expect(await readFile(productionRecord, "utf8")).toBe(originalRecord);
+    const disabledDev = await fixture.activate({ settings: { workspaceDiscoveryHooks: false } });
+    await disabledDev.integration.reconcile(fixture.project, signal());
+    expect(fixture.ownedKeys()).toEqual(productionKeys);
+    expect(await fixture.registrations(dev.context.dataDirectory)).toEqual([productionRecord]);
+    expect(fixture.git(["config", "--local", productionCommandKey])).toBe(productionCommand);
   });
 
   it("is idempotent and repairs owned config without rewriting the packaged helper", async () => {
@@ -497,6 +532,13 @@ describe.skipIf(process.platform === "win32" || !namedHooksSupported)("Git-owned
 });
 
 describe("workspace discovery settings and unsupported Git boundary", () => {
+  it.each(["../dev", " dev", "dev.foo", "-dev", "a".repeat(33)])("rejects invalid instance namespaces before Git mutation: %s", async (namespace) => {
+    vi.stubEnv("PI_WEB_INSTANCE_NAMESPACE", namespace);
+    const context = activationContext();
+    await expect(activate(context)).rejects.toThrow("PI_WEB_INSTANCE_NAMESPACE");
+    expect(context.execFile).not.toHaveBeenCalled();
+  });
+
   it.skipIf(process.platform === "win32" || !gitAvailable || namedHooksSupported)("leaves real old-Git config and scripts untouched when named hooks are unavailable", async () => {
     const fixture = await repositoryFixture();
     fixture.git(["config", "hook.other.command", "external-command"]);
