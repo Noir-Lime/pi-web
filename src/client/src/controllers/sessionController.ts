@@ -1284,6 +1284,28 @@ export class SessionController {
     }
   }
 
+  async mutateQueuedMessage(action: "remove" | "edit" | "toggle", index: number, expectedQueue: QueuedSessionMessage[]): Promise<void> {
+    const state = this.getState();
+    const session = state.selectedSession;
+    if (session === undefined || session.archived === true || isClientPendingStartSessionInfo(session)) return;
+    const machineId = selectedMachineId(state);
+    const errorOwner = this.captureSessionErrorOwner(session);
+    const selectionSeq = this.selectionSeq;
+    try {
+      const status = await this.api.mutateQueuedMessage(session, { action, index, expectedQueue }, machineId);
+      if (action === "edit") {
+        const text = expectedQueue[index]?.text ?? "";
+        saveDraft(machineSessionKey(machineId, session.id), text);
+        if (this.isCurrentSessionSelection(session.id, machineId, selectionSeq)) {
+          await this.replacePromptEditorText?.({ machineId, sessionId: session.id, text });
+        }
+      }
+      if (this.isCurrentSessionSelection(session.id, machineId, selectionSeq)) this.applyStatus(status);
+    } catch (error) {
+      this.reportSessionError(session, machineId, error, errorOwner);
+    }
+  }
+
   async clearServerQueue() {
     const state = this.getState();
     const session = state.selectedSession;
@@ -2484,7 +2506,11 @@ function failedPendingSessionActivity(sessionId: string, message: string, queued
 
 function queuedSessionMessagePreview(queued: QueuedPendingSessionSend): QueuedSessionMessage {
   if (queued.type === "prompt") {
-    return { kind: queued.streamingBehavior === "steer" ? "steer" : "followUp", text: queuedPromptPreviewText(queued.text, queued.attachments) };
+    const attachmentCount = queued.attachments?.length ?? 0;
+    return {
+      kind: queued.streamingBehavior === "steer" ? "steer" : "followUp", text: queuedPromptPreviewText(queued.text, queued.attachments),
+      ...(attachmentCount > 0 ? { hasAttachments: true, attachmentCount } : {}),
+    };
   }
   return { kind: "followUp", text: queued.text };
 }

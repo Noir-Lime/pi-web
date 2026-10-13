@@ -3,6 +3,8 @@ import { customElement, property, query, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import { keyed } from "lit/directives/keyed.js";
 import { ChatDisclosureController } from "../chatDisclosure";
+import { writeClipboardText } from "../clipboard";
+import { queuedMessageAttachmentLabel, type QueuedMessageAction, type QueuedMessageActionTarget } from "../queuedMessageActions";
 import type { DisplayedMessageActionAvailabilityContext, MessageActionAvailabilityContext, MessageActionFeedback, MessageActionResult } from "../../../plugin-api";
 import { displayedMessageActionMessage, messageActionMessage, MessageActionAvailabilityCache, type RegisteredMessageAction } from "../plugins/messageActions";
 import { machineSessionKey } from "../machineKeys";
@@ -232,6 +234,9 @@ export class ChatView extends LitElement {
   @property({ attribute: false }) onDismissClosedDialog?: ExtensionDialogDismissCallback;
   @property({ attribute: false }) notificationInbox?: SelectedSessionNotificationView;
   @property({ attribute: false }) onClearServerQueue?: () => void;
+  @property({ attribute: false }) onQueuedMessageAction?: (target: QueuedMessageActionTarget) => Promise<void>;
+  @property({ type: Boolean }) queuedMessageActionPending = false;
+  @state() private queuedCopyFeedback = "";
   @property({ attribute: false }) onDismissWarning?: (dismissId: string) => void;
   @property({ attribute: false }) onDismissNotification?: (notificationId: string) => void;
   @property({ attribute: false }) onDismissAllNotifications?: () => void;
@@ -724,11 +729,15 @@ export class ChatView extends LitElement {
 
   private renderQueuedMessages() {
     const serverQueued = this.status?.queuedMessages ?? [];
-    return html`${chatQueuedMessageSections(this.clientQueuedMessages, serverQueued).map((section) => this.renderQueuedMessageList(section))}`;
+    return html`${chatQueuedMessageSections(this.clientQueuedMessages, serverQueued).map((section) => this.renderQueuedMessageList(section))}
+      ${this.queuedCopyFeedback === "" ? nothing : html`<small role="status">${this.queuedCopyFeedback}</small>`}`;
   }
 
   private renderQueuedMessageList(section: QueuedMessageSection) {
     const canClear = chatQueuedSectionShowsClearAction(section, this.onClearServerQueue !== undefined);
+    const actionsUnavailable = section.source === "server" ? this.status?.queueMessageActionsUnavailable : undefined;
+    const unavailableReason = actionsUnavailable === undefined ? undefined : actionsUnavailable === "" ? "Individual queue controls are unavailable with this runtime." : actionsUnavailable;
+    const actionsDisabled = this.queuedMessageActionPending || actionsUnavailable !== undefined;
     return html`
       <aside class="queued-messages" aria-live="polite">
         <div class="queued-header">
@@ -737,17 +746,40 @@ export class ChatView extends LitElement {
             <small>${section.detail}</small>
           </div>
           ${canClear ? html`
-            <button type="button" class="queued-clear-button" title="Clear queued messages without stopping active work" @click=${this.handleClearServerQueue}>Clear queue</button>
+            <button type="button" class="queued-clear-button" ?disabled=${this.queuedMessageActionPending} title="Clear queued messages without stopping active work" @click=${this.handleClearServerQueue}>Clear queue</button>
           ` : null}
         </div>
+        ${unavailableReason === undefined ? nothing : html`<small role="status">${unavailableReason}</small>`}
         ${section.messages.map((message, index) => html`
           <div class="queued-message">
-            <span class="queued-kind">${message.kind === "steer" ? "Steer" : "Follow-up"} ${String(index + 1)}</span>
+            <div class="queued-message-header">
+              <div class="queued-message-meta">
+                <span class="queued-kind">${message.kind === "steer" ? "Steer" : "Queue"} ${String(section.messages.slice(0, index + 1).filter((entry) => entry.kind === message.kind).length)}</span>
+                ${queuedMessageAttachmentLabel(message) === undefined ? nothing : html`
+                  <span class="queued-attachments" title="Attachments included with this queued message"><span aria-hidden="true">📎</span> ${queuedMessageAttachmentLabel(message)}</span>
+                `}
+              </div>
+              <div class="queued-message-actions">
+                <button type="button" class="queued-action" aria-label="Copy queued message" title="Copy message" @click=${async () => {
+                  this.queuedCopyFeedback = await writeClipboardText(message.text) ? "Copied" : "Could not copy message";
+                }}>Copy</button>
+                ${section.source !== "server" || this.onQueuedMessageAction === undefined ? nothing : html`
+                  <button type="button" class="queued-action" ?disabled=${actionsDisabled} title=${unavailableReason ?? (message.kind === "steer" ? "Move to the end of the follow-up queue" : "Move to the end of the steering queue")} aria-label=${message.kind === "steer" ? "Switch to Queue" : "Switch to Steer"} @click=${() => { this.actOnQueuedMessage("toggle", index, section.messages); }}>${message.kind === "steer" ? "→ Queue" : "→ Steer"}</button>
+                  <button type="button" class="queued-action" ?disabled=${actionsDisabled} title=${unavailableReason ?? "Recall this message's text and clear later queued messages"} @click=${() => { this.actOnQueuedMessage("edit", index, section.messages); }}>Recall</button>
+                  <button type="button" class="queued-action" ?disabled=${actionsDisabled} aria-label="Remove queued message" title=${unavailableReason ?? "Remove only this message"} @click=${() => { this.actOnQueuedMessage("remove", index, section.messages); }}>Remove</button>
+                `}
+              </div>
+            </div>
             <formatted-text .imagesEnabled=${this.behaviors.loadImages} .codeBlocks=${this.behaviors.codeBlocks} .intentKey=${JSON.stringify([this.machineId, this.sessionId, "queue", section.source, index, message.kind])} .contentRendering=${this.contentRendering} .machineId=${this.machineId} .workspaceContext=${this.workspaceContext} .text=${message.text}></formatted-text>
           </div>
         `)}
       </aside>
     `;
+  }
+
+  private actOnQueuedMessage(action: QueuedMessageAction, index: number, messages: QueuedSessionMessage[]): void {
+    if (this.queuedMessageActionPending || this.status?.queueMessageActionsUnavailable !== undefined) return;
+    void this.onQueuedMessageAction?.({ machineId: this.machineId, sessionId: this.sessionId, action, index, expectedQueue: messages.map((message) => ({ ...message })) });
   }
 
   private renderSuggestedInput() {

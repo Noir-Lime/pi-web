@@ -337,6 +337,16 @@ describe("session API compatibility", () => {
     expect(JSON.parse(requestBody(init))).toEqual({ cwd: "/repo with spaces" });
   });
 
+  it("serializes queue mutations with their expected snapshot on encoded machine routes", async () => {
+    const fetchMock = stubJsonFetch({ sessionId: "s /?", isStreaming: true, isCompacting: false, isBashRunning: false, pendingMessageCount: 0, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 });
+    const mutation = { action: "toggle" as const, index: 0, expectedQueue: [{ kind: "steer" as const, text: "adjust" }] };
+    await sessionsApi.mutateQueuedMessage({ id: "s /?", cwd: "/repo with spaces" }, mutation, "remote /?");
+    const [url, init] = fetchCall(fetchMock, 0);
+    expect(url).toBe("https://pi.example.test/api/machines/remote%20%2F%3F/sessions/s%20%2F%3F/queue/message");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(requestBody(init))).toEqual({ cwd: "/repo with spaces", ...mutation });
+  });
+
   it("submits question answers and skips through encoded machine routes with ordinary status responses", async () => {
     const wireStatus = { sessionId: "s /?", isStreaming: true, isCompacting: false, isBashRunning: false, pendingMessageCount: 0, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 };
     const fetchMock = stubSequenceFetch([jsonResponse(wireStatus), jsonResponse(wireStatus)]);

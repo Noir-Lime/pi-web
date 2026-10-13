@@ -718,9 +718,23 @@ export interface SessionActivity {
   startup?: boolean;
 }
 
+export interface SessionQueueMessageMutation {
+  action: "remove" | "edit" | "toggle";
+  index: number;
+  expectedQueue: QueuedSessionMessage[];
+}
+
+export interface SessionQueueMessageMutationRequest extends SessionQueueMessageMutation {
+  cwd: string;
+}
+
 export interface QueuedSessionMessage {
   kind: "steer" | "followUp";
   text: string;
+  /** Inline attachments that cannot be restored by text-only recall. */
+  hasAttachments?: boolean;
+  /** Number of attachments, when available; no attachment payloads are exposed. */
+  attachmentCount?: number;
 }
 
 /**
@@ -1150,6 +1164,8 @@ export interface SessionStatus {
   isBashRunning: boolean;
   pendingMessageCount: number;
   queuedMessages: QueuedSessionMessage[];
+  /** Best-effort SDK compatibility failure; public queue clearing remains available. */
+  queueMessageActionsUnavailable?: string;
   messageCount?: number;
   tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
   cost: number;

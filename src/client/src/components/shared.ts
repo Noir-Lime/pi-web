@@ -437,6 +437,13 @@ export const chatStyles = css`
   .queued-clear-button:hover, .queued-clear-button:focus { border-color: var(--pi-warning); color: var(--pi-text-bright); }
   .queued-message { display: grid; gap: 4px; padding-top: 8px; border-top: 1px solid var(--pi-border); }
   .queued-message:first-of-type { padding-top: 0; border-top: 0; }
+  .queued-message-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+  .queued-message-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+  .queued-action { border: 1px solid var(--pi-border); border-radius: 6px; background: var(--pi-surface); color: var(--pi-text-secondary); padding: 5px 8px; font: 12px system-ui, sans-serif; cursor: pointer; }
+  .queued-action:hover, .queued-action:focus-visible { border-color: var(--pi-accent); color: var(--pi-text-bright); }
+  .queued-action:disabled { cursor: default; opacity: .55; }
+  .queued-message-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+  .queued-attachments { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--pi-border); border-radius: 999px; padding: 2px 7px; color: var(--pi-text-secondary); font-size: 12px; }
   .queued-kind { color: var(--pi-muted); font-size: 12px; text-transform: uppercase; }
   .queued-dialogs { margin: -8px 0 14px; padding: 0 4px; color: var(--pi-muted); font-size: 12px; text-align: center; }
   .suggested-input { display: grid; gap: 8px; margin: 0 0 14px; padding: 12px; border: 1px solid var(--pi-border); border-radius: 10px; background: var(--pi-surface); }

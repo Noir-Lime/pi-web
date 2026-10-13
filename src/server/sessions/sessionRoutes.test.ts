@@ -1208,6 +1208,35 @@ describe("session routes", () => {
     }
   });
 
+  it("validates and forwards queue message mutations with workspace context", async () => {
+    const routeApp = Fastify({ logger: false });
+    await routeApp.register(fastifyWebsocket);
+    const routeService = new CapturingRouteSessionService();
+    registerSessionRoutes(routeApp, routeService, new SessionEventHub());
+    const calls: unknown[] = [];
+    routeService.mutateQueueMessage = (ref, mutation) => {
+      calls.push({ ref, mutation });
+      return routeService.clearQueue(ref);
+    };
+    try {
+      const mutation = { action: "toggle", index: 0, expectedQueue: [{ kind: "steer", text: "original" }] };
+      const response = await routeApp.inject({ method: "POST", url: "/sessions/session-1/queue/message", payload: { cwd: "/repo", ...mutation } });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ sessionId: "session-1", queuedMessages: [] });
+      expect(calls).toEqual([{ ref: { id: "session-1", cwd: resolve("/repo") }, mutation }]);
+      const invalid = await routeApp.inject({ method: "POST", url: "/sessions/session-1/queue/message", payload: { cwd: "/repo", ...mutation, index: 0.5 } });
+      expect(invalid.statusCode).toBe(400);
+      expect(calls).toHaveLength(1);
+      routeService.clearQueueError = new Error("Queued messages changed; refresh the queue and try again");
+      const stale = await routeApp.inject({ method: "POST", url: "/sessions/session-1/queue/message", payload: { cwd: "/repo", ...mutation } });
+      expect(stale.statusCode).toBe(400);
+      expect(stale.json()).toEqual({ error: "Queued messages changed; refresh the queue and try again" });
+    } finally {
+      await routeService.dispose();
+      await routeApp.close();
+    }
+  });
+
   it("clears a session queue with workspace context and returns fresh status", async () => {
     const routeApp = Fastify({ logger: false });
     await routeApp.register(fastifyWebsocket);
@@ -1559,6 +1588,11 @@ class CapturingRouteSessionService implements SessionRouteService {
       tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       cost: 0,
     });
+  }
+
+  mutateQueueMessage(lookup: SessionRouteRef, mutation: Parameters<SessionRouteService["mutateQueueMessage"]>[1]): Promise<SessionStatus> {
+    void mutation;
+    return this.clearQueue(lookup);
   }
 
   clearQueue(lookup: SessionRouteRef): Promise<SessionStatus> {

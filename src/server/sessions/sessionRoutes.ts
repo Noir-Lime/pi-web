@@ -6,6 +6,7 @@ import { isSessionMediaId, SESSION_MEDIA_MODE } from "../../shared/sessionMedia.
 import { isSessionImageMimeType } from "./sessionMediaIndex.js";
 import { normalizeRequestCwd } from "../workingDirectory.js";
 import type { SessionEventHub } from "../realtime/sessionEventHub.js";
+import { parseQueueMessageMutation } from "./queuedMessageMutation.js";
 import type { SessionRouteRef, SessionRouteService } from "./sessionService.js";
 import { normalizeSessionCleanupRequest } from "./sessionCleanup.js";
 
@@ -349,6 +350,15 @@ export function registerSessionRoutes(app: FastifyInstance, sessions: SessionRou
       const body = optionalRecord(request.body);
       await sessions.prompt(sessionRefFromBody(request.params.sessionId, body), body["text"], body["streamingBehavior"], body["attachments"]);
       return { accepted: true };
+    } catch (error) {
+      return reply.code(mutationErrorStatus(error)).send({ error: errorMessage(error) });
+    }
+  });
+
+  app.post<{ Params: { sessionId: string }; Body: unknown }>(`${prefix}/sessions/:sessionId/queue/message`, async (request, reply) => {
+    try {
+      const body = requireRecord(request.body);
+      return await sessions.mutateQueueMessage(sessionRefFromBody(request.params.sessionId, body), parseQueueMessageMutation(body));
     } catch (error) {
       return reply.code(mutationErrorStatus(error)).send({ error: errorMessage(error) });
     }

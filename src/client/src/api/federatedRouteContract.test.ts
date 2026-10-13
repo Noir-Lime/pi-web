@@ -203,6 +203,7 @@ describe("federated route contract", () => {
       ignoreParseFailure(sessionsApi.streamSnapshot(session, machineId)),
       ignoreParseFailure(sessionsApi.transcriptSnapshot(session, { limit: 20 }, machineId)),
       ignoreParseFailure(sessionsApi.clearQueue(session, machineId)),
+      ignoreParseFailure(sessionsApi.mutateQueuedMessage(session, { action: "remove", index: 0, expectedQueue: [{ kind: "steer", text: "adjust" }] }, machineId)),
       ignoreParseFailure(sessionsApi.dismissWarning(session, "anthropicExtraUsage", machineId)),
       ignoreParseFailure(sessionsApi.submitAsk(session, "ask 1", { answers: [{ id: "q1", values: ["pg"] }] }, machineId)),
       ignoreParseFailure(sessionsApi.cancelAsk(session, "ask 1", machineId)),

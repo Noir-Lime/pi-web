@@ -1,3 +1,4 @@
+import { queuedMessageRecallConfirmation, type QueuedMessageActionTarget } from "../queuedMessageActions";
 import { LitElement, html, type TemplateResult } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
 import { guard } from "lit/directives/guard.js";
@@ -153,6 +154,7 @@ export class PiWebApp extends LitElement {
   @query("chat-view") private chatView?: ChatView;
   @query("prompt-editor") private promptEditor?: PromptEditor;
   @state() private messageRevertTarget: PromptChipTarget | undefined;
+  @state() private queuedMessageActionTarget: QueuedMessageActionTarget | undefined;
   @query("app-navigation-panel") private navigationPanel?: AppNavigationPanel;
   @query("#navigation-panel") private navigationPanelFrame?: HTMLElement;
   @query("#workspace-panel") private workspacePanelFrame?: HTMLElement;
@@ -3450,6 +3452,30 @@ export class PiWebApp extends LitElement {
     void this.sessions.stopActiveWork();
   };
 
+  private readonly handleQueuedMessageAction = async (target: QueuedMessageActionTarget): Promise<void> => {
+    if (this.queuedMessageActionTarget !== undefined || this.messageRevertTarget !== undefined) return;
+    if (selectedMachineId(this.state) !== target.machineId || this.state.selectedSession?.id !== target.sessionId) return;
+    const editor = this.promptEditor;
+    if (target.action === "edit") {
+      const confirmation = queuedMessageRecallConfirmation(target.expectedQueue, target.index);
+      if (confirmation !== undefined && !window.confirm(confirmation)) return;
+      if ((editor?.view?.state.doc.toString() ?? "") !== "" && !window.confirm("Recalling will replace your unsent draft. Continue?")) return;
+    }
+    this.queuedMessageActionTarget = target;
+    try {
+      if (target.action === "edit" && editor !== undefined) {
+        editor.disabled = true;
+        await editor.updateComplete;
+      }
+      const currentState = this.state;
+      if (selectedMachineId(currentState) !== target.machineId || currentState.selectedSession?.id !== target.sessionId) return;
+      await this.sessions.mutateQueuedMessage(target.action, target.index, target.expectedQueue);
+    } finally {
+      if (this.queuedMessageActionTarget === target) this.queuedMessageActionTarget = undefined;
+      this.requestUpdate();
+    }
+  };
+
   private readonly handleClearServerQueue = (): void => {
     void this.sessions.clearServerQueue();
   };
@@ -3577,7 +3603,7 @@ export class PiWebApp extends LitElement {
           throw new Error("This message's conversation is no longer available.");
         }
         if (action === "fork") return this.sessions.actOnMessage(input.message.entryId, action);
-        if (this.messageRevertTarget !== undefined) throw new Error("Another go-back action is already in progress.");
+        if (this.messageRevertTarget !== undefined || this.queuedMessageActionTarget !== undefined) throw new Error("Another draft-replacing action is already in progress.");
         const editor = this.promptEditor;
         const draft = editor?.view?.state.doc.toString() ?? "";
         if (draft !== "" && !window.confirm("Going back will replace your unsent draft. Continue?")) return;
@@ -3606,8 +3632,11 @@ export class PiWebApp extends LitElement {
   };
 
   private isRevertingMessage(state: AppState): boolean {
-    return this.messageRevertTarget?.machineId === selectedMachineId(state)
-      && this.messageRevertTarget.sessionId === state.selectedSession?.id;
+    return (this.messageRevertTarget?.machineId === selectedMachineId(state)
+      && this.messageRevertTarget.sessionId === state.selectedSession?.id)
+      || (this.queuedMessageActionTarget?.action === "edit"
+        && this.queuedMessageActionTarget.machineId === selectedMachineId(state)
+        && this.queuedMessageActionTarget.sessionId === state.selectedSession?.id);
   }
 
   private readonly handleDisplayedMessageAction = async (target: DisplayedMessageActionAvailabilityContext, actionId: string): Promise<MessageActionResult> => {
@@ -3676,7 +3705,7 @@ export class PiWebApp extends LitElement {
       this.notificationView = selectedNotificationView(state.selectedNotificationInbox);
     }
     return html`
-      <chat-view .behaviors=${this.chatBehaviors} .contentRendering=${this.plugins.getChatContentRendering(selectedMachineId(state))} .machineId=${selectedMachineId(state)} @workspace-file-open=${this.handleWorkspaceFileOpen} .workspaceContext=${this.chatWorkspaceContext} .sessionId=${session.id} .sessionCwd=${session.cwd} .onMessageAction=${this.handleMessageAction} .onDisplayedMessageAction=${this.handleDisplayedMessageAction} .messageActions=${this.plugins.getMessageActions(selectedMachineId(state))} .messageActionContext=${this.messageActionContext(state)} .messages=${state.messages} .messageStart=${state.messagePageStart} .messageEnd=${state.messagePageEnd} .messageTotal=${state.messagePageTotal} .hasMore=${state.messagePageStart > 0} .historyReady=${this.readyChatIdentity === selectedChatIdentity(state)} .loadingMore=${state.isLoadingEarlierMessages} .isSendingPrompt=${state.sendingPrompts[session.id] === true} .isCompacting=${state.status?.isCompacting === true} .pendingMessageCount=${state.status?.pendingMessageCount ?? 0} .clientQueuedMessages=${state.clientQueuedSessionMessages[session.id] ?? this.emptyClientQueue} .status=${state.status} .suggestedInputPending=${treeActionPending} .suppressedSuggestedInput=${state.suppressedSuggestedInputs[machineSessionKey(selectedMachineId(state), session.id)]} .onUseSuggestedInput=${session.archived === true || this.isRevertingMessage(state) ? undefined : this.handleUseSuggestedInput} .onDismissSuggestedInput=${session.archived === true ? undefined : this.handleDismissSuggestedInput} .activity=${state.activity} .pendingDialogs=${state.pendingDialogs} .closedDialogs=${state.closedDialogs} .onAnswerDialog=${this.handleAnswerDialog} .onCancelDialog=${this.handleCancelDialog} .onDismissClosedDialog=${this.handleDismissClosedDialog} .askDraftSessionId=${machineSessionKey(selectedMachineId(state), session.id)} .onSubmitAsk=${session.archived === true ? undefined : this.handleSubmitAsk} .notificationInbox=${this.notificationView} .onClearServerQueue=${this.handleClearServerQueue} .onDismissWarning=${this.handleDismissWarning} .onDismissNotification=${this.handleDismissNotification} .onDismissAllNotifications=${this.handleDismissAllNotifications} .warningsVisible=${!this.sessionWarningVisibility.collapsed} .onToggleWarnings=${this.handleToggleWarnings} .onLoadMore=${this.handleLoadEarlierMessages}></chat-view>
+      <chat-view .behaviors=${this.chatBehaviors} .contentRendering=${this.plugins.getChatContentRendering(selectedMachineId(state))} .machineId=${selectedMachineId(state)} @workspace-file-open=${this.handleWorkspaceFileOpen} .workspaceContext=${this.chatWorkspaceContext} .sessionId=${session.id} .sessionCwd=${session.cwd} .onMessageAction=${this.handleMessageAction} .onDisplayedMessageAction=${this.handleDisplayedMessageAction} .messageActions=${this.plugins.getMessageActions(selectedMachineId(state))} .messageActionContext=${this.messageActionContext(state)} .messages=${state.messages} .messageStart=${state.messagePageStart} .messageEnd=${state.messagePageEnd} .messageTotal=${state.messagePageTotal} .hasMore=${state.messagePageStart > 0} .historyReady=${this.readyChatIdentity === selectedChatIdentity(state)} .loadingMore=${state.isLoadingEarlierMessages} .isSendingPrompt=${state.sendingPrompts[session.id] === true} .isCompacting=${state.status?.isCompacting === true} .pendingMessageCount=${state.status?.pendingMessageCount ?? 0} .clientQueuedMessages=${state.clientQueuedSessionMessages[session.id] ?? this.emptyClientQueue} .status=${state.status} .suggestedInputPending=${treeActionPending} .suppressedSuggestedInput=${state.suppressedSuggestedInputs[machineSessionKey(selectedMachineId(state), session.id)]} .onUseSuggestedInput=${session.archived === true || this.isRevertingMessage(state) ? undefined : this.handleUseSuggestedInput} .onDismissSuggestedInput=${session.archived === true ? undefined : this.handleDismissSuggestedInput} .activity=${state.activity} .pendingDialogs=${state.pendingDialogs} .closedDialogs=${state.closedDialogs} .onAnswerDialog=${this.handleAnswerDialog} .onCancelDialog=${this.handleCancelDialog} .onDismissClosedDialog=${this.handleDismissClosedDialog} .askDraftSessionId=${machineSessionKey(selectedMachineId(state), session.id)} .onSubmitAsk=${session.archived === true ? undefined : this.handleSubmitAsk} .notificationInbox=${this.notificationView} .onClearServerQueue=${this.handleClearServerQueue} .onQueuedMessageAction=${session.archived === true ? undefined : this.handleQueuedMessageAction} .queuedMessageActionPending=${this.queuedMessageActionTarget !== undefined || this.messageRevertTarget !== undefined} .onDismissWarning=${this.handleDismissWarning} .onDismissNotification=${this.handleDismissNotification} .onDismissAllNotifications=${this.handleDismissAllNotifications} .warningsVisible=${!this.sessionWarningVisibility.collapsed} .onToggleWarnings=${this.handleToggleWarnings} .onLoadMore=${this.handleLoadEarlierMessages}></chat-view>
     `;
   }
 

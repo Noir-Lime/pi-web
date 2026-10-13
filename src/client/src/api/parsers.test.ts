@@ -697,6 +697,25 @@ describe("API parsers", () => {
     });
   });
 
+  it("preserves optional attachment metadata on queued messages", () => {
+    const queuedMessages = [{ kind: "steer", text: "image", hasAttachments: true, attachmentCount: 3 }, { kind: "followUp", text: "plain", hasAttachments: false, attachmentCount: 0 }, { kind: "followUp", text: "legacy" }];
+    expect(parseSessionStatus({ ...statusWire(), queuedMessages }).queuedMessages).toEqual(queuedMessages);
+    expect(() => parseSessionStatus({ ...statusWire(), queuedMessages: [{ kind: "steer", text: "invalid", hasAttachments: "yes" }] })).toThrow("Invalid PI WEB hasAttachments field");
+    for (const attachmentCount of [-1, 1.5, "2", Infinity]) {
+      expect(() => parseSessionStatus({ ...statusWire(), queuedMessages: [{ kind: "steer", text: "invalid", attachmentCount }] })).toThrow();
+    }
+  });
+
+  it("preserves the optional queue compatibility reason and accepts older statuses", () => {
+    expect(parseSessionStatus(statusWire())).not.toHaveProperty("queueMessageActionsUnavailable");
+    for (const queueMessageActionsUnavailable of ["SDK queue layout is incompatible", ""]) {
+      expect(parseSessionStatus({ ...statusWire(), queueMessageActionsUnavailable }).queueMessageActionsUnavailable).toBe(queueMessageActionsUnavailable);
+    }
+    for (const queueMessageActionsUnavailable of [42, null, false, {}]) {
+      expect(() => parseSessionStatus({ ...statusWire(), queueMessageActionsUnavailable })).toThrow("Expected optional string field: queueMessageActionsUnavailable");
+    }
+  });
+
   it("parses optional suggested input verbatim, including empty input", () => {
     expect(parseSessionStatus(statusWire()).suggestedInput).toBeUndefined();
     for (const suggestedInput of ["suggestion\nwith whitespace  ", ""]) {

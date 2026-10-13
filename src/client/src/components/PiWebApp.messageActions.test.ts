@@ -204,6 +204,56 @@ it.each(["cancelled", "failed"] as const)("unlocks and preserves the composer wh
   expect(loadDraft(machineSessionKey("local", session.id))).toBe("unsent draft");
 });
 
+it("confirms queue recall consequences and protects an existing composer draft", async () => {
+  const { app, controller, editor, view, state } = await setupComposerChat("unsent draft");
+  const queuedMessages = [{ kind: "steer" as const, text: "adjust" }, { kind: "followUp" as const, text: "next" }];
+  const status = { sessionId: session.id, isStreaming: true, isCompacting: false, isBashRunning: false,
+    pendingMessageCount: 2, queuedMessages, cost: 0, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+  Reflect.set(app, "state", { ...state, status });
+  await app.updateComplete;
+  await view.updateComplete;
+  const mutate = vi.spyOn(controller, "mutateQueuedMessage").mockResolvedValue(undefined);
+  const confirm = vi.fn<(text: string) => boolean>().mockReturnValue(false);
+  vi.stubGlobal("confirm", confirm);
+  const recall = view.shadowRoot?.querySelector<HTMLButtonElement>('[title^="Recall this message"]');
+  if (!recall) throw new Error("Expected queue recall button");
+  recall.click();
+  expect(mutate).not.toHaveBeenCalled();
+  expect(editor.disabled).toBe(false);
+  expect(confirm).toHaveBeenCalledOnce();
+
+  confirm.mockReset().mockReturnValueOnce(true).mockReturnValueOnce(false);
+  recall.click();
+  expect(confirm.mock.calls.map(([text]) => text)).toEqual([
+    "Recall this message?\n\nThis will also remove 1 queued follow-up.",
+    "Recalling will replace your unsent draft. Continue?",
+  ]);
+  expect(mutate).not.toHaveBeenCalled();
+  expect(editor.view?.state.doc.toString()).toBe("unsent draft");
+});
+
+it.each([false, true])("locks the composer during queue recall and warns only for attachments (%s)", async (hasAttachments) => {
+  const { app, controller, editor, view, state } = await setupComposerChat("");
+  const queuedMessages = [{ kind: "followUp" as const, text: "next", hasAttachments }];
+  Reflect.set(app, "state", { ...state, status: { sessionId: session.id, isStreaming: true, isCompacting: false, isBashRunning: false,
+    pendingMessageCount: 1, queuedMessages, cost: 0, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
+  await app.updateComplete;
+  await view.updateComplete;
+  const request = deferred<undefined>();
+  const mutate = vi.spyOn(controller, "mutateQueuedMessage").mockReturnValue(request.promise);
+  const confirm = vi.fn(() => true);
+  vi.stubGlobal("confirm", confirm);
+  const recall = view.shadowRoot?.querySelector<HTMLButtonElement>('[title^="Recall this message"]');
+  if (!recall) throw new Error("Expected queue recall button");
+  recall.click();
+  await vi.waitFor(() => { expect(mutate).toHaveBeenCalledWith("edit", 0, queuedMessages); });
+  expect(editor.disabled).toBe(true);
+  if (hasAttachments) expect(confirm).toHaveBeenCalledWith("Recall this message? Only its text will return to the composer. Its attachments will be lost.");
+  else expect(confirm).not.toHaveBeenCalled();
+  request.resolve(undefined);
+  await vi.waitFor(() => { expect(editor.disabled).toBe(false); });
+});
+
 async function setupComposerChat(draft: string) {
   const context = await setupChat([
     { role: "user", entryId: "entry-1", parts: [{ type: "text", text: "Hello" }] },
