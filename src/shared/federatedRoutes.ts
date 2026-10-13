@@ -7,6 +7,7 @@ import {
 } from "./pluginBackendProtocol.js";
 import { WORKSPACE_REMOVAL_FEDERATION_TIMEOUT_MS } from "./workspaceRemovalProtocol.js";
 import { MAX_INLINE_PREVIEW_BYTES } from "./workspaceFiles.js";
+import { NAVIGATION_PREFERENCE_ROUTES } from "./navigationPreferences.js";
 
 export { PLUGIN_BACKEND_FEDERATION_TIMEOUT_MS } from "./pluginBackendProtocol.js";
 export { WORKSPACE_REMOVAL_FEDERATION_TIMEOUT_MS } from "./workspaceRemovalProtocol.js";
@@ -38,6 +39,10 @@ export interface FederatedHttpRouteSpec {
 }
 
 export const FEDERATED_HTTP_ROUTES = [
+  ...NAVIGATION_PREFERENCE_ROUTES.flatMap((path) => [
+    { method: "GET", path },
+    { method: "PUT", path },
+  ] satisfies FederatedHttpRouteSpec[]),
   { method: "GET", path: "/pi-web/status" },
   { method: "GET", path: "/config" },
   { method: "PUT", path: "/config" },

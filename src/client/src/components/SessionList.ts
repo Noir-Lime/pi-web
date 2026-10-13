@@ -43,6 +43,10 @@ interface AgentAttention {
 @customElement("session-list")
 export class SessionList extends LitElement implements KeyboardNavigableSection {
   @property({ attribute: false }) sessions: SessionInfo[] = [];
+  @property({ attribute: false }) pinnedRootIds: string[] = [];
+  @property({ attribute: false }) onPin?: (session: SessionInfo) => void;
+  @property({ attribute: false }) onUnpin?: (session: SessionInfo) => void;
+  @property({ attribute: false }) onMovePin?: (session: SessionInfo, direction: -1 | 1) => void;
   @property({ attribute: false }) statuses: Record<string, SessionStatus> = {};
   @property({ attribute: false }) activities: Record<string, SessionActivity> = {};
   @property({ attribute: false }) sending: Record<string, true> = {};
@@ -92,6 +96,9 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
   private visibleTreeCache?: {
     tree: NonNullable<SessionList["treeCache"]>;
     expanded: ReadonlySet<string>;
+    pins: string[];
+    pinnedRootIds: string[];
+    pinnedRowCount: number;
     currentAgentOffsets: ReadonlyMap<string, number>;
     archivedAgentOffsets: ReadonlyMap<string, number>;
     currentRows: SessionRow[];
@@ -134,11 +141,13 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
 
   private visibleSessionTree() {
     const tree = this.sessionTree();
-    if (this.visibleTreeCache?.tree !== tree || this.visibleTreeCache.expanded !== this.expandedAgentParents) {
-      const currentRows = visibleAgentSessionRows(tree.currentRows, this.expandedAgentParents, tree.currentAgentGroups);
+    if (this.visibleTreeCache?.tree !== tree || this.visibleTreeCache.expanded !== this.expandedAgentParents || this.visibleTreeCache.pins !== this.pinnedRootIds) {
+      const projection = pinnedSessionRows(visibleAgentSessionRows(tree.currentRows, this.expandedAgentParents, tree.currentAgentGroups), this.pinnedRootIds);
+      const currentRows = projection.rows;
       const archivedRows = visibleAgentSessionRows(tree.archivedRows, this.expandedAgentParents, tree.archivedAgentGroups);
       this.visibleTreeCache = {
-        tree, expanded: this.expandedAgentParents, currentRows, archivedRows,
+        tree, expanded: this.expandedAgentParents, pins: this.pinnedRootIds,
+        pinnedRootIds: projection.pinnedRootIds, pinnedRowCount: projection.pinnedRowCount, currentRows, archivedRows,
         currentAgentOffsets: agentChildOffsets(currentRows, tree.currentAgentGroups),
         archivedAgentOffsets: agentChildOffsets(archivedRows, tree.archivedAgentGroups),
         currentSelectableSessions: currentRows.map((row) => row.session).filter((session) => sessionSelectionScope(session) === "current"),
@@ -217,7 +226,32 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     super.disconnectedCallback();
   }
 
+  private focusedSessionId: string | undefined;
+  private focusedPinRowId: string | undefined;
+  private focusedMenuControl: HTMLElement | undefined;
+  private menuFocusAfterReorder: HTMLElement | undefined;
+
+  protected override willUpdate(changed: PropertyValues<this>): void {
+    if (changed.has("pinnedRootIds")) {
+      this.focusedPinRowId = this.focusedSessionId;
+      this.menuFocusAfterReorder = this.focusedMenuControl;
+    }
+  }
+
   protected override updated(changed: PropertyValues<this>): void {
+    if (changed.has("pinnedRootIds") && this.focusedPinRowId !== undefined) {
+      const row = [...this.renderRoot.querySelectorAll<HTMLElement>(".action-row")].find((item) => item.dataset["sessionId"] === this.focusedPinRowId);
+      row?.focus({ preventScroll: true });
+      this.focusedPinRowId = undefined;
+    }
+    if (changed.has("pinnedRootIds") && this.menuFocusAfterReorder?.isConnected === true) {
+      const control = this.menuFocusAfterReorder;
+      const target = control instanceof HTMLButtonElement && control.disabled
+        ? control.closest(".action-menu-panel")?.querySelector<HTMLElement>("button[data-pin-move]:not(:disabled)")
+        : control;
+      target?.focus({ preventScroll: true });
+    }
+    this.menuFocusAfterReorder = undefined;
     if (changed.has("sessions")) {
       if (this.openMenuSessionId !== undefined && !this.sessions.some((session) => session.id === this.openMenuSessionId)) this.openMenuSessionId = undefined;
       if (!this.sessions.some((session) => session.archived === true)) this.archivedExpanded = false;
@@ -261,7 +295,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
 
   override render() {
     const tree = this.sessionTree();
-    const { currentRows, archivedRows, currentAgentOffsets, archivedAgentOffsets } = this.visibleSessionTree();
+    const { currentRows, archivedRows, currentAgentOffsets, archivedAgentOffsets, pinnedRowCount } = this.visibleSessionTree();
     // The collapsed heading still needs tree counts, but never descendant actions.
     if (!this.collapsed) tree.descendantCounts ??= unarchivedDescendantCounts(this.sessions);
     const descendantCounts = tree.descendantCounts;
@@ -276,7 +310,12 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
           <div class="list-body">
             ${this.renderCurrentSelectionToolbar(tree.currentSelectableSessions)}
             ${this.startingCount > 0 ? this.renderStartingSession() : null}
-            ${repeat(currentRows, (row) => row.session.id, (row) => this.renderSession(row, "current", tree.currentAgentGroups.countByParentId.get(row.session.id) ?? 0, currentAgentOffsets.get(row.session.id) ?? 0, agentAttention?.get(row.session.id)))}
+            ${pinnedRowCount > 0 ? html`<h2 class="subheading pin-heading">Pinned</h2>` : null}
+            ${repeat(currentRows, (row) => row.session.id, (row, index) => html`
+              ${pinnedRowCount > 0 && index === pinnedRowCount ? html`<h2 class="subheading pin-heading">Recent</h2>` : null}
+              ${this.renderSession(row, "current", tree.currentAgentGroups.countByParentId.get(row.session.id) ?? 0, currentAgentOffsets.get(row.session.id) ?? 0, agentAttention?.get(row.session.id))}
+            `)}
+            ${pinnedRowCount > 0 && pinnedRowCount === currentRows.length ? html`<h2 class="subheading pin-heading">Recent</h2>` : null}
             ${tree.archivedRows.length > 0 ? html`
               ${this.renderArchivedHeading(tree.archivedRows.length)}
               ${this.archivedExpanded ? html`
@@ -429,7 +468,10 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
         class="action-row ${this.selected?.id === session.id ? "selected" : ""} ${bulkSelected ? "bulk-selected" : ""} ${session.archived === true ? "archived" : ""} ${selectionActive ? "selecting" : ""} ${unread ? "unread" : ""} ${agentChildCount > 0 ? "has-agent-subsessions" : ""} ${linkedAgentChild ? "linked-agent-child" : ""}"
         style=${`--depth:${String(cappedDepth)};--agent-offset:${String(agentOffset)}px`}
         tabindex="0"
+        data-session-id=${session.id}
         title=${session.path}
+        @focusin=${() => { this.focusedSessionId = session.id; }}
+        @focusout=${() => { this.focusedSessionId = undefined; }}
         @click=${(event: MouseEvent) => { activateSelectableRow(event, () => { this.activateSessionRow(session, scope); }); }}
         @keydown=${(event: KeyboardEvent) => { this.handleSessionKeydown(event, session, scope); }}
       >
@@ -460,7 +502,11 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     const descendantCount = descendantCounts?.get(session.id) ?? 0;
     // Fixed overlays are siblings of the isolated scroller, not trapped in its paint context.
     return html`
-      <div class="action-menu-panel" style=${this.menuStyle}>
+      <div class="action-menu-panel" style=${this.menuStyle}
+        @focusin=${(event: FocusEvent) => { this.focusedMenuControl = event.target instanceof HTMLElement ? event.target : undefined; }}
+        @focusout=${() => { this.focusedMenuControl = undefined; }}
+      >
+        ${this.renderPinActions(row)}
         ${session.archived === true
           ? html`
             <button title="Restore session" @click=${() => { this.openMenuSessionId = undefined; this.onRestore?.(session); }}>Restore</button>
@@ -479,6 +525,28 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
             `}
       </div>
     `;
+  }
+
+  private renderPinActions(row: SessionRow) {
+    if (!isPinnableRoot(row)) return null;
+    const { session } = row;
+    const pins = this.visibleSessionTree().pinnedRootIds;
+    const index = pins.indexOf(session.id);
+    if (index < 0) return html`<button @click=${() => { this.changePin(session, () => this.onPin?.(session)); }}>Pin session</button>`;
+    return html`
+      <button @click=${() => { this.changePin(session, () => this.onUnpin?.(session)); }}>Unpin session</button>
+      <button data-pin-move ?disabled=${index === 0} @click=${() => { this.onMovePin?.(session, -1); }}>Move up</button>
+      <button data-pin-move ?disabled=${index === pins.length - 1} @click=${() => { this.onMovePin?.(session, 1); }}>Move down</button>
+    `;
+  }
+
+  private changePin(session: SessionInfo, action: () => void): void {
+    this.openMenuSessionId = undefined;
+    action();
+    void this.updateComplete.then(() => {
+      const row = [...this.renderRoot.querySelectorAll<HTMLElement>(".action-row")].find((item) => item.dataset["sessionId"] === session.id);
+      row?.focus({ preventScroll: true });
+    });
   }
 
   /**
@@ -723,6 +791,35 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     .agent-subsession-toggle:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 2px; }
     .session-checkbox { position: absolute; top: 9px; left: calc(8px + var(--depth, 0) * 16px); z-index: 2; margin: 0; }
   `];
+}
+
+function isPinnableRoot(row: SessionRow): boolean {
+  return row.depth === 0 && !row.hasMissingParent && row.session.parentSessionPath === undefined && row.session.archived !== true;
+}
+
+/** Move complete root trees, leaving their descendants and the unpinned order intact. */
+export function pinnedSessionRows(rows: readonly SessionRow[], pinIds: readonly string[]): {
+  rows: SessionRow[];
+  pinnedRootIds: string[];
+  pinnedRowCount: number;
+} {
+  const trees: SessionRow[][] = [];
+  for (const row of rows) {
+    if (row.depth === 0 || trees.length === 0) trees.push([]);
+    trees[trees.length - 1]?.push(row);
+  }
+  const eligible = new Map(trees.flatMap((tree) => {
+    const root = tree[0];
+    return root !== undefined && isPinnableRoot(root) ? [[root.session.id, tree] as const] : [];
+  }));
+  const pinnedRootIds = [...new Set(pinIds)].filter((id) => eligible.has(id));
+  const pinned = new Set(pinnedRootIds);
+  const pinnedRows = pinnedRootIds.flatMap((id) => eligible.get(id) ?? []);
+  return {
+    rows: [...pinnedRows, ...trees.filter((tree) => !pinned.has(tree[0]?.session.id ?? "")).flat()],
+    pinnedRootIds,
+    pinnedRowCount: pinnedRows.length,
+  };
 }
 
 /** Match the parent's chip inset on both sides, including nested groups. */

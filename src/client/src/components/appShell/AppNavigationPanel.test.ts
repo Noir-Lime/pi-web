@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Machine, Project, SessionInfo, Workspace } from "../../api";
+import { trustApi, type Machine, type Project, type SessionInfo, type Workspace } from "../../api";
 import type { MachineStatusSnapshot } from "../../../../shared/machineStatus";
 import { machineStatusSnapshot } from "../../machineStatus.testSupport";
 import { MachineList } from "../MachineList";
@@ -154,6 +154,50 @@ describe("stable list inputs", () => {
     expect(workspaces.shadowRoot?.textContent).toContain("Label for latest-workspace");
   });
 });
+
+describe("navigation order controls", () => {
+  it("forwards moves and root-session pins without selecting an item", async () => {
+    vi.spyOn(trustApi, "workspaceTrust").mockResolvedValue({ path: "/repo/first", decision: null, trusted: false });
+    const panel = await mountPanel({}, machine("local"));
+    panel.projects = [project("first"), project("second")];
+    panel.workspaces = [workspace("first", "first"), workspace("second", "first")];
+    panel.sessions = [session("root")];
+    panel.onMoveProject = vi.fn();
+    panel.onMoveWorkspace = vi.fn();
+    panel.onPinSession = vi.fn();
+    panel.onSelectSession = vi.fn();
+    await panel.updateComplete;
+    const projects = section(panel, "project-list", ProjectList);
+    const workspaces = section(panel, "workspace-list", WorkspaceList);
+    const sessions = section(panel, "session-list", SessionList);
+    await Promise.all([projects.updateComplete, workspaces.updateComplete, sessions.updateComplete]);
+    for (const list of [projects, workspaces]) {
+      control(list, ".action-menu-toggle").click();
+      await list.updateComplete;
+      menuButton(list, "Move down").click();
+    }
+    expect(panel.onMoveProject).toHaveBeenCalledWith(panel.projects[0], 1);
+    expect(panel.onMoveWorkspace).toHaveBeenCalledWith(panel.workspaces[0], 1);
+    control(sessions, ".action-menu-toggle").click();
+    await sessions.updateComplete;
+    menuButton(sessions, "Pin session").click();
+    expect(panel.onPinSession).toHaveBeenCalledWith(panel.sessions[0]);
+    expect(panel.onSelectSession).not.toHaveBeenCalled();
+
+    panel.pinnedRootIds = ["root"];
+    panel.savingNavigationOrder = true;
+    await panel.updateComplete;
+    await sessions.updateComplete;
+    expect(sessions.pinnedRootIds).toEqual(["root"]);
+    expect(panel.shadowRoot?.querySelector('[role="status"]')?.textContent).toContain("Saving navigation order");
+  });
+});
+
+function menuButton(list: ProjectList | WorkspaceList | SessionList, text: string): HTMLButtonElement {
+  const button = [...(list.shadowRoot?.querySelectorAll("button") ?? [])].find((item) => item.textContent.trim() === text);
+  if (!(button instanceof HTMLButtonElement)) throw new Error(`Missing ${text}`);
+  return button;
+}
 
 function control(list: ProjectList | WorkspaceList | SessionList, selector: string): HTMLElement {
   const element = list.shadowRoot?.querySelector(selector);

@@ -267,11 +267,9 @@ export const listStyles = css`
   .workspace-primary-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .workspace-status { flex: 0 0 auto; color: var(--pi-warning); font-size: 12px; }
   .workspace-secondary { margin-top: 3px; }
-  .workspace-menu-panel { width: max-content; min-width: min(120px, calc(100vw - 16px)); padding: 8px; }
+  .workspace-menu-panel { width: max-content; }
   .workspace-menu-actions { margin: 0 0 8px; padding-bottom: 8px; border-bottom: 1px solid var(--pi-border-muted); }
-  .workspace-menu-actions button.danger { color: var(--pi-danger); }
-  .workspace-menu-actions button.danger:hover, .workspace-menu-actions button.danger:focus { background: color-mix(in srgb, var(--pi-danger) 14%, transparent); }
-  .workspace-menu-details { display: grid; gap: 6px; margin: 0; }
+  .workspace-menu-details { display: grid; gap: 6px; margin: 0; padding: 0 9px 5px; }
   .workspace-detail-row { display: grid; grid-template-columns: minmax(58px, max-content) minmax(0, 1fr); gap: 8px; align-items: baseline; }
   .workspace-detail-row dt { color: var(--pi-muted); font-size: 12px; white-space: normal; }
   .workspace-detail-row dd { min-width: 0; margin: 0; overflow-wrap: anywhere; white-space: normal; }
@@ -296,8 +294,18 @@ export const listStyles = css`
   .action-menu-toggle { display: grid; place-items: center; height: 100%; min-width: 32px; padding: 0; color: var(--pi-muted); border-left: 0; border-top-left-radius: 0; border-bottom-left-radius: 0; }
   .action-menu-toggle:hover { color: var(--pi-text); background: var(--pi-surface-hover); }
   .action-menu-panel { position: fixed; z-index: 50; box-sizing: border-box; min-width: min(120px, calc(100vw - 16px)); overflow: auto; padding: 4px; border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); box-shadow: 0 8px 24px var(--pi-shadow); overflow-wrap: anywhere; }
-  .action-menu-panel button { display: block; width: 100%; text-align: left; white-space: normal; overflow-wrap: anywhere; border: 0; background: transparent; color: var(--pi-text); }
-  .action-menu-panel button:hover { background: var(--pi-selection-bg); }
+  .action-menu-panel button, .action-menu-panel .action-menu-checkbox { box-sizing: border-box; width: 100%; padding: 7px 9px; border: 0; border-radius: 8px; background: transparent; color: var(--pi-text); font: inherit; text-align: left; white-space: normal; overflow-wrap: anywhere; cursor: pointer; }
+  .action-menu-panel button { display: block; }
+  .action-menu-panel button:not(:disabled):hover, .action-menu-checkbox:not(:has(input:disabled)):hover { background: var(--pi-selection-bg); }
+  .action-menu-panel button.danger { color: var(--pi-danger); }
+  .action-menu-panel button.danger:not(:disabled):hover, .action-menu-panel button.danger:focus-visible { background: color-mix(in srgb, var(--pi-danger) 14%, transparent); }
+  .action-menu-checkbox { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .action-menu-checkbox input { flex: 0 0 auto; margin: 0; accent-color: var(--pi-accent); cursor: inherit; }
+  .action-menu-checkbox:has(input:disabled) { opacity: .5; cursor: not-allowed; }
+  .action-menu-description { display: block; padding: 0 9px 7px; color: var(--pi-muted); font-size: 12px; line-height: 1.4; white-space: normal; overflow-wrap: anywhere; }
+  .action-menu-description a { color: var(--pi-accent); text-decoration: none; }
+  .action-menu-description a:hover, .action-menu-description a:focus-visible { text-decoration: underline; }
+  .action-menu-error { color: var(--pi-danger, #c0392b); }
   button.selected { border-color: var(--pi-accent); background: var(--pi-selection-bg); }
   button:disabled { opacity: .5; cursor: not-allowed; }
   small { display: block; color: var(--pi-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

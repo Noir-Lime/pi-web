@@ -29,6 +29,8 @@ export class AppNavigationPanel extends LitElement {
   @property({ attribute: false }) selectedWorkspace?: Workspace;
   @property({ attribute: false }) sessions: SessionInfo[] = [];
   @property({ attribute: false }) selectedSession?: SessionInfo;
+  @property({ attribute: false }) pinnedRootIds: string[] = [];
+  @property({ type: Boolean }) savingNavigationOrder = false;
   @property({ attribute: false }) sessionActivities: Record<string, SessionActivity> = {};
   @property({ attribute: false }) sessionStatuses: Record<string, SessionStatus> = {};
   @property({ attribute: false }) sendingPrompts: Record<string, true> = {};
@@ -54,6 +56,11 @@ export class AppNavigationPanel extends LitElement {
   @property({ attribute: false }) onToggleSessions?: () => void;
   @property({ attribute: false }) onSelectProject?: (project: Project) => void | Promise<void>;
   @property({ attribute: false }) onCloseProject?: (project: Project) => void | Promise<void>;
+  @property({ attribute: false }) onMoveProject?: (project: Project, direction: -1 | 1) => void;
+  @property({ attribute: false }) onMoveWorkspace?: (workspace: Workspace, direction: -1 | 1) => void;
+  @property({ attribute: false }) onPinSession?: (session: SessionInfo) => void;
+  @property({ attribute: false }) onUnpinSession?: (session: SessionInfo) => void;
+  @property({ attribute: false }) onMoveSessionPin?: (session: SessionInfo, direction: -1 | 1) => void;
   @property({ attribute: false }) onSelectWorkspace?: (workspace: Workspace) => void | Promise<void>;
   @property({ attribute: false }) onDeleteWorkspace?: (workspace: Workspace) => void | Promise<void>;
   @property({ attribute: false }) onStartSession?: () => void | Promise<void>;
@@ -97,6 +104,11 @@ export class AppNavigationPanel extends LitElement {
     toggleProjects: () => { this.onToggleProjects?.(); },
     selectProject: (project: Project) => this.onSelectProject?.(project),
     closeProject: (project: Project) => this.onCloseProject?.(project),
+    moveProject: (project: Project, direction: -1 | 1) => this.onMoveProject?.(project, direction),
+    moveWorkspace: (workspace: Workspace, direction: -1 | 1) => this.onMoveWorkspace?.(workspace, direction),
+    pinSession: (session: SessionInfo) => this.onPinSession?.(session),
+    unpinSession: (session: SessionInfo) => this.onUnpinSession?.(session),
+    moveSessionPin: (session: SessionInfo, direction: -1 | 1) => this.onMoveSessionPin?.(session, direction),
     toggleWorkspaces: () => { this.onToggleWorkspaces?.(); },
     selectWorkspace: (workspace: Workspace) => this.onSelectWorkspace?.(workspace),
     deleteWorkspace: (workspace: Workspace) => this.onDeleteWorkspace?.(workspace),
@@ -160,6 +172,7 @@ export class AppNavigationPanel extends LitElement {
           .onCancelKeyboardNavigation=${() => { this.cancelKeyboardNavigation(); }}
         ></machine-list>
       ` : null}
+      <div class="order-status" role="status">${this.savingNavigationOrder ? "Saving navigation order…" : ""}</div>
       <project-list
         .projects=${this.projects}
         .selected=${this.selectedProject}
@@ -169,6 +182,7 @@ export class AppNavigationPanel extends LitElement {
         .onToggleCollapsed=${this.childCallbacks.toggleProjects}
         .onSelect=${this.childCallbacks.selectProject}
         .onClose=${this.childCallbacks.closeProject}
+        .onMove=${this.childCallbacks.moveProject}
         .onFocusPreviousSection=${this.childCallbacks.previousFromProjects}
         .onFocusNextSection=${this.childCallbacks.nextFromProjects}
         .onCancelKeyboardNavigation=${this.childCallbacks.cancelKeyboardNavigation}
@@ -185,12 +199,17 @@ export class AppNavigationPanel extends LitElement {
         .onToggleCollapsed=${this.childCallbacks.toggleWorkspaces}
         .onSelect=${this.childCallbacks.selectWorkspace}
         .onDelete=${this.childCallbacks.deleteWorkspace}
+        .onMove=${this.childCallbacks.moveWorkspace}
         .onFocusPreviousSection=${this.childCallbacks.previousFromWorkspaces}
         .onFocusNextSection=${this.childCallbacks.nextFromWorkspaces}
         .onCancelKeyboardNavigation=${this.childCallbacks.cancelKeyboardNavigation}
       ></workspace-list>
       <session-list
         .sessions=${this.sessions}
+        .pinnedRootIds=${this.pinnedRootIds}
+        .onPin=${this.childCallbacks.pinSession}
+        .onUnpin=${this.childCallbacks.unpinSession}
+        .onMovePin=${this.childCallbacks.moveSessionPin}
         .statuses=${this.sessionStatuses}
         .activities=${this.sessionActivities}
         .sending=${this.sendingPrompts}
@@ -257,6 +276,8 @@ export class AppNavigationPanel extends LitElement {
     :host { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
     :host([compact]) { flex: 1 1 auto; }
     header { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px; border-bottom: 1px solid var(--pi-border); }
+    .order-status { flex: 0 0 auto; color: var(--pi-muted); font-size: 12px; }
+    .order-status:not(:empty) { padding: 4px 12px; }
     header strong { flex: 0 0 auto; }
     machine-switcher { flex: 1 1 auto; min-width: 0; }
     :host([compact]) header { display: none; }

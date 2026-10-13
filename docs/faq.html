@@ -103,6 +103,7 @@
             <a href="#laptop-or-server">Laptop or server?</a>
             <a href="#plugins">Can I use local plugins?</a>
             <a href="#worktree-list-out-of-date">A worktree I created is missing</a>
+            <a href="#navigation-order">How do I arrange navigation lists?</a>
             <a href="#chat-images">How do chat images load?</a>
             <a href="#sessions-stop">Sessions stop unexpectedly</a>
             <a href="#model-response-terminated">Model responses fail with 'terminated'</a>
@@ -332,6 +333,22 @@
                 Worktrees whose checkout directory no longer exists are hidden, so a directory you removed with
                 <code>rm -rf</code> instead of <code>git worktree remove</code> stops appearing as a selectable
                 workspace. Git still tracks it until you run <code>git worktree prune</code>.
+              </p>
+            </article>
+
+            <article id="navigation-order" class="faq-item">
+              <h2>How do I arrange projects, workspaces, and sessions?</h2>
+              <p>
+                Open a project or workspace row’s <strong>⋯</strong> menu and choose <strong>Move up</strong> or
+                <strong>Move down</strong>. PI WEB saves the resulting order on that machine, so it survives reloads
+                and is available from other devices. New items follow the saved items.
+              </p>
+              <p>
+                For sessions, choose <strong>Pin session</strong> on a top-level parent. Its entire tree appears
+                under <strong>Pinned</strong>, while other trees retain their normal recent-first order. Use
+                <strong>Move pin up</strong> and <strong>Move pin down</strong> to arrange pinned parents, or
+                <strong>Unpin session</strong> to return a tree to the recent list. Nested sessions cannot be pinned
+                independently; archived sessions remain in the archive.
               </p>
             </article>
 
