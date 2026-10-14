@@ -224,6 +224,13 @@ export function renderInfoPanel(html: HtmlTemplateTag, context: WorkspacePanelCo
     </style>
     <section class="toolbar"><strong>Info</strong></section>
     <section class="viewer info-status">
+      <section>
+        <strong>Session</strong>
+        <div class="info-row">
+          <span>Session ID</span>
+          <span>${context.state?.selectedSession?.id ?? "No session selected"}</span>
+        </div>
+      </section>
       ${renderStatusSection(html, context.state?.piWebStatus)}
       ${renderMachineSection(html, context.machine)}
       ${renderWorkspaceSection(html, context.workspace)}
