@@ -7,7 +7,7 @@ import type { MachineStatusSnapshot } from "../../../shared/machineStatus";
 import { writeClipboardText } from "../clipboard";
 import type { WorkspaceLabelItem } from "../plugins/types";
 import { canDeleteWorkspace } from "../workspaceDeletion";
-import { actionMenuPanelStyle } from "./actionMenu";
+import { ActionMenuPositionController } from "./actionMenu";
 import { hasStatusUnread, renderActionActivityIndicator, statusActivityKind } from "./activityBadge";
 import type { KeyboardNavigableSection } from "./navigationFocus";
 import { activateSelectableRow, focusSelectedOrFirstSelectableRow, handleSelectableRowKeyboard } from "./selectableRow";
@@ -41,7 +41,11 @@ export class WorkspaceList extends LitElement implements KeyboardNavigableSectio
   @property({ attribute: false }) onFocusNextSection?: () => void | Promise<void>;
   @property({ attribute: false }) onCancelKeyboardNavigation?: () => void | Promise<void>;
   @state() private openMenuWorkspaceId: string | undefined;
-  @state() private menuStyle = "";
+  private readonly menuPosition = new ActionMenuPositionController(this, () => {
+    if (this.openMenuWorkspaceId === undefined) return undefined;
+    const row = [...this.renderRoot.querySelectorAll<HTMLElement>("[data-workspace-id]")].find((item) => item.dataset["workspaceId"] === this.openMenuWorkspaceId);
+    return row?.querySelector<HTMLElement>(".action-menu-toggle") ?? undefined;
+  });
   @state() private copiedDetailKey: string | undefined;
   @state() private trustByWorkspaceId: Record<string, WorkspaceTrustState> = {};
 
@@ -171,10 +175,10 @@ export class WorkspaceList extends LitElement implements KeyboardNavigableSectio
           aria-label=${`Actions and details for ${label}`}
           aria-expanded=${String(open)}
           aria-controls=${menuId}
-          @click=${(event: MouseEvent) => { event.stopPropagation(); this.toggleMenu(workspace.id, event.currentTarget); }}
+          @click=${(event: MouseEvent) => { event.stopPropagation(); this.toggleMenu(workspace.id); }}
         >⋯</button>
         ${open ? html`
-          <div class="action-menu-panel workspace-menu-panel" id=${menuId} style=${this.menuStyle} @click=${(event: MouseEvent) => { event.stopPropagation(); }}>
+          <div class="action-menu-panel workspace-menu-panel" id=${menuId} style=${this.menuPosition.style} @click=${(event: MouseEvent) => { event.stopPropagation(); }}>
             ${this.renderWorkspaceActions(workspace, index)}
             ${this.renderWorkspaceDetails(label, items, workspace)}
           </div>
@@ -312,12 +316,11 @@ export class WorkspaceList extends LitElement implements KeyboardNavigableSectio
     return this.deletingWorkspaceIds.includes(workspace.id);
   }
 
-  private toggleMenu(workspaceId: string, target: EventTarget | null): void {
+  private toggleMenu(workspaceId: string): void {
     if (this.openMenuWorkspaceId === workspaceId) {
       this.openMenuWorkspaceId = undefined;
       return;
     }
-    this.menuStyle = actionMenuPanelStyle(target, { constrainTo: "viewport" });
     this.openMenuWorkspaceId = workspaceId;
     const workspace = this.workspaces.find((candidate) => candidate.id === workspaceId);
     if (workspace !== undefined) void this.loadTrust(workspace);

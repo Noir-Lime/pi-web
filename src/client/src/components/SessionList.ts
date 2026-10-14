@@ -10,7 +10,7 @@ import { isArchivableSessionInfo, isTransientNewSessionInfo } from "../sessionPe
 import { normalizeSessionPath } from "../sessionPaths";
 import { isSessionActive } from "../../../shared/activity";
 import { CORE_STATUS_FLAGS, type StatusFlags } from "../../../shared/machineStatus";
-import { actionMenuPanelStyle } from "./actionMenu";
+import { ActionMenuPositionController } from "./actionMenu";
 import { renderActionActivityIndicator, type ActivityIndicatorKind } from "./activityBadge";
 import type { KeyboardNavigableSection } from "./navigationFocus";
 import { activateSelectableRow, focusSelectedOrFirstSelectableRow, handleSelectableRowKeyboard } from "./selectableRow";
@@ -81,7 +81,11 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
   @property({ attribute: false }) onCleanup?: () => void;
 
   @state() private openMenuSessionId: string | undefined;
-  @state() private menuStyle = "";
+  private readonly menuPosition = new ActionMenuPositionController(this, () => {
+    if (this.openMenuSessionId === undefined) return undefined;
+    const row = [...this.renderRoot.querySelectorAll<HTMLElement>("[data-session-id]")].find((item) => item.dataset["sessionId"] === this.openMenuSessionId);
+    return row?.querySelector<HTMLElement>(".action-menu-toggle") ?? undefined;
+  });
   @state() private archivedExpanded = false;
   @state() private selectionScopes: ReadonlySet<SessionSelectionScope> = new Set();
   @state() private selectedSessionIds: ReadonlySet<string> = new Set();
@@ -486,7 +490,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
           ${this.renderActivity(indicatorKind, unread)}
         </div>
         <div class="action-menu">
-          <button class="action-menu-toggle" title="Session actions" @click=${(event: MouseEvent) => { event.stopPropagation(); this.toggleMenu(session.id, event.currentTarget); }}>⋯</button>
+          <button class="action-menu-toggle" title="Session actions" @click=${(event: MouseEvent) => { event.stopPropagation(); this.toggleMenu(session.id); }}>⋯</button>
         </div>
       </div>
       ${agentChildCount > 0 ? html`<button class="agent-subsession-toggle" style=${`--agent-offset:${String(agentOffset)}px`} aria-expanded=${String(this.expandedAgentParents.has(session.id))} @click=${() => { this.toggleAgentParent(session.id); }}>${this.expandedAgentParents.has(session.id) ? "▾" : "▸"} Agent subsessions (${agentChildCount})${!this.expandedAgentParents.has(session.id) && agentAttention !== undefined ? renderActionActivityIndicator(agentAttention.kind, agentAttention.kind === "sending" ? "Sending subsession message" : "Agent subsessions active", agentAttention.unread ? "Unread subsession activity" : undefined) : null}</button>` : null}
@@ -507,7 +511,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     const descendantCount = descendantCounts?.get(session.id) ?? 0;
     // Fixed overlays are siblings of the isolated scroller, not trapped in its paint context.
     return html`
-      <div class="action-menu-panel" style=${this.menuStyle}
+      <div class="action-menu-panel" style=${this.menuPosition.style}
         @focusin=${(event: FocusEvent) => { this.focusedMenuControl = event.target instanceof HTMLElement ? event.target : undefined; }}
         @focusout=${() => { this.focusedMenuControl = undefined; }}
       >
@@ -707,12 +711,11 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     if (this.selectionScopes.has("current") && !this.sessions.some((session) => session.archived !== true)) this.closeSelection("current");
   }
 
-  private toggleMenu(sessionId: string, target: EventTarget | null) {
+  private toggleMenu(sessionId: string) {
     if (this.openMenuSessionId === sessionId) {
       this.openMenuSessionId = undefined;
       return;
     }
-    this.menuStyle = actionMenuPanelStyle(target, { constrainTo: "viewport" });
     this.openMenuSessionId = sessionId;
   }
 

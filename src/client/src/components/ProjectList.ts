@@ -3,7 +3,7 @@ import { customElement, property, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { Project } from "../api";
 import type { MachineStatusSnapshot } from "../../../shared/machineStatus";
-import { actionMenuPanelStyle } from "./actionMenu";
+import { ActionMenuPositionController } from "./actionMenu";
 import { hasStatusUnread, renderActionActivityIndicator, statusActivityKind } from "./activityBadge";
 import type { KeyboardNavigableSection } from "./navigationFocus";
 import { activateSelectableRow, focusSelectedOrFirstSelectableRow, handleSelectableRowKeyboard } from "./selectableRow";
@@ -25,7 +25,11 @@ export class ProjectList extends LitElement implements KeyboardNavigableSection 
   @property({ attribute: false }) onFocusNextSection?: () => void | Promise<void>;
   @property({ attribute: false }) onCancelKeyboardNavigation?: () => void | Promise<void>;
   @state() private openMenuProjectId: string | undefined;
-  @state() private menuStyle = "";
+  private readonly menuPosition = new ActionMenuPositionController(this, () => {
+    if (this.openMenuProjectId === undefined) return undefined;
+    const row = [...this.renderRoot.querySelectorAll<HTMLElement>("[data-project-id]")].find((item) => item.dataset["projectId"] === this.openMenuProjectId);
+    return row?.querySelector<HTMLElement>(".action-menu-toggle") ?? undefined;
+  });
   private readonly onDocumentClick = (event: MouseEvent) => {
     if (event.composedPath().includes(this)) return;
     this.openMenuProjectId = undefined;
@@ -88,9 +92,9 @@ export class ProjectList extends LitElement implements KeyboardNavigableSection 
                   ${this.renderActivity(project)}
                 </div>
                 <div class="action-menu">
-                  <button class="action-menu-toggle" title="Project actions" aria-label=${`Actions for ${project.name}`} @click=${(event: MouseEvent) => { event.stopPropagation(); this.toggleMenu(project.id, event.currentTarget); }}>⋯</button>
+                  <button class="action-menu-toggle" title="Project actions" aria-label=${`Actions for ${project.name}`} @click=${(event: MouseEvent) => { event.stopPropagation(); this.toggleMenu(project.id); }}>⋯</button>
                   ${this.openMenuProjectId === project.id ? html`
-                    <div class="action-menu-panel" style=${this.menuStyle} @click=${(event: MouseEvent) => { event.stopPropagation(); }}>
+                    <div class="action-menu-panel" style=${this.menuPosition.style} @click=${(event: MouseEvent) => { event.stopPropagation(); }}>
                       ${this.onMove === undefined ? null : html`
                         <button data-move ?disabled=${index === 0} @click=${() => { this.onMove?.(project, -1); }}>Move up</button>
                         <button data-move ?disabled=${index === this.projects.length - 1} @click=${() => { this.onMove?.(project, 1); }}>Move down</button>
@@ -130,12 +134,11 @@ export class ProjectList extends LitElement implements KeyboardNavigableSection 
     return renderActionActivityIndicator(kind, kind === "terminal" ? "Project terminal active" : "Project active", unreadLabel);
   }
 
-  private toggleMenu(projectId: string, target: EventTarget | null) {
+  private toggleMenu(projectId: string) {
     if (this.openMenuProjectId === projectId) {
       this.openMenuProjectId = undefined;
       return;
     }
-    this.menuStyle = actionMenuPanelStyle(target, { constrainTo: "viewport" });
     this.openMenuProjectId = projectId;
   }
 
