@@ -1,6 +1,8 @@
-import { Type } from "typebox";
+import { Type } from "pi-web-typebox";
+import { KNOWN_THINKING_LEVELS } from "../../shared/thinkingLevels.js";
 import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { TranscriptContentKind, TranscriptEntry, TranscriptRole, TranscriptView } from "./subsessionTranscript.js";
+import type { SubsessionCompletion } from "./subsessionCompletionInbox.js";
 
 /** Lifecycle phase of a tracked subsession as seen by its parent. */
 export type SubsessionStatus = "working" | "idle" | "error" | "unknown";
@@ -35,7 +37,7 @@ export interface SpawnSubsessionInvocation {
   model?: SpawnSubsessionModel;
   /** Strict `provider/model-id` requested by the parent; overrides {@link model} when set. */
   modelSpec?: string;
-  /** Parent's current thinking level, inherited by the child session (pi clamps it to the child model's capabilities). */
+  /** Explicit override or parent's inherited thinking level (pi clamps it to the child model's capabilities). */
   thinkingLevel?: SpawnSubsessionThinkingLevel;
 }
 
@@ -52,6 +54,12 @@ export interface SubsessionCheckResult {
   status: SubsessionStatus;
   finalText: string;
   messageCount: number;
+  errorDetail?: string;
+}
+
+export interface SubsessionJoinResult {
+  subsessions: SubsessionSummary[];
+  completions: SubsessionCompletion[];
 }
 
 /** Exploratory transcript read: a filtered, paginated slice of the subsession's history. */
@@ -59,6 +67,7 @@ export interface SubsessionReadResult extends TranscriptView {
   sessionId: string;
   cwd: string;
   status: SubsessionStatus;
+  errorDetail?: string;
 }
 
 /** Filters the parent passes to narrow a transcript read; mirrors {@link TranscriptQuery}. */
@@ -78,11 +87,15 @@ export interface SubsessionToolDeps {
   send(parentSessionId: string, sessionId: string, message: string, parentSessionFile?: string, mode?: "queue" | "steer"): Promise<void>;
   spawn(input: SpawnSubsessionInvocation): Promise<SpawnSubsessionResult>;
   list(parentSessionId: string, parentSessionFile?: string): Promise<SubsessionSummary[]>;
-  check(parentSessionId: string, sessionId: string, parentSessionFile?: string): Promise<SubsessionCheckResult>;
-  read(parentSessionId: string, sessionId: string, query: SubsessionReadQuery, parentSessionFile?: string): Promise<SubsessionReadResult>;
+  join(parentSessionId: string, parentSessionFile?: string, toolCallId?: string): Promise<SubsessionJoinResult>;
+  check(parentSessionId: string, sessionId: string, parentSessionFile?: string, toolCallId?: string): Promise<SubsessionCheckResult>;
+  read(parentSessionId: string, sessionId: string, query: SubsessionReadQuery, parentSessionFile?: string, toolCallId?: string): Promise<SubsessionReadResult>;
 }
 
 const SpawnSubsessionParams = Type.Object({
+  thinkingLevel: Type.Optional(Type.Enum(KNOWN_THINKING_LEVELS, {
+    description: "Thinking level override for the child session. Set this field only when instructed to use a specific thinking level or to choose an appropriate one. Otherwise omit it to inherit this session's thinking level. An unknown value is rejected; valid levels are clamped to the selected model's capabilities.",
+  })),
   prompt: Type.String({
     description: "Initial instruction for the tracked child.",
   }),
@@ -99,7 +112,6 @@ const SendSubsessionMessageParams = Type.Object({
   sessionId: Type.String({ description: "Tracked child id from spawn_subsession or list_subsessions." }),
   message: Type.String({ minLength: 1, description: "Follow-up instruction or question for the existing child conversation." }),
 });
-const YieldToSubsessionsParams = Type.Object({});
 
 const CheckSubsessionParams = Type.Object({
   sessionId: Type.String({
@@ -144,7 +156,7 @@ function statusLine(summary: SubsessionSummary): string {
 }
 
 function workingInspectionGuidance(sessionId: string): string {
-  return `Subsession ${sessionId} is working; partial output is withheld. Continue other work, or call yield_to_subsessions alone and last at the join point. Completion notices wake you; do not poll.`;
+  return `Subsession ${sessionId} is working; partial output is withheld. Continue other work, or end your turn with a brief close-out message. Completion notices wake you; do not poll.`;
 }
 
 function renderEntry(entry: TranscriptEntry): string {
@@ -191,7 +203,8 @@ function renderTranscript(result: SubsessionReadResult): string {
     : (result.matched === 0
       ? "(no messages matched the filters)"
       : `(no messages before index ${String(result.start)}; all ${String(result.matched)} matches have later indexes)`);
-  return `Subsession ${result.sessionId} [${result.status}] — ${range}.${more}\n\n--- SUBSESSION TRANSCRIPT: ${result.sessionId} ---\n${body}`;
+  const error = result.errorDetail === undefined ? "" : `Error: ${result.errorDetail}\n\n`;
+  return `Subsession ${result.sessionId} [${result.status}] — ${range}.${more}\n\n${error}--- SUBSESSION TRANSCRIPT: ${result.sessionId} ---\n${body}`;
 }
 
 /**
@@ -214,6 +227,7 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const parentSessionId = ctx.sessionManager.getSessionId();
       const parentSessionFile = ctx.sessionManager.getSessionFile() ?? undefined;
+      const thinkingLevel = params.thinkingLevel ?? ctx.thinkingLevel;
       const result = await deps.spawn({
         spawningCwd,
         parentSessionId,
@@ -221,11 +235,11 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
         prompt: params.prompt,
         ...(ctx.model === undefined ? {} : { model: ctx.model }),
         ...(params.model === undefined ? {} : { modelSpec: params.model }),
-        ...(ctx.thinkingLevel === undefined ? {} : { thinkingLevel: ctx.thinkingLevel }),
+        ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
       });
       const modelNote = result.model === undefined ? "" : ` using model ${result.model}`;
       return {
-        content: [{ type: "text", text: `Started tracked subsession ${result.sessionId} in ${result.cwd}${modelNote}. Continue other work, then join with yield_to_subsessions; do not poll.` }],
+        content: [{ type: "text", text: `Started tracked subsession ${result.sessionId} in ${result.cwd}${modelNote}. Continue other work, or end your turn with a brief close-out message. Completion notices wake you; do not poll.` }],
         details: result,
       };
     },
@@ -251,17 +265,17 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
   const checkTool = defineTool<typeof CheckSubsessionParams, SubsessionCheckResult>({
     name: "check_subsession",
     label: "Check subsession",
-    description: "Get a tracked child's status and latest output. Working output is withheld. Never yields; do not poll.",
+    description: "Get a tracked child's status and latest output. Receiving a completed result marks it read, so it will not arrive again automatically. Working output is withheld. Never yields; do not poll.",
     promptSnippet: "check_subsession: inspect child status and available output; never yields",
     parameters: CheckSubsessionParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const parentSessionId = ctx.sessionManager.getSessionId();
       const parentSessionFile = ctx.sessionManager.getSessionFile() ?? undefined;
-      const result = await deps.check(parentSessionId, params.sessionId, parentSessionFile);
+      const result = await deps.check(parentSessionId, params.sessionId, parentSessionFile, _toolCallId);
       const body = result.finalText === "" ? "(no output yet)" : result.finalText;
       const text = result.status === "working"
         ? workingInspectionGuidance(result.sessionId)
-        : `Subsession ${result.sessionId} [${result.status}].\n\n--- SUBSESSION OUTPUT: ${result.sessionId} ---\n${body}`;
+        : `Subsession ${result.sessionId} [${result.status}].\n\n${result.errorDetail === undefined ? "" : `Error: ${result.errorDetail}\n\n`}--- SUBSESSION OUTPUT: ${result.sessionId} ---\n${body}`;
       return {
         content: [{ type: "text", text }],
         details: result,
@@ -272,14 +286,14 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
   const readTool = defineTool<typeof ReadSubsessionParams, SubsessionReadResult>({
     name: "read_subsession",
     label: "Read subsession",
-    description: "Read a tracked child's filtered transcript. Working transcripts are withheld. Never yields; do not poll.",
+    description: "Read a tracked child's filtered transcript. Returning its complete latest final output marks that completion read; filtered or historical-only reads do not. Working transcripts are withheld. Never yields; do not poll.",
     promptSnippet: "read_subsession: inspect an available child transcript; never yields",
     parameters: ReadSubsessionParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const parentSessionId = ctx.sessionManager.getSessionId();
       const parentSessionFile = ctx.sessionManager.getSessionFile() ?? undefined;
       const { sessionId, ...query } = params;
-      const result = await deps.read(parentSessionId, sessionId, query, parentSessionFile);
+      const result = await deps.read(parentSessionId, sessionId, query, parentSessionFile, _toolCallId);
       const text = result.status === "working"
         ? workingInspectionGuidance(result.sessionId)
         : renderTranscript(result);
@@ -290,47 +304,16 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
     },
   });
 
-  const yieldTool = defineTool<typeof YieldToSubsessionsParams, { subsessions: SubsessionSummary[] }>({
-    name: "yield_to_subsessions",
-    label: "Yield to subsessions",
-    description: "At a join point, end this run while tracked children work; completion notices wake you. If none work, continue. Call alone and last; do not poll.",
-    promptSnippet: "yield_to_subsessions: end the run at a join point; call alone and last",
-    promptGuidelines: [
-      "After calling spawn_subsession, you can continue with other work. At the join point, call yield_to_subsessions alone and last; completion notices wake you, so do not poll.",
-    ],
-    parameters: YieldToSubsessionsParams,
-    // Run the whole batch sequentially so a same-batch spawn or steer finishes
-    // before yield lists working children.
-    executionMode: "sequential",
-    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-      const parentSessionId = ctx.sessionManager.getSessionId();
-      const parentSessionFile = ctx.sessionManager.getSessionFile() ?? undefined;
-      const subsessions = await deps.list(parentSessionId, parentSessionFile);
-      const working = subsessions.filter(({ status }) => status === "working");
-      if (working.length === 0) {
-        return {
-          content: [{ type: "text", text: "No tracked subsessions are working; continuing." }],
-          details: { subsessions },
-        };
-      }
-      return {
-        content: [{ type: "text", text: `Working: ${working.map(({ sessionId }) => sessionId).join(", ")}. Ending this run; completion notices will wake you.` }],
-        details: { subsessions },
-        terminate: true,
-      };
-    },
-  });
-
   const sendTool = defineTool<typeof SendSubsessionMessageParams, { sessionId: string }>({
     name: "send_subsession_message",
     label: "Message subsession",
-    description: "Send a steering message to an existing tracked child, preserving its conversation and model. Redirects active work at the next steering boundary without forcibly cancelling running tools; resumes an idle child. Completion notices wake you again; use yield_to_subsessions at the join point.",
+    description: "Send a steering message to an existing tracked child, preserving its conversation and model. Redirects active work at the next steering boundary without forcibly cancelling running tools; resumes an idle child. Completion notices wake you again; end your turn normally when waiting.",
     promptSnippet: "send_subsession_message: continue an existing child's conversation by sessionId",
     parameters: SendSubsessionMessageParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       await deps.send(ctx.sessionManager.getSessionId(), params.sessionId, params.message, ctx.sessionManager.getSessionFile() ?? undefined, "steer");
       return {
-        content: [{ type: "text", text: `Steering message accepted for subsession ${params.sessionId}. Continue other work, then join with yield_to_subsessions; do not poll.` }],
+        content: [{ type: "text", text: `Steering message accepted for subsession ${params.sessionId}. Continue other work, or end your turn normally. Completion notices wake you; do not poll.` }],
         details: { sessionId: params.sessionId },
       };
     },
@@ -350,7 +333,7 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
     },
   });
 
-  return [spawnTool, listTool, checkTool, readTool, sendTool, stopTool, yieldTool];
+  return [spawnTool, listTool, checkTool, readTool, sendTool, stopTool];
 }
 
 /**

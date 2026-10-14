@@ -1,9 +1,22 @@
 import { ASK_USER_ANSWERS_CUSTOM_TYPE } from "../../shared/apiTypes";
-import { parseAskUserOutcome } from "./api/parsers";
+import { parseAskUserOutcome, parseAskUserRequest } from "./api/parsers";
+import { isSessionMediaId, validImageDimensions } from "../../shared/sessionMedia";
 import type { ChatLine, ChatPart, ToolExecutionPart, ToolPreview } from "./components/shared";
 
 export function normalizeMessages(messages: unknown[]): ChatLine[] {
-  return coalesceToolExecutions(messages.flatMap(normalizeMessage)).filter((message) => message.parts.length > 0);
+  const lines: ChatLine[] = [];
+  for (const message of messages) {
+    const normalized = normalizeMessage(message);
+    if (normalized.every((line) => line.parts.length === 0) && getString(message, "role") !== undefined
+      && lines.at(-1)?.parts.at(-1)?.type === "askUserQuestion") {
+      // Even a non-visible conversation entry closes the preceding question.
+      const emptyLine = normalized[0] ?? withMessageMeta({ role: normalizeRole(getString(message, "role")), parts: [] }, message);
+      lines.push({ ...emptyLine, parts: [{ type: "empty" }] });
+    } else {
+      lines.push(...normalized);
+    }
+  }
+  return coalesceToolExecutions(lines).filter((message) => message.parts.length > 0);
 }
 
 export function textMessage(role: ChatLine["role"], text: string): ChatLine {
@@ -28,7 +41,7 @@ export function appendText(messages: ChatLine[], role: ChatLine["role"], text: s
   if (last?.role === role && lastPart?.type === "text") {
     return [
       ...messages.slice(0, -1),
-      { ...last, parts: [...last.parts.slice(0, -1), { ...lastPart, text: lastPart.text + text }] },
+      { ...last, parts: [...last.parts.slice(0, -1), { type: "text", text: lastPart.text + text }] },
     ];
   }
   if (last?.role === role) return [...messages.slice(0, -1), { ...last, parts: [...last.parts, { type: "text", text }] }];
@@ -42,7 +55,7 @@ export function appendThinking(messages: ChatLine[], text: string): ChatLine[] {
   if (last?.role === "assistant" && lastPart?.type === "thinking") {
     return [
       ...messages.slice(0, -1),
-      { ...last, parts: [...last.parts.slice(0, -1), { ...lastPart, text: lastPart.text + text }] },
+      { ...last, parts: [...last.parts.slice(0, -1), { type: "thinking", text: lastPart.text + text }] },
     ];
   }
   if (last?.role === "assistant") return [...messages.slice(0, -1), { ...last, parts: [...last.parts, { type: "thinking", text }] }];
@@ -50,7 +63,10 @@ export function appendThinking(messages: ChatLine[], text: string): ChatLine[] {
 }
 
 export function normalizeMessage(message: unknown): ChatLine[] {
-  if (isChatLine(message)) return [message];
+  if (isChatLine(message)) {
+    if (!message.parts.some((part) => getString(part, "type") === "image")) return [message];
+    return [{ ...message, parts: message.parts.flatMap((part) => getString(part, "type") === "image" ? normalizeImage(part) : [part]) }];
+  }
   if (getString(message, "role") === "bashExecution") return [withMessageMeta(normalizeBashExecution(message), message)];
   const rawRole = getString(message, "role");
   const role = normalizeRole(rawRole);
@@ -58,7 +74,15 @@ export function normalizeMessage(message: unknown): ChatLine[] {
   const supersededRecord = rawRole === "toolResult"
     ? askUserRecordFromToolDetails(getString(message, "toolName") ?? "", getProperty(message, "details"))
     : undefined;
-  const parts = supersededRecord === undefined ? contentParts : [...contentParts, supersededRecord];
+  const question = rawRole === "toolResult"
+    ? askUserQuestionFromToolDetails(getString(message, "toolName") ?? "", getProperty(message, "details"), getBoolean(message, "isError") === true)
+    : undefined;
+  // Every tool result needs a result part, even when its output is empty or
+  // image-only, so coalescing can finish the call without losing chronology.
+  const resultParts = rawRole === "toolResult" && !contentParts.some((part) => part.type === "toolResult")
+    ? [toolResultPartFromText(contentParts.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n"), message), ...contentParts.filter((part) => part.type === "image")]
+    : contentParts;
+  const parts = [...resultParts, ...(supersededRecord === undefined ? [] : [supersededRecord]), ...(question === undefined ? [] : [question])];
   const skillLines = role === "user" ? normalizeSkillInvocation(parts) : undefined;
   if (skillLines !== undefined) return skillLines.map((line) => withMessageMeta(line, message));
   const source = normalizeSource(message);
@@ -168,16 +192,21 @@ function normalizeRole(role: unknown): ChatLine["role"] {
 function normalizeContent(content: unknown, message: unknown): ChatPart[] {
   const askUserRecord = askUserRecordPart(message);
   if (askUserRecord !== undefined) return [askUserRecord];
-  if (typeof content === "string") return content !== "" ? [{ type: "text", text: content }] : [];
+  if (typeof content === "string") {
+    const displayText = getString(message, "displayText");
+    return content !== "" ? [{ type: "text", text: content, ...(displayText === undefined ? {} : { displayText }) }] : [];
+  }
   if (!Array.isArray(content)) return objectFallback(content);
 
   return content.flatMap((part): ChatPart[] => {
     const type = getString(part, "type");
     const text = getString(part, "text");
-    if (type === "text") return text !== undefined && text !== "" ? [{ type: "text", text }] : [];
+    const displayText = getString(part, "displayText");
+    const display = displayText === undefined ? {} : { displayText };
+    if (type === "text") return text !== undefined && text !== "" ? [{ type: "text", text, ...display }] : [];
     if (type === "thinking") {
       const thinking = getString(part, "thinking") ?? text;
-      return thinking !== undefined && thinking !== "" ? [{ type: "thinking", text: thinking }] : [];
+      return thinking !== undefined && thinking !== "" ? [{ type: "thinking", text: thinking, ...display }] : [];
     }
     if (type === "toolCall") {
       const toolName = getString(part, "name") ?? "tool";
@@ -187,23 +216,45 @@ function normalizeContent(content: unknown, message: unknown): ChatPart[] {
       if (skillRead !== undefined) return [{ type: "skillRead", ...skillRead, ...(toolCallId === undefined ? {} : { toolCallId }) }];
       return [{ type: "toolCall", ...(toolCallId === undefined ? {} : { toolCallId }), toolName, summary: summarizeArgs(args), ...(args === undefined ? {} : { args }) }];
     }
-    if (type === "image") {
-      const data = getString(part, "data");
-      const mimeType = getString(part, "mimeType");
-      const url = getString(part, "url");
-      if (data !== undefined && data !== "" && mimeType !== undefined && mimeType !== "") return [{ type: "image", mimeType, data }];
-      if (url !== undefined && url !== "" && mimeType !== undefined && mimeType !== "") return [{ type: "image", mimeType, url }];
-      return [{ type: "text", text: "[image]" }];
-    }
+    if (type === "image") return normalizeImage(part);
     return objectFallback(part);
   }).map((part) => part.type === "text" && getString(message, "role") === "toolResult"
     ? toolResultPartFromText(part.text, message)
     : part);
 }
 
+function normalizeImage(part: unknown): ChatPart[] {
+  const mimeType = getString(part, "mimeType");
+  const mediaId = getProperty(part, "mediaId");
+  const dimensions = validImageDimensions(getProperty(part, "width"), getProperty(part, "height"));
+  if (mediaId !== undefined) {
+    const byteSize = getNumber(part, "byteSize");
+    if (isSessionMediaId(mediaId)
+      && mimeType !== undefined && /^image\/[a-z0-9][a-z0-9.+-]*$/iu.test(mimeType)
+      && byteSize !== undefined && Number.isSafeInteger(byteSize) && byteSize >= 0) {
+      return [{ type: "image", mediaId, mimeType, byteSize, ...dimensions }];
+    }
+  } else {
+    const data = getString(part, "data");
+    if (data !== undefined && data !== "" && mimeType !== undefined && mimeType !== "") return [{ type: "image", mimeType, data, ...dimensions }];
+  }
+  return [{ type: "text", text: "[image]" }];
+}
+
 function askUserRecordPart(message: unknown): Extract<ChatPart, { type: "askUserRecord" }> | undefined {
   if (getString(message, "role") !== "custom" || getString(message, "customType") !== ASK_USER_ANSWERS_CUSTOM_TYPE) return undefined;
   return parsedAskUserRecord(getProperty(message, "details"));
+}
+
+/** Only validated successful results, never tool-call arguments, offer questions. */
+export function askUserQuestionFromToolDetails(toolName: string, details: unknown, isError: boolean): Extract<ChatPart, { type: "askUserQuestion" }> | undefined {
+  if (toolName !== "ask_user" || isError) return undefined;
+  try {
+    return { type: "askUserQuestion", ask: parseAskUserRequest(getProperty(details, "ask")) };
+  } catch {
+    // Invalid persisted results retain their ordinary tool-output presentation.
+    return undefined;
+  }
 }
 
 /** Project the superseded ask carried by an `ask_user` tool result, if any. */
@@ -275,13 +326,24 @@ function coalesceToolExecutions(lines: ChatLine[]): ChatLine[] {
 
       if (part.type === "toolResult") {
         const target = part.toolCallId === undefined ? undefined : pendingTools.get(part.toolCallId);
-        if (target !== undefined && mergeToolResultInto(result, target, part)) {
+        if (target !== undefined && mergeToolResultInto(result, target, part, line.meta)) {
           pendingTools.delete(part.toolCallId ?? "");
+          // Coalescing must not erase a later conversation entry and reopen an
+          // earlier question. The question itself always stays at result position.
+          if (result.at(-1)?.parts.at(-1)?.type === "askUserQuestion"
+            && !line.parts.some((item) => item.type === "askUserQuestion" || item.type === "askUserRecord")) {
+            passthroughParts.push({ type: "toolResultBoundary", ...(part.toolCallId === undefined ? {} : { toolCallId: part.toolCallId }) });
+          }
           continue;
         }
       }
 
-      passthroughParts.push(part);
+      if (part.type === "askUserQuestion" || part.type === "askUserRecord") {
+        flushPassthrough();
+        result.push({ role: line.role, parts: [part], ...metadata });
+      } else {
+        passthroughParts.push(part);
+      }
     }
 
     flushPassthrough();
@@ -301,7 +363,7 @@ function toolExecutionFromCall(part: Extract<ChatPart, { type: "toolCall" }>): T
   };
 }
 
-function mergeToolResultInto(lines: ChatLine[], target: { lineIndex: number; partIndex: number }, result: Extract<ChatPart, { type: "toolResult" }>): boolean {
+function mergeToolResultInto(lines: ChatLine[], target: { lineIndex: number; partIndex: number }, result: Extract<ChatPart, { type: "toolResult" }>, meta: ChatLine["meta"]): boolean {
   const line = lines[target.lineIndex];
   const current = line?.parts[target.partIndex];
   if (line === undefined || current?.type !== "toolExecution") return false;
@@ -314,7 +376,7 @@ function mergeToolResultInto(lines: ChatLine[], target: { lineIndex: number; par
     ...(result.details === undefined ? {} : { details: result.details }),
     ...(preview === undefined ? {} : { preview }),
   };
-  lines[target.lineIndex] = { ...line, parts: [...line.parts.slice(0, target.partIndex), next, ...line.parts.slice(target.partIndex + 1)] };
+  lines[target.lineIndex] = { ...line, parts: [...line.parts.slice(0, target.partIndex), next, ...line.parts.slice(target.partIndex + 1)], ...(meta === undefined ? {} : { meta }) };
   return true;
 }
 

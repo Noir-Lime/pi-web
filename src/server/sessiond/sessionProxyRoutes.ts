@@ -3,7 +3,9 @@ import { WebSocket, type RawData } from "ws";
 import {
   SessionDaemonClient,
   type SessionDaemonRequestOptions,
+  type SessionDaemonStreamResponse,
 } from "../../sessiond/sessionDaemonClient.js";
+import { requestCancellation } from "../requestCancellation.js";
 
 export interface SessionProxyDaemon {
   request(
@@ -12,6 +14,7 @@ export interface SessionProxyDaemon {
     body?: unknown,
     options?: SessionDaemonRequestOptions,
   ): Promise<{ statusCode: number; headers: Record<string, string>; body: string }>;
+  requestStream(path: string, options?: SessionDaemonRequestOptions): Promise<SessionDaemonStreamResponse>;
   connectWebSocket(path: string): WebSocket;
 }
 
@@ -28,6 +31,25 @@ export function registerSessionProxyRoutes(app: FastifyInstance, daemon: Session
       return undefined;
     }
   };
+
+  // Image responses cross this boundary as bytes, never as JSON or UTF-8 text.
+  app.get(`${prefix}/sessions/:sessionId/media/:mediaId`, async (request, reply) => {
+    const cancellation = requestCancellation(request, reply);
+    try {
+      const upstream = await daemon.requestStream(stripPrefix(request.url, prefix), { signal: cancellation.signal });
+      reply.code(upstream.statusCode);
+      for (const name of ["content-type", "content-length", "cache-control", "x-content-type-options"]) {
+        const value = upstream.headers[name];
+        if (value !== undefined && value !== "") reply.header(name, value);
+      }
+      return await reply.send(upstream.body);
+    } catch (error) {
+      requestFailed(reply, error);
+      return await reply;
+    } finally {
+      cancellation.dispose();
+    }
+  });
 
   app.get(`${prefix}/sessiond/health`, (_request, reply) => proxy({ method: "GET", url: `${prefix}/health` }, reply));
   app.get(`${prefix}/sessiond/runtime`, (_request, reply) => proxy({ method: "GET", url: `${prefix}/runtime` }, reply));
@@ -53,31 +75,7 @@ export function registerSessionProxyRoutes(app: FastifyInstance, daemon: Session
   app.all(`${prefix}/auth`, (request, reply) => proxy(request, reply));
   app.all(`${prefix}/auth/*`, (request, reply) => proxy(request, reply));
   app.all(`${prefix}/sessions`, (request, reply) => proxy(request, reply));
-  // History media: the daemon answers with JSON `{ mimeType, data }`; serve the
-  // decoded bytes so the browser can lazy-load and cache them. The image id
-  // embeds a content hash, so a URL never changes meaning.
-  app.get(`${prefix}/sessions/:sessionId/media/:mediaId`, async (request, reply) => {
-    try {
-      const upstream = await daemon.request("GET", stripPrefix(request.url, prefix));
-      const image = upstream.statusCode === 200 ? historyImage(parseJson(upstream.body)) : undefined;
-      if (image === undefined) return await reply.code(upstream.statusCode === 200 ? 502 : upstream.statusCode).send(upstream.body === "" ? undefined : parseJson(upstream.body));
-      return await reply
-        .header("content-type", image.mimeType)
-        .header("cache-control", "private, max-age=31536000, immutable")
-        .header("x-content-type-options", "nosniff")
-        .send(Buffer.from(image.data, "base64"));
-    } catch (error) {
-      requestFailed(reply, error);
-      return undefined;
-    }
-  });
   app.all(`${prefix}/sessions/*`, (request, reply) => proxy(request, reply));
-}
-
-function historyImage(value: unknown): { mimeType: string; data: string } | undefined {
-  if (typeof value !== "object" || value === null || !("mimeType" in value) || !("data" in value)) return undefined;
-  const { mimeType, data } = value;
-  return typeof mimeType === "string" && mimeType.startsWith("image/") && typeof data === "string" ? { mimeType, data } : undefined;
 }
 
 function stripPrefix(url: string, prefix: string): string {

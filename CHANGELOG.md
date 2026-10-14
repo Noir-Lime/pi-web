@@ -1,5 +1,93 @@
 # @jmfederico/pi-web
 
+## 1.202610.3
+
+### Patch Changes
+
+- 5c682d1: Add opt-in instance namespaces for Git workspace-discovery hooks and ownership records without changing existing production registrations. Docker dev defaults to the `dev` namespace.
+- 493841b: Update runtime dependencies and keep Captain's Log and the session-bridge example compatible with Pi 1.2 custom-message startup events.
+- f25db9a: Add copy, recall, remove, and Steer/Queue controls to pending session messages. Recall restores only the text and clears later messages in delivery order, with an attachment-loss warning only when the recalled message has attachments. Switching modes appends to the destination queue. Show attachment indicators and counts on queued messages without loading previews, and use consistent control icons with accessible labels and tooltips. When the runtime cannot safely support individual queue controls, disable Recall, Remove, and Steer/Queue switches and show the reason while keeping Copy and Clear queue available.
+- 5843f4f: Remove the sidebar preference-saving notice to prevent flickering when opening a project for the first time after a page reload.
+- 5e3013f: Preserve streaming message elements when replies are finalized to prevent the chat viewport from jumping to the previous message.
+
+## 1.202610.2
+
+### Patch Changes
+
+- 1e15853: Add application-wide plugin tabs, making Info and Updates available without a selected workspace. Expand the browser plugin API with selection subscriptions, project listings, and directory suggestions.
+- 951686d: Automatically discover new Git worktrees on supported Git builds (Git 2.54+), with configurable opt-out settings. Keep workspace lists up to date after reconnects and prevent deleted worktrees from reappearing.
+- b5d734a: Prevent duplicate session rows when recovering an empty browser-cached session.
+- 4106a4f: Keep long skill paths scrollable inside their cards without creating horizontal scrolling in the chat area.
+- 5362e78: Fix session selection so “Select all” includes collapsed subsessions in the current or archived section. Selecting a collapsed parent also selects its hidden children, keeping selection counts and bulk actions consistent.
+- f51147b: Add a configurable theme default and Theme controls in Settings → General: use a theme on this device, set it as the default, or follow the default without overriding saved device choices.
+- dc40959: Fix native checkout updates when run from another project by installing dependencies and building in the PI WEB checkout.
+- 6d68caa: Save agent question forms in the conversation so they survive session-daemon restarts. Keep earlier forms available for read-only review, with only the latest pending questions open for answers.
+- d9f0db5: Require full session IDs in URLs, plugin navigation, and session API lookups. Update abbreviated bookmarks and integrations; shortened IDs no longer resolve sessions.
+- 061ac7e: Fix extension commands that fork or rewind conversations, and recover conversation changes after reconnects without replacing drafts. Show message actions once per message, preserve intervening history when navigating, and restore Go back text without overwriting unsent input.
+- 15c13a4: Fix Markdown files getting stuck on “Loading…” in Preview mode when the Files plugin runs alongside the development web UI.
+- dfdd09e: Fix iPhone keyboards treating the empty prompt hint as existing input.
+- 90fc32f: Update runtime dependencies and bundled diagram rendering, and verify the Pi integration against SDK 1.1.0.
+- 00c964f: Let plugins add chat message actions, including actions on streaming messages and temporary success feedback. Move Copy, Fork, and Go back onto the shared plugin API while preserving their existing safeguards.
+- bf7af9f: Add the removable Workflows package with a `/worktree` prompt and a Create Worktree shortcut for preparing new worktrees from a task description.
+- 4a45865: Let plugins update individual navigation selections without resetting unrelated panels or sessions. Opening a Relay from its session label no longer reloads the current chat.
+- 3cde79a: Save custom project and workspace ordering, and add pinning and reordering for top-level session trees.
+- 02d24ec: Let plugins add removable context chips to the chat composer. Include their text when sending, and keep them available if a send fails.
+- bebe715: Collapse agent subsessions by default while keeping user-created forks and clones visible. Show activity and unread indicators for hidden descendants, keep collapsed chips stable, and fix session-list scrollbar and menu overlap.
+- 9f104dd: Make ignored extension provider changes easier to diagnose with clearer daemon-log warnings and recovery guidance, without repeated warnings for unchanged providers.
+- f685d2a: Show a dismissible notice when another PI WEB instance is using a session, keeping the transcript readable and preserving drafts and attachments.
+- 280124d: Restore diagram rendering controls when plugins finish loading after a session reload, without requiring navigation away and back.
+- 4bd0953: Add `dispatch_relay` to hand off Relay work from saved packets, with session links back to the packet. Simplify Relay guidance around an agreed goal, compact handovers, and a fresh-context final review.
+- 6ed051e: Remove legacy panel aliases and historical panel links. Plugins must remove `routeAliases` and `navigationAliases` to register, and saved links must use current panel IDs; see the [panel migration guide](https://pi-web.dev/plugins#panel-and-tab-navigation).
+- 93817d7: Avoid Pi's host-provided TypeBox dependency warning when loading PI WEB as a Pi package, while preserving the standalone server's TypeBox dependency.
+- 0438390: Let plugins add compact labels and links to session rows, backed by public metadata saved with conversations and available in archived listings.
+- b50ca79: Improve iPad chat scrolling with code-block headers and accessible Copy controls, including when a rendered preview is visible.
+- 70049c9: Automatically recover temporary conversation and session-list network failures when returning to the app or reconnecting, showing Retry only if recovery fails.
+- f6afa1a: Keep chat reading positions stable when loading older history, returning to a conversation, or loading images. Prevent repeated automatic history loading while the view stays at the top.
+- c6ae2d3: Recover session and subsession activity indicators after returning to a backgrounded tab or reconnecting, without opening each session.
+- 5275ca4: Default the keyboard send shortcut to Steer while the agent is responding, with a setting to choose Follow-up instead. Highlight the action currently assigned to the shortcut.
+- 7a7d6ea: Use a tabbed two-column layout when the workspace column is collapsed, and remember collapsed columns across reloads. Keep panel tabs a consistent height with or without icons and badges.
+- 13e59fb: Fix repeated Terminal panel reloads when navigating to a terminal that is no longer available.
+- 485a861: Prevent duplicate delivery of tracked subsession results. Return completed results promptly even while other subsessions are still working.
+- 33fd87f: Add jump-to-top and jump-to-end controls that show when chat is following live updates. Keep following reliably as content changes without interrupting paused reading.
+
+## 1.202610.1
+
+### Patch Changes
+
+- 4c3574f: Enable Pi's built-in MCP, codemode, and tool-search extensions in PI WEB sessions, respecting built-in disable settings and replacement extensions.
+- a0a7c3b: Remove the extra bottom spacing below the compacting-history notice when it is the last card in the chat.
+- 134ce2e: Require Pi 1.x for all Pi SDK dependencies and bundled companions; Pi 0.x is no longer supported, and Pi 2.x is outside the supported range. Update Pi and PI WEB together, then restart the web/API service before the session daemon. Restarting the daemon interrupts active sessions.
+
+  Keep run-ending question and subsession-yield tools out of codemode scripts, preserve Pi's recorded thinking level, and keep nested tool calls attached to their parent transcript result across reconnects. Explicitly reject virtual-model routers because their session-bound context cannot safely use PI WEB's shared model runtime; select a physical model instead.
+
+- 77951f8: Apply Pi extension Markdown transformers to completed and historical transcript text without changing original messages. Live partial responses remain untransformed until completion.
+- d33a2fc: Add `pi-web update` as the shared update entry point for the CLI and Updates panel, with installation-aware handling, clean-checkout fast-forward updates, and explicit confirmation before disruptive updates. Keep nested Linux and macOS restarts detached from the initiating terminal. Add `pi-web version --check` to report the latest available npm release.
+
+## 1.202610.0
+
+### Patch Changes
+
+- d4bff09: Show chat activity in a compact, bottom-centered overlay attached to the input divider, without shifting the transcript when it appears or disappears. Hide the indicator and remove its reserved bottom padding while idle, giving conversations more vertical space, especially on phones.
+- cf23269: Wake waiting parent sessions when a tracked child's prompt fails before its agent starts, and include the failure reason in the completion notice without notifying for standalone commands or compaction.
+- fa56a98: Clean up orphan unread completions in the background after project/workspace removal or new completions, preventing permanently stuck indicators. Cleanup is coalesced with a one-minute delay and skips empty catalogs; ordinary reads do not trigger workspace scans. When workspace discovery is complete, re-adding a project first clears historical orphan unread state. Session and project files are preserved. Project add/remove operations now require the session daemon.
+- 5cd88b5: Refresh the workspace session list when the app returns to the foreground or reconnects, so sessions created while disconnected appear without a page reload.
+- 3519535: Serve content-hashed client assets under `assets/` with an immutable one-year cache policy so reloads skip revalidating them. The app shell and other static files keep revalidating, so new releases are still picked up on the next load.
+- 92d3eee: Display workspace images inline in chat, and let users load images outside the workspace by clicking a path-labelled placeholder that is replaced by the image. Remember explicitly shown images when revisiting the same message in the tab for 15 minutes.
+- f308a51: Load image-heavy chats faster by fetching transcript images separately as they approach the viewport, with consistent placeholders and retry controls. Support local and remote sessions without changing Pi's stored transcripts.
+- cf23269: Show selected-session transcripts without waiting for notifications, and keep later chat refreshes and live assistant output responsive while notifications are slow to load. Notification updates and error reporting are preserved.
+- b10a462: Load browser plugin modules in parallel instead of one at a time to reduce startup delays on high-latency links. A required Terminal plugin still loads alone first, and plugins still register in manifest order.
+- 1e8f5c8: Add `context.navigate(destination)` for browser plugin actions and workspace panels, using normal host navigation and unavailable-destination UI. Captain's Log translations now offer an Open source session action.
+- dd77161: Keep new user messages and assistant responses correctly separated during background refreshes and reconnects, without losing or duplicating streamed text.
+- cf23269: Allow adding healthy projects when an unrelated workspace provider fails or returns incomplete results. Preserve unread completions until workspace discovery recovers, with logged cleanup retries; durable cleanup failures still block admission.
+- a923302: Dismiss unanswered questions when a queued chat message reaches the conversation, including questions posted after the message was queued.
+- 0e4d29c: Keep project and machine dialog actions reachable on short phone screens by fitting dialogs within their padded backdrop and allowing project content to scroll. Fit model, authentication, and command pickers to the available backdrop height as well.
+- cf23269: Restrict federated session media to supported raster images and prevent remote error pages or weak security headers from serving executable content.
+- b458d6a: Restore project, workspace, and session URLs without waiting for plugin modules to load. Routes that name a workspace tool now also restore their selection immediately and wait for plugins only to resolve the tool, so opening a session link on a slow connection no longer blocks on every plugin download.
+- 25377c9: Release the previous transcript's DOM when switching sessions or machines, preventing retained marker nodes from accumulating during repeated navigation while preserving incremental updates within the current session.
+- 055291b: Allow instructed thinking-level overrides when spawning independent sessions or tracked subsessions. Omitted levels still inherit from the parent, and valid levels are adjusted to the selected model's capabilities.
+- 044defb: Keep the current session selected when an older machine navigation finishes loading after you navigate away and back.
+- cf23269: Fix local Markdown images in Windows workspaces, including remote machines and network shares, so workspace images load normally and outside images retain valid paths and approval controls.
+
 ## 1.202609.1
 
 ### Patch Changes

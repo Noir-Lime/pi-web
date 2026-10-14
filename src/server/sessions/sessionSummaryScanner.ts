@@ -5,6 +5,10 @@ import type { Stats } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { isRecord, tryParseEntry } from "./sessionFileFormat.js";
 import type { PiSessionListEntry } from "./piSessionService.js";
+import type { SessionUiMetadata } from "../../shared/pluginApiTypes.js";
+import { sessionUiMetadataFromEntry } from "./sessionMetadata.js";
+import { cwdPathsEqual } from "../workingDirectory.js";
+import { parsePersistedChildSubsessionLink, parsePersistedParentSubsessionLink, type PersistedChildSubsessionLink, type PersistedParentSubsessionLink } from "./subsessionProvenance.js";
 
 /*
  * LISTING CONTRACT
@@ -33,7 +37,8 @@ import type { PiSessionListEntry } from "./piSessionService.js";
  * Per-line work is minimal: lines are classified from their leading
  * `{"type":"..."` bytes without ever decoding them, and lines are only turned
  * into strings and JSON-parsed when they matter — the header, `session_info`
- * lines (rare, one per rename), and message lines until the first user text
+ * lines (rare, one per rename), custom entries for explicitly public metadata,
+ * and message lines until the first user text
  * message has been found. Message bodies after that point (which hold the huge
  * tool results and assistant replies) are neither decoded nor parsed.
  */
@@ -58,6 +63,7 @@ const TAB = 0x09;
 /** The entry types the byte fast path recognizes, as raw bytes: type names are never decoded. */
 const MESSAGE_TYPE_BYTES = Buffer.from("message");
 const SESSION_INFO_TYPE_BYTES = Buffer.from("session_info");
+const CUSTOM_TYPE_BYTES = Buffer.from("custom");
 
 /** Same bound the SDK uses for its concurrent session-info builds. */
 const MAX_CONCURRENT_SESSION_SUMMARY_SCANS = 10;
@@ -72,7 +78,7 @@ const MAX_CLASSIFIED_TYPE_LENGTH = 64;
 const CHECKPOINT_WINDOW_BYTES = 4096;
 
 /** Version of the persisted summary index format; any other version is ignored and rebuilt. */
-const SUMMARY_INDEX_VERSION = 1;
+const SUMMARY_INDEX_VERSION = 2;
 
 /** Construction options for {@link SessionSummaryScanner}. */
 export interface SessionSummaryScannerOptions {
@@ -170,8 +176,38 @@ export class SessionSummaryScanner {
     const files = await listSessionFilesInDir(sessionDir);
     this.pruneEntriesRemovedFrom(sessionDir, files);
     const summaries = await scanSessionFilesWithBoundedConcurrency(files, this.chunkBytes, (file, chunkBuffer) => this.scanFile(file, chunkBuffer));
+    const sessions = sortedSessionSummaries(summaries);
+    // Reuse this listing's folds and memoized parent scans; never open SDK
+    // managers (which parse entire transcripts) just to classify a list row.
+    const parents = new Map<string, Promise<PiSessionListEntry | undefined>>();
+    const listed = new Map(sessions.map((session) => [session.path, session]));
+    for (const session of sessions) {
+      const entry = this.memo.get(session.path);
+      const fold = entry?.summaryFold ?? entry?.fold;
+      let marker: PersistedChildSubsessionLink | undefined;
+      for (const link of fold?.childLinks ?? []) {
+        if (link.spawnedSessionId === session.id) marker = link;
+      }
+      const parentPath = session.parentSessionPath;
+      if (marker === undefined || parentPath === undefined || parentPath === "") continue;
+      let parent = listed.get(parentPath);
+      if (parent === undefined) {
+        let pending = parents.get(parentPath);
+        if (pending === undefined) {
+          pending = this.scanFile(parentPath, () => Buffer.allocUnsafe(this.chunkBytes));
+          parents.set(parentPath, pending);
+        }
+        parent = await pending;
+      }
+      if (parent?.id !== marker.spawnedBySessionId) continue;
+      const parentEntry = this.memo.get(parentPath);
+      const reciprocal = (parentEntry?.summaryFold ?? parentEntry?.fold)?.parentLinks?.some((link) =>
+        link.spawnedBySessionId === parent.id && link.spawnedSessionId === session.id
+        && link.spawnedSessionFile !== undefined && cwdPathsEqual(link.spawnedSessionFile, session.path));
+      if (reciprocal === true) session.agentSubsession = true;
+    }
     await this.saveIndex(sessionDir);
-    return sortedSessionSummaries(summaries);
+    return sessions;
   }
 
   private pruneEntriesRemovedFrom(sessionDir: string, existingFiles: readonly string[]): void {
@@ -291,6 +327,9 @@ interface SummaryFoldState {
   messageCount: number;
   firstMessageText: string | undefined;
   name: string | undefined;
+  metadata?: SessionUiMetadata;
+  childLinks?: PersistedChildSubsessionLink[];
+  parentLinks?: PersistedParentSubsessionLink[];
 }
 
 function createEmptyFold(): SummaryFoldState {
@@ -298,7 +337,11 @@ function createEmptyFold(): SummaryFoldState {
 }
 
 function cloneFold(fold: SummaryFoldState): SummaryFoldState {
-  return { ...fold, header: fold.header === undefined ? undefined : { ...fold.header } };
+  return {
+    ...fold, header: fold.header === undefined ? undefined : { ...fold.header },
+    ...(fold.childLinks === undefined ? {} : { childLinks: [...fold.childLinks] }),
+    ...(fold.parentLinks === undefined ? {} : { parentLinks: [...fold.parentLinks] }),
+  };
 }
 
 function sameObservedFile(entry: SessionSummaryEntry, stats: Stats): boolean {
@@ -479,6 +522,7 @@ function parsePersistedEntry(value: unknown): SessionSummaryEntry | undefined {
   if (!isFiniteNumber(dev) || !isFiniteNumber(ino) || !isFiniteNumber(size) || !isFiniteNumber(mtimeMs) || !isFiniteNumber(offset)) return undefined;
   if (typeof headHash !== "string" || typeof tailHash !== "string" || !isRecord(fold)) return undefined;
   const { header, rejected, messageCount, firstMessageText, name } = fold;
+  const metadata = sessionUiMetadataFromEntry({ type: "custom", customType: "pi-web.session-ui-metadata", data: { version: 1, metadata: fold["metadata"] } });
   if (header !== undefined && !isRecord(header)) return undefined;
   if (typeof rejected !== "boolean" || typeof messageCount !== "number") return undefined;
   if (firstMessageText !== undefined && typeof firstMessageText !== "string") return undefined;
@@ -491,7 +535,18 @@ function parsePersistedEntry(value: unknown): SessionSummaryEntry | undefined {
     offset,
     headHash,
     tailHash,
-    fold: { header, rejected, messageCount, firstMessageText, name },
+    fold: {
+      header, rejected, messageCount, firstMessageText, name,
+      ...(metadata === undefined ? {} : { metadata }),
+      ...(Array.isArray(fold["childLinks"]) ? { childLinks: fold["childLinks"].flatMap((data: unknown) => {
+        const link = parsePersistedChildSubsessionLink({ type: "custom", customType: "pi-web.subsession.spawned", data });
+        return link === undefined ? [] : [link];
+      }) } : {}),
+      ...(Array.isArray(fold["parentLinks"]) ? { parentLinks: fold["parentLinks"].flatMap((data: unknown) => {
+        const link = parsePersistedParentSubsessionLink({ type: "custom", customType: "pi-web.subsession.link", data });
+        return link === undefined ? [] : [link];
+      }) } : {}),
+    },
   };
 }
 
@@ -514,8 +569,8 @@ async function writeSummaryIndex(indexPath: string, index: SummaryIndexFile): Pr
 function buildSummaryFromFold(fold: SummaryFoldState, filePath: string, mtime: Date): PiSessionListEntry | undefined {
   if (fold.rejected || fold.header === undefined) return undefined;
   const id = fold.header["id"];
-  // The SDK would list a header without a usable id; downstream lookups then
-  // call `.startsWith` on it and crash. Skip such files instead.
+  // The SDK would list a header without a usable id. Skip such files rather
+  // than exposing an invalid session identity to downstream consumers.
   if (typeof id !== "string" || id === "") return undefined;
 
   const headerCwd = fold.header["cwd"];
@@ -533,6 +588,7 @@ function buildSummaryFromFold(fold: SummaryFoldState, filePath: string, mtime: D
     // entries (cleanup listing) still carry the field.
     allMessagesText: "",
     ...(fold.name === undefined ? {} : { name: fold.name }),
+    ...(fold.metadata === undefined ? {} : { metadata: fold.metadata }),
     ...(typeof parentSessionPath === "string" ? { parentSessionPath } : {}),
   };
 }
@@ -557,6 +613,16 @@ function processLineBytes(data: Buffer, start: number, end: number, state: Summa
   if (entryType === "session_info") {
     const entry = tryParseEntry(data.toString("utf8", start, end));
     if (entry !== undefined) state.name = sessionInfoName(entry);
+    return;
+  }
+  if (entryType === "custom") {
+    const entry = tryParseEntry(data.toString("utf8", start, end));
+    const childLink = parsePersistedChildSubsessionLink(entry);
+    if (childLink !== undefined) (state.childLinks ??= []).push(childLink);
+    const parentLink = parsePersistedParentSubsessionLink(entry);
+    if (parentLink !== undefined) (state.parentLinks ??= []).push(parentLink);
+    const metadata = sessionUiMetadataFromEntry(entry);
+    if (metadata !== undefined) state.metadata = metadata;
     return;
   }
   if (entryType === "message") {
@@ -585,7 +651,14 @@ function processLineBytes(data: Buffer, start: number, end: number, state: Summa
   const entry = tryParseEntry(data.toString("utf8", start, end));
   if (entry === undefined) return;
   if (entry["type"] === "session_info") state.name = sessionInfoName(entry);
-  else if (entry["type"] === "message") {
+  else if (entry["type"] === "custom") {
+    const childLink = parsePersistedChildSubsessionLink(entry);
+    if (childLink !== undefined) (state.childLinks ??= []).push(childLink);
+    const parentLink = parsePersistedParentSubsessionLink(entry);
+    if (parentLink !== undefined) (state.parentLinks ??= []).push(parentLink);
+    const metadata = sessionUiMetadataFromEntry(entry);
+    if (metadata !== undefined) state.metadata = metadata;
+  } else if (entry["type"] === "message") {
     state.messageCount += 1;
     if (state.firstMessageText === undefined) {
       const userText = firstUserMessageText(entry);
@@ -600,12 +673,12 @@ function processLineBytes(data: Buffer, start: number, end: number, state: Summa
  * them first would mask each byte's high bit — `Buffer.toString("ascii")`
  * turns bytes like `ed e5 f3 f3 e1 e7 e5` into "message" — fabricating
  * matches for corrupt input. Returns "other" when the line carries the
- * SDK-style prefix but not a known type (only message/session_info matter
+ * SDK-style prefix but not a known type (only message/session_info/custom matter
  * for the summary, so such lines need no parse), or undefined when the line
  * does not carry the prefix (or the type is unreasonably long), leaving
  * classification to the parse fallback.
  */
-function classifyLineType(data: Buffer, start: number, end: number): "message" | "session_info" | "other" | undefined {
+function classifyLineType(data: Buffer, start: number, end: number): "message" | "session_info" | "custom" | "other" | undefined {
   const prefixLength = ENTRY_TYPE_PREFIX.length;
   if (end - start < prefixLength + 1) return undefined;
   for (let i = 0; i < prefixLength; i += 1) {
@@ -616,6 +689,7 @@ function classifyLineType(data: Buffer, start: number, end: number): "message" |
   if (closeAt === -1 || closeAt > searchLimit) return undefined;
   if (sameBytes(data, start + prefixLength, closeAt, MESSAGE_TYPE_BYTES)) return "message";
   if (sameBytes(data, start + prefixLength, closeAt, SESSION_INFO_TYPE_BYTES)) return "session_info";
+  if (sameBytes(data, start + prefixLength, closeAt, CUSTOM_TYPE_BYTES)) return "custom";
   return "other";
 }
 

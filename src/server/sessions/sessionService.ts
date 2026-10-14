@@ -1,6 +1,6 @@
 import type {
-  AskUserCloseResponse,
   AskUserSubmission,
+  SessionQueueMessageMutation,
   ExtensionDialogAnswer,
   ExtensionDialogCloseResponse,
   SavedPromptAttachment,
@@ -35,8 +35,10 @@ import type {
   ClientSessionTreeNavigateResult,
   ClientThinkingLevel,
   SessionStreamSnapshot,
+  SessionTranscriptSnapshot,
 } from "../types.js";
 import type { NormalizedSessionCleanupRequest } from "./sessionCleanup.js";
+import type { SessionMedia } from "./sessionMediaIndex.js";
 
 export type SessionRouteRef = ClientSessionRef;
 
@@ -56,8 +58,11 @@ export interface SessionRouteService {
    */
   start(cwd: string, options?: { startupToken?: string }): Promise<ClientSession>;
   messages(ref: SessionRouteRef, page?: { before?: number; limit?: number }): Promise<ClientMessagePage>;
+  /** Resolve image bytes without modifying the Pi transcript or runtime. */
+  media(ref: SessionRouteRef, mediaId: string): Promise<SessionMedia | undefined>;
   status(ref: SessionRouteRef): Promise<ClientSessionStatus>;
   streamSnapshot(ref: SessionRouteRef): Promise<SessionStreamSnapshot>;
+  transcriptSnapshot(ref: SessionRouteRef, page?: { limit?: number }): Promise<SessionTranscriptSnapshot>;
   notificationCatalog(): SessionNotificationCatalogSnapshot | Promise<SessionNotificationCatalogSnapshot>;
   unreadCatalog(): Promise<SessionUnreadCatalogSnapshot>;
   acknowledgeUnread(sessionId: string, request: SessionUnreadAcknowledgeRequest): Promise<SessionUnreadCatalogSnapshot>;
@@ -65,8 +70,9 @@ export interface SessionRouteService {
   dismissNotification(ref: SessionRouteRef, request: Omit<SessionNotificationDismissRequest, "cwd">): SessionNotificationInboxSnapshot | Promise<SessionNotificationInboxSnapshot>;
   dismissAllNotifications(ref: SessionRouteRef, request: Omit<SessionNotificationDismissAllRequest, "cwd">): SessionNotificationInboxSnapshot | Promise<SessionNotificationInboxSnapshot>;
   clearQueue(ref: SessionRouteRef): Promise<ClientSessionStatus>;
-  submitAsk(ref: SessionRouteRef, askId: string, submission: AskUserSubmission): Promise<AskUserCloseResponse>;
-  cancelAsk(ref: SessionRouteRef, askId: string): Promise<AskUserCloseResponse>;
+  mutateQueueMessage(ref: SessionRouteRef, mutation: SessionQueueMessageMutation): Promise<ClientSessionStatus>;
+  submitAsk(ref: SessionRouteRef, askId: string, submission: AskUserSubmission): Promise<ClientSessionStatus>;
+  cancelAsk(ref: SessionRouteRef, askId: string): Promise<ClientSessionStatus>;
   answerDialog(ref: SessionRouteRef, dialogId: string, value: ExtensionDialogAnswer): Promise<ExtensionDialogCloseResponse>;
   cancelDialog(ref: SessionRouteRef, dialogId: string): Promise<ExtensionDialogCloseResponse>;
   dismissWarning(ref: SessionRouteRef, dismissId: string): Promise<ClientSessionStatus>;

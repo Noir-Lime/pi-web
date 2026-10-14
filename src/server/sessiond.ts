@@ -53,6 +53,10 @@ import { dockerEnvironmentPromptSections } from "./sessions/dockerEnvironmentFac
 import { PI_WEB_SESSION_ENV, sessionEnvironmentPromptSections } from "./sessions/sessionEnvironmentFacts.js";
 import { createServerPluginExecFile } from "./plugins/serverPluginExec.js";
 import { createServerPluginRuntime } from "./plugins/serverPluginRuntime.js";
+import { ProjectPluginSettingsSnapshots } from "./plugins/projectPluginSettings.js";
+import { createWorkspaceNotificationCommandFactory } from "./workspaces/workspaceNotificationCommand.js";
+import { WorkspaceChangeNotifier } from "./workspaces/workspaceChangeNotifier.js";
+import { registerWorkspaceNotificationRoutes } from "./sessiond/workspaceNotificationRoutes.js";
 import { createServerPluginPiSessionsCapabilityFactory } from "./plugins/serverPluginPiSessionsCapability.js";
 import { createServerPluginPiSessionEventsCapabilityFactory } from "./plugins/serverPluginPiSessionEventsCapability.js";
 import { createServerPluginWorkspacesCapabilityFactory } from "./plugins/serverPluginWorkspacesCapability.js";
@@ -185,9 +189,9 @@ async function createSessionDaemonRuntime() {
     app.log.info({ httpIdleTimeoutMs: appliedHttpIdleTimeout.timeoutMs }, "applied agent profile HTTP idle timeout to the session daemon HTTP stack");
   }
   // Best-effort, non-fatal reconciliation of Pi packages PI WEB ships "out of
-  // the box" (currently just the Relays plugin's @jmfederico/pi-relay
-  // package): installs one for the active agent profile, the same way the
-  // manual Settings UI Install action would, unless it is already configured
+  // the box" (Relays and Workflows): installs each for the active agent
+  // profile, the same way the manual Settings UI Install action would,
+  // unless it is already configured
   // or the profile dismissed it (removed it on purpose) before. Deliberately
   // not awaited: reconciliation catches and logs its own failures internally,
   // and a slow or failed install must never delay or block daemon startup.
@@ -202,11 +206,23 @@ async function createSessionDaemonRuntime() {
   });
   const eventHub = new SessionEventHub();
   const serverNotices = new ServerNoticeService(new ServerNoticeStore(), eventHub);
+  const projects = new ProjectService(new ProjectStore(projectStorePath(daemonEnvironment)));
+  const initialProjects = await projects.list();
+  const projectSettings = new ProjectPluginSettingsSnapshots(projects);
+  await projectSettings.initialize(initialProjects);
   const serverPlugins = await createServerPluginRuntime({
     catalog: serverPluginCatalog,
     ...(serverPluginRecovery.safeStart === undefined ? {} : { safeStart: serverPluginRecovery.safeStart }),
     logger: app.log,
     execFile: createServerPluginExecFile({ env: daemonEnvironment }),
+    projectSettingsResolver: (pluginId, settings, project, signal) => projectSettings.resolve(pluginId, settings, project, signal),
+    workspaceNotificationsFactory: createWorkspaceNotificationCommandFactory({
+      env: daemonEnvironment,
+      listeningPort: () => {
+        const address = app.server.address();
+        return typeof address === "object" && address !== null ? address.port : undefined;
+      },
+    }),
     noticeSink: (source, input) => { serverNotices.record({ ...input, source }); },
     dataDir: piWebDataDir(daemonEnvironment),
     lateHostCapabilities: [PI_WEB_HOST_WORKSPACES_CAPABILITY, PI_WEB_HOST_PI_SESSIONS_CAPABILITY, PI_WEB_HOST_PI_SESSION_EVENTS_CAPABILITY],
@@ -242,7 +258,6 @@ async function createSessionDaemonRuntime() {
     });
     catalogRefresher.start();
     auth.subscribe(() => { catalogRefresher.requestRefresh(); });
-    const projects = new ProjectService(new ProjectStore(projectStorePath(daemonEnvironment)));
     // Only dependency-ready providers can define the aggregate topology. The
     // runtime has already rejected any staged provider that depends on late
     // host authority as a cycle, so this snapshot cannot omit a future owner.
@@ -268,6 +283,11 @@ async function createSessionDaemonRuntime() {
     // Every global subscriber is handed the current projection on connect, so a
     // browser never has to reconcile a snapshot fetch against live frames.
     eventHub.setGlobalJoinFrame(() => ({ type: "machine.status", status: machineStatus.snapshot() }));
+    const workspaceChanges = new WorkspaceChangeNotifier({
+      attribution: statusAttribution,
+      status: machineStatus,
+      publish: (event) => { eventHub.publishRealtime(event); },
+    });
     const projectLifecycle: ProjectLifecycleService = new ProjectLifecycleService({
       projects,
       workspaces: workspaceProviders,
@@ -396,7 +416,7 @@ async function createSessionDaemonRuntime() {
       await stateOwnership.release();
     };
     projectLifecycle.scheduleCleanup(); // One delayed pass for existing persisted unread, if any.
-    return { eventHub, machineStatus, statusAttribution, projectLifecycle, auth, sessions, serverNotices, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, projects, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals, shutdown };
+    return { eventHub, machineStatus, statusAttribution, workspaceChanges, projectLifecycle, auth, sessions, serverNotices, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, projects, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals, shutdown };
   } catch (error) {
     await projectLifecycleForFailedConstruction?.closeAll();
     try {
@@ -413,7 +433,7 @@ async function createSessionDaemonRuntime() {
   }
 }
 
-function registerSessionDaemonRoutes({ eventHub, machineStatus, statusAttribution, projectLifecycle, auth, sessions, serverNotices, runtimeComponent, projects, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals }: SessionDaemonRuntime): void {
+function registerSessionDaemonRoutes({ eventHub, machineStatus, statusAttribution, workspaceChanges, projectLifecycle, auth, sessions, serverNotices, runtimeComponent, projects, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals }: SessionDaemonRuntime): void {
   registerProjectMutationRoutes(app, projectLifecycle);
   registerMachineStatusRoutes(app, machineStatus);
   registerServerNoticeRoutes(app, serverNotices);
@@ -424,6 +444,7 @@ function registerSessionDaemonRoutes({ eventHub, machineStatus, statusAttributio
     workspaces: workspaceProviders,
     providerRuntime: workspaceProviderRuntime,
   });
+  registerWorkspaceNotificationRoutes(app, { projects, workspaces: workspaceProviders, changes: workspaceChanges });
   registerPairedPluginBackendRoutes(app, {
     projects,
     backends: pluginBackends,
@@ -456,7 +477,7 @@ function registerSessionDaemonRoutes({ eventHub, machineStatus, statusAttributio
   app.get("/runtime", () => runtimeComponent);
 }
 
-async function listenSessionDaemon({ shutdown }: SessionDaemonRuntime): Promise<void> {
+async function listenSessionDaemon({ shutdown, projects, workspaceProviders }: SessionDaemonRuntime): Promise<void> {
   runtimeShutdown = shutdown;
   if (pendingShutdownSignal !== undefined) {
     await requestShutdown(pendingShutdownSignal);
@@ -475,5 +496,15 @@ async function listenSessionDaemon({ shutdown }: SessionDaemonRuntime): Promise<
     await rm(path, { force: true });
     await app.listen({ path });
     process.on("exit", () => void rm(path, { force: true }));
+  }
+  // Maintain integrations only once the notification ingress is usable, including
+  // the actual bound address of an ephemeral TCP listener. Authority reads stay
+  // side-effect-free, and each provider callback remains bounded/cancellable.
+  try {
+    await Promise.all((await projects.list()).map((project) => workspaceProviders.reconcileProject(project)));
+  } catch (error) {
+    // SIGTERM can arrive as soon as the listener is ready. Quiescing provider
+    // ingress cancels maintenance; that is a graceful stop, not failed startup.
+    if (!shutdownStarted) throw error;
   }
 }

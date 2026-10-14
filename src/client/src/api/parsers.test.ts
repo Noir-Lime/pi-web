@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { ASK_USER_TEXT_MAX_LENGTH, EXTENSION_DIALOG_TEXT_MAX_LENGTH, SESSION_NOTIFICATION_LIMIT, SESSION_NOTIFICATION_MESSAGE_BYTES, SESSION_UNREAD_CATALOG_ID_MAX_LENGTH } from "../../../shared/apiTypes";
-import { parseAskUserCloseResponse, parseAuthProvidersResponse, parseCommandResult, parseExtensionDialogCloseResponse, parseFileContentResponse, parseFileSuggestion, parseMachineRuntime, parseMessagePage, parseOAuthFlowState, parsePiPackageMutationResponse, parsePiPackagesResponse, parsePiWebConfigResponse, parsePiWebPluginsResponse, parsePiWebRuntimeResponse, parsePiWebStatusResponse, parseRealtimeStreamEvent, parseSessionBulkArchiveResponse, parseSessionBulkDeleteArchivedResponse, parseSessionCleanupExecuteResponse, parseSessionCleanupPreviewResponse, parseSessionInfo, parseSessionModelCatalogResponse, parseSessionNotificationInboxEvent, parseSessionNotificationInboxSnapshot, parseSessionStartupProgressEvent, parseSessionStatus, parseSessionStreamSnapshot, parseSessionTreeForkResult, parseSessionTreeNavigateResult, parseSessionTreeSnapshot, parseSessionUnreadCatalogSnapshot, parseSessionUnreadEvent, parseSlashCommand, parseWorkspace, parseWorkspaceProviderResolution } from "./parsers";
+import { parseAskUserRequest, parseAskUserOutcome, parseAuthProvidersResponse, parseCommandResult, parseExtensionDialogCloseResponse, parseFileContentResponse, parseFileSuggestion, parseMachineRuntime, parseMessagePage, parseOAuthFlowState, parsePiPackageMutationResponse, parsePiPackagesResponse, parsePiWebConfigResponse, parsePiWebPluginsResponse, parsePiWebRuntimeResponse, parsePiWebStatusResponse, parseRealtimeStreamEvent, parseSessionBulkArchiveResponse, parseSessionBulkDeleteArchivedResponse, parseSessionCleanupExecuteResponse, parseSessionCleanupPreviewResponse, parseSessionInfo, parseSessionModelCatalogResponse, parseSessionNotificationInboxEvent, parseSessionNotificationInboxSnapshot, parseSessionStartupProgressEvent, parseSessionStatus, parseSessionStreamEvent, parseSessionStreamSnapshot, parseSessionTreeForkResult, parseSessionTreeNavigateResult, parseSessionTreeSnapshot, parseSessionUnreadCatalogSnapshot, parseSessionUnreadEvent, parseSlashCommand, parseWorkspace, parseWorkspaceProviderResolution } from "./parsers";
+
+const legacyActivityWarning = {
+  severity: "info", source: "PI-WEB",
+  message: "Recently active in another PI-WEB instance. Avoid working on this session in both instances at once.",
+};
 
 describe("API parsers", () => {
   it("preserves interactive API-key flow hints and defaults providers without one", () => {
@@ -62,6 +67,34 @@ describe("API parsers", () => {
       effectiveConfig: { host: "127.0.0.1", port: 8504, allowedHosts: true, pathAccess: { allowedPaths: ["/tmp"] }, uploads: { defaultFolder: ".pi-web/uploads" }, attachments: { defaultFolder: ".pi-web/attachments" }, agent: { command: "agent-lab", dir: "/Users/dev/agent-profiles/lab" } },
       envOverrides: { host: true, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, askUser: false },
     });
+  });
+
+  it("preserves theme defaults and rejects malformed theme data", () => {
+    const defaultTheme = { themeId: "themes:pi-web-light", auto: false };
+    const response = {
+      path: "/tmp/config.json", exists: true,
+      config: { defaultTheme }, effectiveConfig: { defaultTheme },
+      envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, askUser: false },
+    };
+    expect(parsePiWebConfigResponse(response)).toMatchObject({ config: { defaultTheme }, effectiveConfig: { defaultTheme } });
+    expect(() => parsePiWebConfigResponse({ ...response, config: { defaultTheme: "dark" } })).toThrow("PI WEB config defaultTheme");
+  });
+
+  it("preserves optional streaming defaults and rejects invalid values in both config fields", () => {
+    const response = {
+      path: "/tmp/config.json", exists: true, config: {}, effectiveConfig: {},
+      envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, askUser: false },
+    };
+    expect(parsePiWebConfigResponse(response)).toMatchObject({ config: {}, effectiveConfig: {} });
+    for (const field of ["config", "effectiveConfig"] as const) {
+      expect(parsePiWebConfigResponse(response)[field]).not.toHaveProperty("defaultStreamingBehavior");
+      for (const defaultStreamingBehavior of ["steer", "followUp"]) {
+        expect(parsePiWebConfigResponse({ ...response, [field]: { defaultStreamingBehavior } })[field]).toEqual({ defaultStreamingBehavior });
+      }
+      for (const defaultStreamingBehavior of ["", "followup", "queue", null, false, 42, {}, []]) {
+        expect(() => parsePiWebConfigResponse({ ...response, [field]: { defaultStreamingBehavior } })).toThrow("PI WEB config defaultStreamingBehavior");
+      }
+    }
   });
 
   it("rejects malformed PI WEB attachments config fields", () => {
@@ -555,6 +588,58 @@ describe("API parsers", () => {
     expect(() => parseSessionInfo({ id: "s1", path: "", cwd: "/repo", persisted: "yes", created: "now", modified: "now", messageCount: 0, firstMessage: "" })).toThrow("Expected optional boolean field: persisted");
   });
 
+  it("preserves only positive agent subsession signals and rejects malformed flags", () => {
+    const session = { id: "s1", path: "", cwd: "/repo", created: "now", modified: "now", messageCount: 0, firstMessage: "" };
+    expect(parseSessionInfo({ ...session, agentSubsession: true }).agentSubsession).toBe(true);
+    expect(parseSessionInfo(session)).not.toHaveProperty("agentSubsession");
+    expect(parseSessionInfo({ ...session, agentSubsession: false })).not.toHaveProperty("agentSubsession");
+    expect(() => parseSessionInfo({ ...session, agentSubsession: "true" })).toThrow("Expected optional boolean field: agentSubsession");
+  });
+
+  describe("session UI metadata", () => {
+    const session = {
+      id: "s1", path: "/sessions/s1.jsonl", cwd: "/repo", name: "Relay X leg 3",
+      created: "now", modified: "now", messageCount: 13, firstMessage: "Continue Relay X",
+    };
+    const metadata = {
+      "@jmfederico/pi-relay": { version: 1, packetPath: ".pi-web/relays/X", relayName: "X", leg: "3" },
+      workflow: { labels: ["review", null, true, 2], nested: { complete: false } },
+    };
+
+    it("preserves a detached namespaced JSON snapshot for session-list plugins", () => {
+      const parsed = parseSessionInfo({ ...session, metadata });
+      expect(parsed).toEqual({ ...session, metadata });
+      expect(parsed.metadata).not.toBe(metadata);
+      expect(parsed.metadata?.["workflow"]).not.toBe(metadata.workflow);
+      expect(parsed.metadata?.["workflow"]?.["labels"]).not.toBe(metadata.workflow.labels);
+      expect(parsed.metadata?.["workflow"]?.["nested"]).not.toBe(metadata.workflow.nested);
+    });
+
+    it("supports older responses without metadata and explicit empty snapshots", () => {
+      expect(parseSessionInfo(session)).not.toHaveProperty("metadata");
+      expect(parseSessionInfo({ ...session, metadata: {} }).metadata).toEqual({});
+    });
+
+    it.each([parseSessionStreamEvent, parseRealtimeStreamEvent])("preserves metadata on session.created events (%#)", (parse) => {
+      expect(parse({ type: "session.created", session: { ...session, metadata } })).toEqual({
+        type: "session.created", session: { ...session, metadata },
+      });
+    });
+
+    it.each([
+      { label: "null", value: null },
+      { label: "array", value: [] },
+      { label: "string", value: "metadata" },
+      { label: "null namespace", value: { workflow: null } },
+      { label: "array namespace", value: { workflow: [] } },
+      { label: "primitive namespace", value: { workflow: "private" } },
+      { label: "non-JSON value", value: { workflow: { value: undefined } } },
+      { label: "non-finite number", value: { workflow: { value: Number.NaN } } },
+    ])("rejects malformed metadata instead of passing it to plugins: $label", ({ value }) => {
+      expect(() => parseSessionInfo({ ...session, metadata: value })).toThrow("Invalid session metadata");
+    });
+  });
+
   it("parses the model catalog with enabled state and natural catalog positions", () => {
     expect(parseSessionModelCatalogResponse({
       models: [
@@ -597,6 +682,7 @@ describe("API parsers", () => {
     })).toEqual({
       sessionId: "s1",
       persisted: true,
+      recentlyActiveElsewhere: false,
       isStreaming: false,
       isCompacting: true,
       isBashRunning: false,
@@ -609,6 +695,73 @@ describe("API parsers", () => {
       contextUsage: { tokens: null, contextWindow: 100, percent: 0.5 },
       thinkingLevel: "medium",
     });
+  });
+
+  it("preserves optional attachment metadata on queued messages", () => {
+    const queuedMessages = [{ kind: "steer", text: "image", hasAttachments: true, attachmentCount: 3 }, { kind: "followUp", text: "plain", hasAttachments: false, attachmentCount: 0 }, { kind: "followUp", text: "legacy" }];
+    expect(parseSessionStatus({ ...statusWire(), queuedMessages }).queuedMessages).toEqual(queuedMessages);
+    expect(() => parseSessionStatus({ ...statusWire(), queuedMessages: [{ kind: "steer", text: "invalid", hasAttachments: "yes" }] })).toThrow("Invalid PI WEB hasAttachments field");
+    for (const attachmentCount of [-1, 1.5, "2", Infinity]) {
+      expect(() => parseSessionStatus({ ...statusWire(), queuedMessages: [{ kind: "steer", text: "invalid", attachmentCount }] })).toThrow();
+    }
+  });
+
+  it("preserves the optional queue compatibility reason and accepts older statuses", () => {
+    expect(parseSessionStatus(statusWire())).not.toHaveProperty("queueMessageActionsUnavailable");
+    for (const queueMessageActionsUnavailable of ["SDK queue layout is incompatible", ""]) {
+      expect(parseSessionStatus({ ...statusWire(), queueMessageActionsUnavailable }).queueMessageActionsUnavailable).toBe(queueMessageActionsUnavailable);
+    }
+    for (const queueMessageActionsUnavailable of [42, null, false, {}]) {
+      expect(() => parseSessionStatus({ ...statusWire(), queueMessageActionsUnavailable })).toThrow("Expected optional string field: queueMessageActionsUnavailable");
+    }
+  });
+
+  it("parses optional suggested input verbatim, including empty input", () => {
+    expect(parseSessionStatus(statusWire()).suggestedInput).toBeUndefined();
+    for (const suggestedInput of ["suggestion\nwith whitespace  ", ""]) {
+      expect(parseSessionStatus({ ...statusWire(), suggestedInput }).suggestedInput).toBe(suggestedInput);
+    }
+    expect(() => parseSessionStatus({ ...statusWire(), suggestedInput: 42 })).toThrow("Expected optional string field: suggestedInput");
+  });
+
+  it("rebuilds a payload-free tree invalidation and rejects retired tree result events", () => {
+    expect(parseSessionStreamEvent({ type: "session.tree.changed", result: { editorText: "ignored" } })).toEqual({ type: "session.tree.changed" });
+    for (const type of ["session.tree.navigated", "session.tree.forked"]) {
+      expect(() => parseSessionStreamEvent({ type, result: { cancelled: true } })).toThrow("Unsupported session stream event type");
+    }
+  });
+
+  it.each([true, false])("preserves recentlyActiveElsewhere=%s independently of warnings", (recentlyActiveElsewhere) => {
+    const wire = { ...statusWire(), recentlyActiveElsewhere };
+    expect(parseSessionStatus(wire)).toMatchObject({ recentlyActiveElsewhere });
+    expect(parseRealtimeStreamEvent({ type: "status.update", status: wire })).toEqual({
+      type: "status.update", status: parseSessionStatus(wire),
+    });
+    expect(parseSessionStatus(wire).warnings).toBeUndefined();
+  });
+
+  it("normalizes older daemon activity warnings into status while retaining ordinary diagnostics", () => {
+    const skillWarning = { severity: "error", message: "bad skill", source: "skill" };
+    const extensionWarning = { ...legacyActivityWarning, source: "extension" };
+    const parsed = parseSessionStatus({ ...statusWire(), warnings: [legacyActivityWarning, skillWarning, extensionWarning] });
+
+    expect(parsed.recentlyActiveElsewhere).toBe(true);
+    expect(parsed.warnings).toEqual([skillWarning, extensionWarning]);
+  });
+
+  it.each([true, false])("prefers explicit activity status %s over a legacy warning", (recentlyActiveElsewhere) => {
+    const parsed = parseSessionStatus({ ...statusWire(), recentlyActiveElsewhere, warnings: [legacyActivityWarning] });
+    expect(parsed.recentlyActiveElsewhere).toBe(recentlyActiveElsewhere);
+    expect(parsed.warnings).toEqual([]);
+  });
+
+  it("normalizes older snapshots without an activity warning to false", () => {
+    expect(parseSessionStatus(statusWire()).recentlyActiveElsewhere).toBe(false);
+    expect(parseSessionStatus({ ...statusWire(), warnings: [{ ...legacyActivityWarning, source: "extension" }] }).recentlyActiveElsewhere).toBe(false);
+  });
+
+  it.each(["true", 1, null])("rejects malformed recentlyActiveElsewhere: %s", (value) => {
+    expect(() => parseSessionStatus({ ...statusWire(), recentlyActiveElsewhere: value })).toThrow("Expected optional boolean field: recentlyActiveElsewhere");
   });
 
   it("parses live session warnings including optional source and path", () => {
@@ -976,6 +1129,15 @@ describe("API parsers", () => {
     expect(() => parseRealtimeStreamEvent({ type: "models.changed", revision: -1 })).toThrow("safe integer");
   });
 
+  it("rebuilds global workspace invalidations from the validated project id", () => {
+    expect(parseRealtimeStreamEvent({ type: "workspaces.changed", projectId: "project-1", workspaces: [], seq: 3 }))
+      .toEqual({ type: "workspaces.changed", projectId: "project-1" });
+  });
+
+  it.each([undefined, null, "", 7, true, {}, []])("rejects a workspace invalidation with projectId %j", (projectId) => {
+    expect(() => parseRealtimeStreamEvent({ type: "workspaces.changed", projectId })).toThrow("string field: projectId");
+  });
+
   it("rejects malformed, unsafe, over-cap, and oversized notification payloads", () => {
     const inbox = notificationInboxWire();
     expect(() => parseSessionNotificationInboxSnapshot({
@@ -1005,10 +1167,8 @@ describe("API parsers", () => {
     })).toThrow("Invalid notification clear reason");
   });
 
-  it("parses an open ask", () => {
-    const parsed = parseSessionStatus({ ...statusWire(), pendingAsk: pendingAskWire() });
-
-    expect(parsed.pendingAsk).toEqual({
+  it("parses a durable question request", () => {
+    expect(parseAskUserRequest(askRequestWire())).toEqual({
       askId: "ask-1",
       askedAt: "2026-07-20T00:00:00.000Z",
       questions: [
@@ -1018,64 +1178,39 @@ describe("API parsers", () => {
     });
   });
 
-  it("omits the pending ask entirely when the field is absent", () => {
-    expect(parseSessionStatus(statusWire()).pendingAsk).toBeUndefined();
+  it("does not adopt legacy pending-question status as conversation state", () => {
+    expect(parseSessionStatus({ ...statusWire(), pendingAsk: askRequestWire() })).not.toHaveProperty("pendingAsk");
   });
 
-  it("validates an ask before rendering it", () => {
-    const ask = pendingAskWire();
+  it("validates a question payload before rendering it", () => {
+    const ask = askRequestWire();
     const first = ask.questions[0];
-    expect(() => parseSessionStatus({ ...statusWire(), pendingAsk: { ...ask, questions: [] } })).toThrow("Pending ask has no questions");
-    expect(() => parseSessionStatus({ ...statusWire(), pendingAsk: { ...ask, questions: [first, first] } })).toThrow("Duplicate ask question id");
-    expect(() => parseSessionStatus({ ...statusWire(), pendingAsk: { ...ask, askId: "" } })).toThrow("Expected non-empty string field: askId");
-    expect(parseSessionStatus({ ...statusWire(), pendingAsk: { ...ask, questions: [{ id: "q1", question: "Anything?", options: [] }] } }).pendingAsk?.questions[0])
+    expect(() => parseAskUserRequest({ ...ask, questions: [] })).toThrow("Ask has no questions");
+    expect(() => parseAskUserRequest({ ...ask, questions: [first, first] })).toThrow("Duplicate ask question id");
+    expect(() => parseAskUserRequest({ ...ask, askId: "" })).toThrow("Expected non-empty string field: askId");
+    expect(parseAskUserRequest({ ...ask, questions: [{ id: "q1", question: "Anything?", options: [] }] }).questions[0])
       .toEqual({ id: "q1", question: "Anything?", options: [] });
-    expect(() => parseSessionStatus({ ...statusWire(), pendingAsk: { ...ask, questions: [{ id: "q1", question: "Which?", options: [{ value: "a", label: "A" }, { value: "a", label: "Also A" }] }] } })).toThrow("Duplicate ask option value");
-    expect(() => parseSessionStatus({ ...statusWire(), pendingAsk: { ...ask, questions: [{ id: "q1", question: "x".repeat(ASK_USER_TEXT_MAX_LENGTH + 1), options: [{ value: "a", label: "A" }] }] } })).toThrow("String field exceeds limit: question");
+    expect(() => parseAskUserRequest({ ...ask, questions: [{ id: "q1", question: "Which?", options: [{ value: "a", label: "A" }, { value: "a", label: "Also A" }] }] })).toThrow("Duplicate ask option value");
+    expect(() => parseAskUserRequest({ ...ask, questions: [{ id: "q1", question: "x".repeat(ASK_USER_TEXT_MAX_LENGTH + 1), options: [] }] })).toThrow("String field exceeds limit: question");
   });
 
-  it("parses a closed ask response carrying the outcome and recomputed status", () => {
-    const response = parseAskUserCloseResponse({
-      result: "closed",
-      outcome: askOutcomeWire(),
-      sessionStatus: statusWire(),
+  it("parses the recorded human response", () => {
+    const outcome = parseAskUserOutcome(askOutcomeWire());
+    expect(outcome).toMatchObject({
+      askId: "ask-1", reason: "submitted", answeredCount: 1, unansweredIds: ["q2"], summary: "Answered 1 of 2; unanswered: q2",
     });
-
-    expect(response.result).toBe("closed");
-    expect(response.outcome).toMatchObject({
-      askId: "ask-1",
-      reason: "submitted",
-      answeredCount: 1,
-      unansweredIds: ["q2"],
-      summary: "Answered 1 of 2; unanswered: q2",
-    });
-    expect(response.outcome?.questions[0]).toMatchObject({ answered: true, values: ["pg"] });
-    expect(response.sessionStatus.sessionId).toBe("s1");
+    expect(outcome.questions[0]).toMatchObject({ answered: true, values: ["pg"] });
   });
 
-  it("parses a stale close as an ordinary race with no outcome", () => {
-    const response = parseAskUserCloseResponse({ result: "stale", sessionStatus: statusWire() });
-
-    expect(response).toEqual({ result: "stale", sessionStatus: parseSessionStatus(statusWire()) });
-  });
-
-  it("rejects close responses whose outcome contradicts itself", () => {
+  it("rejects answer records that contradict their payload", () => {
     const outcome = askOutcomeWire();
-    expect(() => parseAskUserCloseResponse({ result: "closed", sessionStatus: statusWire() })).toThrow("Ask close response outcome mismatch");
-    expect(() => parseAskUserCloseResponse({ result: "stale", outcome, sessionStatus: statusWire() })).toThrow("Ask close response outcome mismatch");
-    expect(() => parseAskUserCloseResponse({ result: "closed", outcome: { ...outcome, answeredCount: 2 }, sessionStatus: statusWire() })).toThrow("Ask outcome answered count mismatch");
-    expect(() => parseAskUserCloseResponse({ result: "closed", outcome: { ...outcome, unansweredIds: [] }, sessionStatus: statusWire() })).toThrow("Ask outcome unanswered ids mismatch");
-    expect(() => parseAskUserCloseResponse({ result: "closed", outcome: { ...outcome, reason: "ignored" }, sessionStatus: statusWire() })).toThrow("Invalid ask close reason");
-    expect(() => parseAskUserCloseResponse({
-      result: "closed",
-      outcome: { ...outcome, questions: [{ ...askAnsweredRecordWire(), answered: false }, askUnansweredRecordWire()] },
-      sessionStatus: statusWire(),
-    })).toThrow("Ask answer contradicts its answered flag");
-    expect(() => parseAskUserCloseResponse({
-      result: "closed",
-      outcome: { ...outcome, questions: [{ ...askAnsweredRecordWire(), values: ["mysql"] }, askUnansweredRecordWire()] },
-      sessionStatus: statusWire(),
-    })).toThrow("Ask answer selected an option the question never offered");
+    expect(() => parseAskUserOutcome({ ...outcome, answeredCount: 2 })).toThrow("Ask outcome answered count mismatch");
+    expect(() => parseAskUserOutcome({ ...outcome, unansweredIds: [] })).toThrow("Ask outcome unanswered ids mismatch");
+    expect(() => parseAskUserOutcome({ ...outcome, reason: "ignored" })).toThrow("Invalid ask close reason");
+    expect(() => parseAskUserOutcome({ ...outcome, questions: [{ ...askAnsweredRecordWire(), answered: false }, askUnansweredRecordWire()] }))
+      .toThrow("Ask answer contradicts its answered flag");
+    expect(() => parseAskUserOutcome({ ...outcome, questions: [{ ...askAnsweredRecordWire(), values: ["mysql"] }, askUnansweredRecordWire()] }))
+      .toThrow("Ask answer selected an option the question never offered");
   });
 
   it("parses open extension dialogs on the session status, oldest first", () => {
@@ -1151,7 +1286,7 @@ function statusWire() {
   };
 }
 
-function pendingAskWire() {
+function askRequestWire() {
   return {
     askId: "ask-1",
     askedAt: "2026-07-20T00:00:00.000Z",
@@ -1163,12 +1298,12 @@ function pendingAskWire() {
 }
 
 function askAnsweredRecordWire() {
-  const ask = pendingAskWire();
+  const ask = askRequestWire();
   return { question: ask.questions[0], answered: true, values: ["pg"] };
 }
 
 function askUnansweredRecordWire() {
-  const ask = pendingAskWire();
+  const ask = askRequestWire();
   return { question: ask.questions[1], answered: false, values: [] };
 }
 

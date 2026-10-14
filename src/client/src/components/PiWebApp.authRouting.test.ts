@@ -12,7 +12,7 @@ describe("PiWebApp authentication command routing", () => {
   it.each(["/login", "/login antigravity", "/logout"])("handles %s locally with steer delivery", (text) => {
     const login = vi.spyOn(AuthController.prototype, "openLogin").mockResolvedValue(undefined);
     const logout = vi.spyOn(AuthController.prototype, "openLogout").mockResolvedValue(undefined);
-    const send = vi.spyOn(SessionController.prototype, "send").mockResolvedValue(undefined);
+    const send = vi.spyOn(SessionController.prototype, "send").mockResolvedValue(true);
     submit(text);
     expect(send).not.toHaveBeenCalled();
     if (text === "/logout") expect(logout).toHaveBeenCalledOnce();
@@ -20,7 +20,7 @@ describe("PiWebApp authentication command routing", () => {
   });
 
   it("preserves steer delivery for ordinary prompts", () => {
-    const send = vi.spyOn(SessionController.prototype, "send").mockResolvedValue(undefined);
+    const send = vi.spyOn(SessionController.prototype, "send").mockResolvedValue(true);
     submit("continue working");
     expect(send).toHaveBeenCalledWith("continue working", "steer", undefined, undefined, undefined);
   });

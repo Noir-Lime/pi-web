@@ -8,6 +8,8 @@ import { fileURLToPath } from "node:url";
 import { defaultPiWebConfigPath, defaultPiWebDataDir, examplePiWebConfig } from "./config.js";
 import { piWebDockerCommand, type PiWebDockerMode } from "./docker/piWebDockerCommandPlan.js";
 import { ownEnvironmentValue } from "./environment.js";
+import { runPiWebUpdate } from "./piWebUpdate.js";
+import { runWorkspaceNotificationCli } from "./workspaceNotificationCli.js";
 import { runPluginRecoveryCli, type SessionDaemonRestartPlan } from "./pluginRecoveryCli.js";
 import {
   packageVersion,
@@ -1106,7 +1108,13 @@ export async function runReadinessCliCommand(
   });
 }
 
-function readinessCliCommandDependencies(): ReadinessCliCommandDependencies {
+export function parseVersionOptions(args: readonly string[]): PiWebVersionReportOptions {
+  if (args.length === 0) return {};
+  if (args.length === 1 && args[0] === "--check") return { check: true };
+  throw new Error("Usage: pi-web version [--check]");
+}
+
+function readinessCliCommandDependencies(versionOptions: PiWebVersionReportOptions = {}): ReadinessCliCommandDependencies {
   return {
     environment: process.env,
     currentBackend: currentServiceBackend,
@@ -1119,7 +1127,10 @@ function readinessCliCommandDependencies(): ReadinessCliCommandDependencies {
     ),
     runLifecycle: performLifecycleServiceAction,
     runDoctor: doctor,
-    printVersion: async () => { await printPiWebVersionReport(); },
+    printVersion: async () => {
+      const report = await printPiWebVersionReport(versionOptions);
+      if (report.release?.status === "error") process.exitCode = 1;
+    },
   };
 }
 
@@ -1356,8 +1367,10 @@ Usage:
   pi-web start|stop|restart|status|logs
   pi-web plugins disable <plugin-id> [--config <path>] [--restart]
   pi-web plugins safe-start show|clear|set <bundled-only|none> [--config <path>] [--restart]
+  pi-web workspaces notify --project <projectId> --plugin <pluginId>
   pi-web doctor
-  pi-web version
+  pi-web update [--yes]
+  pi-web version [--check]
 
 Recommended install:
   npm install -g @jmfederico/pi-web --allow-scripts=node-pty
@@ -1372,11 +1385,13 @@ async function main(): Promise<void> {
   const [command = "help", ...args] = process.argv.slice(2);
   if (command === "install") await install(args);
   else if (command === "uninstall") await uninstall();
+  else if (command === "update") await runPiWebUpdate(args);
   else if (command === "start" || command === "restart" || command === "doctor" || command === "version") {
-    await runReadinessCliCommand(command, readinessCliCommandDependencies());
+    await runReadinessCliCommand(command, readinessCliCommandDependencies(command === "version" ? parseVersionOptions(args) : {}));
   } else if (command === "stop" || command === "status") await serviceAction(command);
   else if (command === "logs") logs();
   else if (command === "plugins") runPluginRecoveryCli(args, { restartPlan: (context) => sessionDaemonRestartPlan(context) });
+  else if (command === "workspaces") await runWorkspaceNotificationCli(args);
   else if (command === "--version" || command === "-v") console.log(packageVersion());
   else if (command === "help" || command === "--help" || command === "-h") help();
   else throw new Error(`Unknown command: ${command}`);

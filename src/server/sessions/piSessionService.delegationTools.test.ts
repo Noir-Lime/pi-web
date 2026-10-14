@@ -1,11 +1,12 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPiWebCustomToolDefinitions, sessionAllowsDelegationTools, type PiSessionManager } from "./piSessionService.js";
 import type { SubsessionToolDeps } from "./spawnSubsessionTool.js";
 import { fakeSessionManager } from "./piSessionService.testSupport.js";
+import { stubExtensionToolContext } from "./piSessionService.testSupport.js";
 
 const tempDirs: string[] = [];
 
@@ -22,6 +23,7 @@ function delegationDeps() {
     send: vi.fn(() => Promise.resolve()),
     spawn: subsessionSpawn,
     list: vi.fn(() => Promise.resolve([])),
+    join: vi.fn(() => Promise.resolve({ subsessions: [], completions: [] })),
     check: vi.fn(() => Promise.resolve({ sessionId: "child-1", cwd: "/workspace", status: "idle" as const, finalText: "", messageCount: 0 })),
     read: vi.fn(() => Promise.resolve({ sessionId: "child-1", cwd: "/workspace", status: "idle" as const, entries: [], total: 0, matched: 0, start: 0, hasMore: false })),
   };
@@ -42,10 +44,15 @@ function manager(id: string, file: string | undefined, entries: readonly unknown
 
 const dispatchModel = { provider: "anthropic", id: "claude-sonnet" };
 
-function ctxFor(sessionId: string, sessionFile: string | undefined, model?: unknown): ExtensionContext {
+function ctxFor(sessionId: string, sessionFile: string | undefined, model?: unknown): ExtensionToolContext {
   // The delegation tools only read sessionManager and model from the context.
-  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- test stub with the minimal surface the tools read.
-  return { sessionManager: manager(sessionId, sessionFile), ...(model === undefined ? {} : { model }) } as unknown as ExtensionContext;
+  return stubExtensionToolContext({
+    sessionManager: {
+      getSessionId: () => sessionId,
+      getSessionFile: () => sessionFile,
+    },
+    model,
+  });
 }
 
 function findTool(definitions: ReturnType<typeof createPiWebCustomToolDefinitions>, name: string) {
@@ -67,7 +74,6 @@ describe("delegation tool capability boundary", () => {
       "read_subsession",
       "send_subsession_message",
       "stop_subsession",
-      "yield_to_subsessions",
     ]);
   });
 

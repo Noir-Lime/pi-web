@@ -1,7 +1,31 @@
 import { ModelRuntime, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+
+/** Local type for ReadonlySessionManager — it's defined in pi-coding-agent's session-manager.d.ts but not re-exported. */
+export interface LocalReadonlySessionManager {
+  getCwd: () => string;
+  getSessionId: () => string;
+  getSessionFile: () => string | undefined;
+  getSessionDir: () => string;
+  getLeafId: () => string;
+  getLeafEntry: () => unknown;
+  getEntry: () => unknown;
+  getLabel: () => string | undefined;
+  getBranch: () => readonly unknown[];
+  buildContextEntries: () => readonly unknown[];
+  buildSessionProjection: () => unknown;
+  getHeader: () => unknown;
+  getEntries: () => readonly unknown[];
+  getTree: () => unknown;
+  getSessionName: () => string | undefined;
+};
+
+/** Local type for AgentToolCallOutcome — not re-exported from pi-coding-agent index. */
+interface LocalAgentToolCallOutcome { id: string; result: unknown; isError: boolean };
+
 import { InMemoryCredentialStore, type Credential, type CredentialStore } from "@earendil-works/pi-ai";
 import type { GlobalSessionEvent, SessionNotificationSummaryEvent, SessionUiEvent } from "../../shared/apiTypes.js";
 import { SessionEventHub } from "../realtime/sessionEventHub.js";
+import { canonicalizeStoredCwd, cwdPathsEqual } from "../workingDirectory.js";
 import type { PiAgentSession, PiSessionListEntry, PiSessionManager, PiSessionRuntime, PiSessionServiceDependencies, ResolvedSessionFile } from "./piSessionService.js";
 
 export class CapturingSessionEventHub extends SessionEventHub {
@@ -161,6 +185,7 @@ export function fakeRuntime(sessionId = "session-1", patch: Partial<TestSession>
     setScopedModels: () => undefined,
     extensionRunner: {
       getRegisteredCommands: () => [],
+      getMarkdownTransformers: () => [],
       getUIContext: () => extensionUiContext,
       setUIContext: (uiContext) => { extensionUiContext = uiContext ?? testExtensionUiContext; },
     },
@@ -180,6 +205,7 @@ export function fakeRuntime(sessionId = "session-1", patch: Partial<TestSession>
     },
     getSessionStats: () => ({ sessionId, totalMessages: 0, userMessages: 0, assistantMessages: 0, toolCalls: 0, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 }),
     getContextUsage: () => undefined,
+    waitForIdle: () => Promise.resolve(),
     reload: () => {
       calls.reload += 1;
       return Promise.resolve();
@@ -247,19 +273,17 @@ export function sessionGateway(records: ReturnType<typeof sessionRecord>[]): Ses
 
 /**
  * Build a gateway `resolveSessionFile` on top of a `list` implementation,
- * mirroring the real resolver's precedence: an exact id wins over a prefix
- * match wherever it appears. For test gateways whose `list` fake is the source
- * of truth, this keeps id resolution consistent with what the fake lists
- * without letting the fake disagree with the production ordering rule.
+ * mirroring the real resolver's full id equality and cwd isolation. For test
+ * gateways whose `list` fake is the source of truth, this keeps id resolution
+ * consistent with the production contract.
  */
 export function resolveSessionFileFromList(
   list: (cwd: string) => Promise<PiSessionListEntry[]>,
 ): (cwd: string, sessionId: string) => Promise<ResolvedSessionFile | undefined> {
   return async (cwd, sessionId) => {
     const records = await list(cwd);
-    const match = records.find((record) => record.id === sessionId)
-      ?? records.find((record) => record.id.startsWith(sessionId));
-    return match === undefined ? undefined : { id: match.id, cwd: match.cwd, path: match.path };
+    const match = records.find((record) => record.id === sessionId && record.cwd !== "" && cwdPathsEqual(record.cwd, cwd));
+    return match === undefined ? undefined : { id: match.id, cwd: canonicalizeStoredCwd(match.cwd), path: match.path };
   };
 }
 
@@ -271,4 +295,69 @@ export function emptyArchiveStore(): NonNullable<PiSessionServiceDependencies["a
     restore: () => Promise.resolve(),
     isArchived: () => Promise.resolve(false),
   };
+}
+
+/**
+ * Minimal readonly session manager stub for test contexts in pi 0.99+.
+ * Satisfies the full `ReadonlySessionManager` Pick<SessionManager, ...> contract.
+ */
+export function stubReadonlySessionManager(
+  patch: Partial<LocalReadonlySessionManager> = {},
+): LocalReadonlySessionManager {
+  return {
+    getCwd: () => "/workspace",
+    getSessionId: () => "session-1",
+    getSessionFile: () => undefined,
+    getSessionDir: () => "/workspace/sessions",
+    getLeafId: () => "leaf-1",
+    getLeafEntry: () => undefined,
+    getEntry: () => undefined,
+    getLabel: () => undefined,
+    getBranch: () => [],
+    buildContextEntries: () => [],
+    buildSessionProjection: () => undefined,
+    getHeader: () => undefined,
+    getEntries: () => [],
+    getTree: () => undefined,
+    getSessionName: () => undefined,
+    ...patch,
+  };
+}
+
+/**
+ * Stub an `ExtensionToolContext` for test stubs that need to pass
+ * `tool.execute()`-compatible context. Satisfies the full pi 0.99+
+ * `ExtensionToolContext` surface which extends `ExtensionContext` with
+ * `tools` and `executeTool`, and adds ui, mode, signal, etc.
+ */
+// eslint-disable @typescript-eslint/consistent-type-assertions
+export function stubExtensionToolContext(
+  patch: { sessionManager?: Partial<LocalReadonlySessionManager> } & Record<string, unknown> = {},
+): import("@earendil-works/pi-coding-agent").ExtensionToolContext {
+  const { sessionManager, model, thinkingLevel, ...rest } = patch;
+  // @ts-expect-error -- pi 0.99+ ExtensionToolContext uses unique-symbol-based TranscriptContext from a nested pi-coding-agent dependency.
+  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
+  return {
+    ui: {},
+    mode: "tui",
+    hasUI: false,
+    cwd: "/workspace",
+    sessionManager: stubReadonlySessionManager(sessionManager),
+    modelRegistry: {},
+    model,
+    scopedModels: [],
+    tools: [],
+    executeTool: (): Promise<LocalAgentToolCallOutcome> => { throw new Error("executeTool not implemented in test stub"); },
+    isIdle: () => true,
+    isProjectTrusted: () => false,
+    signal: undefined,
+    abort: () => { /* no-op stub */ },
+    hasPendingMessages: () => false,
+    shutdown: () => { /* no-op stub */ },
+    getContextUsage: () => undefined,
+    compact: () => { /* no-op stub */ },
+    getSystemPrompt: () => "",
+    thinkingLevel,
+    ...rest,
+  } as import("@earendil-works/pi-coding-agent").ExtensionToolContext;
 }

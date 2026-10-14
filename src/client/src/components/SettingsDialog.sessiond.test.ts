@@ -68,7 +68,7 @@ describe("settings-dialog session daemon machine targeting", () => {
     expect(saveSpy.mock.calls).toEqual([[{ spawnSessions: true }, "local"]]);
     expect(getDialogProperty(dialog, "sessiondConfigResponse")).toBe(savedConfig);
     expect(getDialogProperty(dialog, "configResponse")).toMatchObject({ config: { host: "127.0.0.1", spawnSessions: true, subsessions: false } });
-    expect(getDialogProperty(dialog, "savedMessage")).toBe("Config saved.");
+    expect(getDialogProperty(dialog, "savedMessage")).toBe("Agent permissions saved for local. Restart the session daemon to apply them. Restarting interrupts active sessions.");
     expect(getDialogProperty(dialog, "saving")).toBe(false);
   });
 

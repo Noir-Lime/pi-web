@@ -1,13 +1,15 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { html, render } from "lit";
+import { html, render, type TemplateResult } from "lit";
 import type { ContentRendererContribution, ContentRendererInput } from "../../../plugin-api";
 import { FormattedText } from "../components/FormattedText";
 import { ContentRendererHost } from "../components/ContentRendererHost";
+import { ContentRenderingBoundary } from "../components/ContentRenderingBoundary";
 import { writeClipboardText } from "../clipboard";
 import { PluginRegistry } from "../plugins/registry";
 import { renderWorkspaceMarkdownHtml } from "../../../../pi-web-plugins/files/workspaceMarkdown";
 import { createContentRenderingCapability, MAX_CONTENT_RENDERER_LENGTH } from "./contentRendering";
+import { PLAIN_CODE_BLOCK_POLICY } from "./codeBlockPolicy";
 
 vi.mock("../clipboard", () => ({ writeClipboardText: vi.fn().mockResolvedValue(true) }));
 
@@ -27,7 +29,7 @@ async function mount(text: string, contribution = renderer()) {
   await registry.register({ id: "test", plugin: { apiVersion: 4, name: "Test", activate: () => ({ contributions: { contentRenderers: [contribution] } }) } });
   const element = new FormattedText();
   element.text = text;
-  element.contentRendering = registry.chatContentRendering;
+  element.contentRendering = registry.getChatContentRendering(element.machineId);
   document.body.append(element);
   await element.updateComplete;
   return { element, registry };
@@ -40,13 +42,58 @@ async function hostIn(element: Element): Promise<ContentRendererHost> {
   return host;
 }
 
+async function renderPublicMarkdown(content: TemplateResult, root: HTMLElement): Promise<void> {
+  render(content, root);
+  const boundary = root.querySelector("pi-web-content-rendering-boundary");
+  if (!(boundary instanceof ContentRenderingBoundary)) throw new Error("Expected a host rendering boundary");
+  await boundary.updateComplete;
+}
+
 function button(host: ContentRendererHost, label: string): HTMLButtonElement {
-  const found = [...host.renderRoot.querySelectorAll("button")].find((item) => item.textContent.trim() === label);
+  const found = [...host.renderRoot.querySelectorAll("button")].find((item) => item.getAttribute("aria-label") === label || item.textContent.trim() === label);
   if (found === undefined) throw new Error(`Missing ${label} button`);
   return found;
 }
 
 describe("shared content rendering", () => {
+  it("renders machine-scoped snapshots and refreshes unavailable renderers through the same input", async () => {
+    let enabled = true;
+    const registry = new PluginRegistry({ isContributionEnabled: () => enabled });
+    await registry.registerBatch(["local", "remote"].map((machineId) => ({
+      id: `${machineId}-diagram`, machineId, machineSpecific: true,
+      plugin: { apiVersion: 4, name: machineId, activate: () => ({ contributions: {
+        contentRenderers: [renderer(({ text }) => html`<div class="diagram">${machineId}: ${text}</div>`)],
+      } }) },
+    })));
+    const element = new FormattedText();
+    element.text = "```diagram\nsource\n```";
+    element.contentRendering = registry.getChatContentRendering("local");
+    document.body.append(element);
+    await element.updateComplete;
+    expect((await hostIn(element)).shadowRoot?.querySelector(".diagram")?.textContent).toBe("local: source");
+
+    // A retained snapshot cannot render against another machine's request.
+    element.machineId = "remote";
+    await element.updateComplete;
+    expect(element.shadowRoot?.querySelector("pi-web-content-renderer")).toBeNull();
+    expect(element.shadowRoot?.querySelector("pre")?.textContent).toBe("source\n");
+    element.contentRendering = registry.getChatContentRendering("remote");
+    await element.updateComplete;
+    expect((await hostIn(element)).shadowRoot?.querySelector(".diagram")?.textContent).toBe("remote: source");
+
+    enabled = false;
+    element.contentRendering = registry.getChatContentRendering("remote");
+    await element.updateComplete;
+    expect(element.shadowRoot?.querySelector("pi-web-content-renderer")).toBeNull();
+    expect(element.shadowRoot?.querySelector("pre")?.textContent).toBe("source\n");
+    enabled = true;
+    element.contentRendering = registry.getChatContentRendering("remote");
+    await element.updateComplete;
+    expect((await hostIn(element)).shadowRoot?.querySelector(".diagram")?.textContent).toBe("remote: source");
+    element.remove();
+    await registry.dispose();
+  });
+
   it("remembers independent duplicate blocks only with an opt-in identity and expires on revisit", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(1000);
     const manual = { ...renderer(), renderMode: "manual" as const };
@@ -80,6 +127,7 @@ describe("shared content rendering", () => {
   it("restores exact renderer and mode, but not across identities, source changes or missing renderers", async () => {
     const { element, registry } = await mount("```diagram\nsource\n```", { ...renderer(), renderMode: "manual" });
     await registry.register({ id: "z", plugin: { apiVersion: 4, name: "Z", activate: () => ({ contributions: { contentRenderers: [{ ...renderer(), renderMode: "manual" }] } }) } });
+    element.contentRendering = registry.getChatContentRendering(element.machineId);
     element.intentKey = "memory-chooser";
     await element.updateComplete;
     const host = await hostIn(element);
@@ -165,10 +213,15 @@ describe("shared content rendering", () => {
     expect(host.shadowRoot?.querySelector("pre")?.textContent).toBe("two");
     button(host, "Render").click();
     await host.updateComplete;
+    const preview = host.shadowRoot?.querySelector("b");
     await registry.register({ id: "other", plugin: { apiVersion: 4, name: "Other", activate: () => ({ contributions: { contentRenderers: [{ ...manual, renderMode: "manual" }] } }) } });
-    element.requestUpdate();
+    element.contentRendering = registry.getChatContentRendering(element.machineId);
     await element.updateComplete;
     await host.updateComplete;
+    expect(element.renderRoot.querySelector("pi-web-content-renderer")).toBe(host);
+    expect(host.shadowRoot?.querySelector("b")).toBe(preview);
+    expect(draw).toHaveBeenCalledTimes(2);
+    expect(draw.mock.calls[1]?.[0].signal.aborted).toBe(false);
     const chooser = host.renderRoot.querySelector("select");
     if (chooser === null) throw new Error("Expected chooser");
     chooser.value = "other:diagram";
@@ -209,14 +262,15 @@ describe("shared content rendering", () => {
     expect(second.shadowRoot?.querySelector('[role="status"]')?.textContent).toBe("Copied source");
   });
 
-  it("does not expose intent memory through public Markdown even to untyped callers", async () => {
+  it("does not expose chat intent or source policy through public Markdown even to untyped callers", async () => {
     const capability = createContentRenderingCapability(() => [{ id: "manual", label: "Manual", renderer: { ...renderer(), renderMode: "manual" } }]);
     const request = { machineId: "local", text: "```diagram\nsource\n```", toSafeHtml: renderWorkspaceMarkdownHtml };
     Reflect.set(request, "intentKey", "untyped-public-memory");
+    Reflect.set(request, "codeBlocks", PLAIN_CODE_BLOCK_POLICY);
     const root = document.createElement("div");
     document.body.append(root);
     const mountHost = async () => {
-      render(capability.renderMarkdown(request), root);
+      await renderPublicMarkdown(capability.renderMarkdown(request), root);
       const host = root.querySelector<ContentRendererHost>("pi-web-content-renderer");
       if (host === null) throw new Error("Expected host");
       await host.updateComplete;
@@ -224,6 +278,8 @@ describe("shared content rendering", () => {
     };
     const first = await mountHost();
     expect(first.intentKey).toBeUndefined();
+    expect(first.codeBlocks).toBeUndefined();
+    expect(first.renderRoot.querySelector(".copy")).not.toBeNull();
     button(first, "Render").click();
     await first.updateComplete;
     expect(first.renderRoot.querySelector(".diagram")).not.toBeNull();
@@ -383,37 +439,37 @@ describe("shared content rendering", () => {
     const root = document.createElement("div");
     document.body.append(root);
     const request = { machineId: "local", text: "```diagram\nsource\n```", toSafeHtml: renderWorkspaceMarkdownHtml };
-    render(capability.renderMarkdown(request), root);
+    await renderPublicMarkdown(capability.renderMarkdown(request), root);
     const host = root.querySelector<ContentRendererHost>("pi-web-content-renderer");
     if (host === null) throw new Error("Expected fence host");
     await host.updateComplete;
     expect(draw).toHaveBeenCalledTimes(renderMode === "automatic" ? 1 : 0);
-    render(capability.renderMarkdown({ ...request, allowManualPreview: false }), root);
+    await renderPublicMarkdown(capability.renderMarkdown({ ...request, allowManualPreview: false }), root);
     await host.updateComplete;
     expect(draw).toHaveBeenCalledTimes(renderMode === "automatic" ? 1 : 0);
-    render(capability.renderMarkdown({ ...request, allowManualPreview: true }), root);
+    await renderPublicMarkdown(capability.renderMarkdown({ ...request, allowManualPreview: true }), root);
     await host.updateComplete;
     expect(draw).toHaveBeenCalledOnce();
     button(host, "Raw").click();
     await host.updateComplete;
-    render(capability.renderMarkdown({ ...request, allowManualPreview: true }), root);
+    await renderPublicMarkdown(capability.renderMarkdown({ ...request, allowManualPreview: true }), root);
     await host.updateComplete;
     expect(host.renderRoot.querySelector("pre")?.textContent).toBe("source");
     expect(draw).toHaveBeenCalledOnce();
   });
 
-  it("retains the Files sanitizer while rendering fences and refuses truncated/oversize plugin input", () => {
+  it("retains the Files sanitizer while rendering fences and refuses truncated/oversize plugin input", async () => {
     const select = vi.fn(() => [{ id: "test:diagram", label: "Test / diagram", renderer: renderer() }]);
     const capability = createContentRenderingCapability(select);
     const root = document.createElement("div");
     document.body.append(root);
     const text = "```diagram\nsafe\n```\n\n![tracking](https://evil.test/pixel)\n\n<svg onload=bad()>";
-    render(capability.renderMarkdown({ machineId: "remote", text, toSafeHtml: renderWorkspaceMarkdownHtml }), root);
+    await renderPublicMarkdown(capability.renderMarkdown({ machineId: "remote", text, toSafeHtml: renderWorkspaceMarkdownHtml }), root);
     expect(root.querySelector("pi-web-content-renderer")).not.toBeNull();
     expect(root.querySelector("img,svg,script")).toBeNull();
     expect(root.textContent).toContain("Image omitted");
     expect(select).toHaveBeenCalledWith(expect.objectContaining({ machineId: "remote", text: "safe", language: "diagram" }));
-    render(capability.renderMarkdown({ machineId: "remote", text, truncated: true, toSafeHtml: renderWorkspaceMarkdownHtml }), root);
+    await renderPublicMarkdown(capability.renderMarkdown({ machineId: "remote", text, truncated: true, toSafeHtml: renderWorkspaceMarkdownHtml }), root);
     expect(root.querySelector("pi-web-content-renderer")).toBeNull();
     expect(capability.renderText({ machineId: "remote", text: "x".repeat(MAX_CONTENT_RENDERER_LENGTH + 1), filePath: "a.diag" })).toBeUndefined();
     expect(capability.renderText({ machineId: "remote", text: "safe", truncated: true, filePath: "a.diag" })).toBeUndefined();
@@ -425,7 +481,7 @@ describe("shared content rendering", () => {
     const draw = vi.fn((input: ContentRendererInput) => { inputs.push(input); return html`<b>Alternative</b>`; });
     const { element, registry } = await mount("```diagram\nfirst\n```\n\n```diagram\nsecond\n```");
     await registry.register({ id: "z-other", plugin: { apiVersion: 4, name: "Other", activate: () => ({ contributions: { contentRenderers: [renderer(draw)] } }) } });
-    element.requestUpdate();
+    element.contentRendering = registry.getChatContentRendering(element.machineId);
     await element.updateComplete;
     const host = await hostIn(element);
     const second = element.renderRoot.querySelectorAll<ContentRendererHost>("pi-web-content-renderer")[1];

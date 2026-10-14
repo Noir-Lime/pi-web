@@ -3,9 +3,31 @@ import type { SessionInfo } from "../api";
 import { initialAppState } from "../appState";
 import { SessionController } from "./sessionController";
 import { InMemorySessionSelectionMemory } from "./sessionSelection";
-import { defaultApi, deferred, emptyPage, FakeSocket, oldSession, sessionLookupId, status, workspace, type AppState } from "./sessionController.testSupport";
+import { emptyTranscriptApi as defaultApi, deferred, emptyPage, FakeSocket, oldSession, sessionLookupId, status, workspace, type AppState } from "./sessionController.testSupport";
 
 describe("SessionController archive and cleanup", () => {
+  it("clears agent subsession classification when detaching from its parent", async () => {
+    const child = { ...oldSession, parentSessionPath: "/tmp/parent.jsonl", agentSubsession: true };
+    let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, selectedSession: child, sessions: [child] };
+    const api: typeof defaultApi = {
+      ...defaultApi,
+      detachParent: () => Promise.resolve({ detached: true }),
+    };
+    const controller = new SessionController(
+      () => state,
+      (patch) => { state = { ...state, ...patch }; },
+      () => undefined,
+      new InMemorySessionSelectionMemory(),
+      { api, socket: new FakeSocket() },
+    );
+
+    await controller.detachParent();
+
+    expect(state.sessions[0]).not.toHaveProperty("parentSessionPath");
+    expect(state.sessions[0]).not.toHaveProperty("agentSubsession");
+    expect(state.selectedSession).not.toHaveProperty("agentSubsession");
+  });
+
   it("forgets the selected active session when archiving leaves only archived sessions", async () => {
     const persistedSession = { ...oldSession, persisted: true };
     let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, sessions: [persistedSession] };

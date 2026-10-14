@@ -1,10 +1,10 @@
 import { resolve } from "node:path";
+import { once } from "node:events";
 import Fastify, { type FastifyInstance } from "fastify";
 import fastifyWebsocket from "@fastify/websocket";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ASK_USER_ID_MAX_LENGTH, ASK_USER_OTHER_TEXT_MAX_LENGTH, ASK_USER_QUESTION_LIMIT, EXTENSION_DIALOG_ID_MAX_LENGTH, EXTENSION_DIALOG_INPUT_MAX_LENGTH, SESSION_TREE_CUSTOM_INSTRUCTIONS_MAX_LENGTH, SESSION_UNREAD_CATALOG_ID_MAX_LENGTH } from "../../shared/apiTypes.js";
 import type {
-  AskUserCloseResponse,
   AskUserSubmission,
   ExtensionDialogAnswer,
   ExtensionDialogCloseResponse,
@@ -37,6 +37,7 @@ import type { SessionRouteRef, SessionRouteService } from "./sessionService.js";
 import type { ClientSession } from "../types.js";
 import { registerSessionRoutes } from "./sessionRoutes.js";
 import type { NormalizedSessionCleanupRequest } from "./sessionCleanup.js";
+import type { SessionMedia } from "./sessionMediaIndex.js";
 
 const TEST_AGENT_DIR = "/tmp/pi-web-test-agent";
 
@@ -263,7 +264,7 @@ describe("session routes", () => {
     }
   });
 
-  it("strictly parses cwd-scoped session tree navigation requests", async () => {
+  it("strictly parses cwd-scoped exact-entry navigation requests without retainCheckpoint", async () => {
     const routeApp = Fastify({ logger: false });
     await routeApp.register(fastifyWebsocket);
     const eventHub = new SessionEventHub();
@@ -295,7 +296,7 @@ describe("session routes", () => {
 
       expect([response.statusCode, withoutSummary.statusCode, withDefaultSummary.statusCode]).toEqual([200, 200, 200]);
       expect(response.json()).toEqual({ cancelled: false, editorText: "edit this" });
-      expect(routeService.navigateTreeCalls).toEqual([
+      expect(routeService.navigateTreeCalls).toStrictEqual([
         {
           lookup: { id: "session-1", cwd: resolve("/repo") },
           request: { targetId: "entry-2", expectedLeafId: null, summary: { mode: "custom", instructions: "focus on tests" } },
@@ -346,7 +347,7 @@ describe("session routes", () => {
     }
   });
 
-  it("strictly parses cwd-scoped session tree fork requests", async () => {
+  it("strictly parses cwd-scoped exact-entry fork requests without retainCheckpoint", async () => {
     const routeApp = Fastify({ logger: false });
     await routeApp.register(fastifyWebsocket);
     const eventHub = new SessionEventHub();
@@ -379,7 +380,7 @@ describe("session routes", () => {
         },
         promptDraft: "draft this",
       });
-      expect(routeService.forkFromTreeCalls).toEqual([
+      expect(routeService.forkFromTreeCalls).toStrictEqual([
         {
           lookup: { id: "session-1", cwd: resolve("/repo") },
           request: { entryId: "entry-2", expectedLeafId: "leaf-1" },
@@ -389,6 +390,69 @@ describe("session routes", () => {
           request: { entryId: "entry-3", expectedLeafId: null },
         },
       ]);
+    } finally {
+      await routeService.dispose();
+      await routeApp.close();
+    }
+  });
+
+  it.each([true, false])("forwards retainCheckpoint=%s for session tree navigation and forks", async (retainCheckpoint) => {
+    const routeApp = Fastify({ logger: false });
+    await routeApp.register(fastifyWebsocket);
+    const routeService = new CapturingRouteSessionService();
+    registerSessionRoutes(routeApp, routeService, new SessionEventHub());
+    const navigation: SessionTreeNavigateRequest = {
+      targetId: "entry-2",
+      expectedLeafId: "leaf-1",
+      summary: { mode: "none" },
+      retainCheckpoint,
+    };
+    const fork: SessionTreeForkRequest = { entryId: "entry-2", expectedLeafId: "leaf-1", retainCheckpoint };
+
+    try {
+      const navigateResponse = await routeApp.inject({
+        method: "POST",
+        url: "/sessions/session-1/tree/navigate",
+        payload: { cwd: "/repo", ...navigation },
+      });
+      const forkResponse = await routeApp.inject({
+        method: "POST",
+        url: "/sessions/session-1/tree/fork",
+        payload: { cwd: "/repo", ...fork },
+      });
+
+      expect([navigateResponse.statusCode, forkResponse.statusCode]).toEqual([200, 200]);
+      expect(routeService.navigateTreeCalls).toStrictEqual([{ lookup: { id: "session-1", cwd: resolve("/repo") }, request: navigation }]);
+      expect(routeService.forkFromTreeCalls).toStrictEqual([{ lookup: { id: "session-1", cwd: resolve("/repo") }, request: fork }]);
+    } finally {
+      await routeService.dispose();
+      await routeApp.close();
+    }
+  });
+
+  it.each(["navigate", "fork"])("rejects non-boolean retainCheckpoint on tree/%s before calling the service", async (operation) => {
+    const routeApp = Fastify({ logger: false });
+    await routeApp.register(fastifyWebsocket);
+    const routeService = new CapturingRouteSessionService();
+    registerSessionRoutes(routeApp, routeService, new SessionEventHub());
+    const base = operation === "navigate"
+      ? { cwd: "/repo", targetId: "entry-2", expectedLeafId: "leaf-1", summary: { mode: "none" } }
+      : { cwd: "/repo", entryId: "entry-2", expectedLeafId: "leaf-1" };
+    const malformed: unknown[] = [null, "true", "false", "", 0, 1, [], {}];
+
+    try {
+      for (const retainCheckpoint of malformed) {
+        const response = await routeApp.inject({
+          method: "POST",
+          url: `/sessions/session-1/tree/${operation}`,
+          payload: { ...base, retainCheckpoint },
+        });
+
+        expect(response.statusCode).toBe(400);
+        expect(response.json()).toEqual({ error: "retainCheckpoint field must be a boolean" });
+      }
+      expect(routeService.navigateTreeCalls).toEqual([]);
+      expect(routeService.forkFromTreeCalls).toEqual([]);
     } finally {
       await routeService.dispose();
       await routeApp.close();
@@ -450,7 +514,7 @@ describe("session routes", () => {
     }
   });
 
-  it("parses ask submissions and reports both closed and stale outcomes", async () => {
+  it("parses question responses and skips and returns ordinary session status", async () => {
     const routeApp = Fastify({ logger: false });
     await routeApp.register(fastifyWebsocket);
     const eventHub = new SessionEventHub();
@@ -474,14 +538,14 @@ describe("session routes", () => {
       });
 
       expect(submitted.statusCode).toBe(200);
-      expect(submitted.json()).toMatchObject({ result: "closed", sessionStatus: { sessionId: "session-1" } });
+      expect(submitted.json()).toMatchObject({ sessionId: "session-1" });
       expect(routeService.submitAskCalls).toEqual([{
         lookup: { id: "session-1", cwd: resolve("/repo") },
         askId: "ask-1",
         submission: { answers: [{ id: "db", values: ["pg"] }, { id: "cache", values: [], otherText: "redis" }] },
       }]);
       expect(cancelled.statusCode).toBe(200);
-      expect(cancelled.json()).toMatchObject({ result: "stale" });
+      expect(cancelled.json()).toMatchObject({ sessionId: "session-1" });
       expect(routeService.cancelAskCalls).toEqual([{ lookup: { id: "session-1", cwd: resolve("/repo") }, askId: "ask-2" }]);
     } finally {
       await routeService.dispose();
@@ -911,52 +975,6 @@ describe("session routes", () => {
     }
   });
 
-  it("returns oversized history images as media references only when requested and serves them by content hash", async () => {
-    const routeApp = Fastify({ logger: false });
-    await routeApp.register(fastifyWebsocket);
-    const routeService = new CapturingRouteSessionService();
-    const screenshot = { type: "image", mimeType: "image/png", data: "P".repeat(200) };
-    const imageMessage = { role: "toolResult", content: [screenshot] };
-    const fullBranch: MessagePage = { messages: [{ role: "user", content: [{ type: "text", text: "go" }] }, imageMessage], start: 0, total: 2 };
-    routeService.messagesResponse = fullBranch;
-    registerSessionRoutes(routeApp, routeService, new SessionEventHub());
-    const cwd = encodeURIComponent("/repo");
-
-    try {
-      const inline = await routeApp.inject({ method: "GET", url: `/sessions/session-1/messages?cwd=${cwd}&limit=20` });
-      const referenced = await routeApp.inject({ method: "GET", url: `/sessions/session-1/messages?cwd=${cwd}&limit=20&maxInlineMedia=100` });
-      const reference: unknown = referenced.json<MessagePage>().messages[1];
-      const parts: unknown[] = typeof reference === "object" && reference !== null && "content" in reference && Array.isArray(reference.content) ? reference.content : [];
-      const part = parts[0];
-      const mediaId = typeof part === "object" && part !== null && "mediaId" in part ? String(part.mediaId) : "";
-
-      expect(inline.json()).toEqual(fullBranch);
-      expect(part).toEqual({ type: "image", mimeType: "image/png", mediaId, byteSize: 150 });
-
-      routeService.messagePageRequests = [];
-      routeService.messagePageResponses = [{ messages: [imageMessage], start: 1, total: 2 }];
-      const hinted = await routeApp.inject({ method: "GET", url: `/sessions/session-1/media/${mediaId}?cwd=${cwd}&at=1` });
-      expect(hinted.statusCode).toBe(200);
-      expect(hinted.headers["cache-control"]).toBeUndefined();
-      expect(hinted.json()).toEqual({ mimeType: "image/png", data: screenshot.data });
-      expect(routeService.messagePageRequests).toEqual([{ before: 2, limit: 1 }]);
-
-      routeService.messagePageRequests = [];
-      routeService.messagePageResponses = [{ messages: [], start: 0, total: 2 }];
-      const staleHint = await routeApp.inject({ method: "GET", url: `/sessions/session-1/media/${mediaId}?cwd=${cwd}&at=0` });
-      expect(staleHint.statusCode).toBe(200);
-      expect(routeService.messagePageRequests).toEqual([{ before: 1, limit: 1 }, undefined]);
-
-      const missing = await routeApp.inject({ method: "GET", url: `/sessions/session-1/media/${"0".repeat(64)}?cwd=${cwd}` });
-      const malformed = await routeApp.inject({ method: "GET", url: `/sessions/session-1/media/not-a-hash?cwd=${cwd}` });
-      expect(missing.statusCode).toBe(404);
-      expect(malformed.statusCode).toBe(400);
-    } finally {
-      await routeService.dispose();
-      await routeApp.close();
-    }
-  });
-
   it("forwards prompt attachments and supports the save-attachments route", async () => {
     const routeApp = Fastify({ logger: false });
     await routeApp.register(fastifyWebsocket);
@@ -1041,6 +1059,97 @@ describe("session routes", () => {
     }
   });
 
+  it("projects images only on explicit reference opt-in for messages and both snapshots", async () => {
+    const routeApp = Fastify({ logger: false });
+    await routeApp.register(fastifyWebsocket);
+    const hub = new SessionEventHub();
+    const routeService = new CapturingRouteSessionService();
+    const image = { type: "image", data: "AQID", mimeType: "image/png" };
+    const message = { role: "assistant", content: [image, { type: "thinking", thinking: "working", thinkingSignature: "secret" }] };
+    routeService.messagesResponse = { messages: [message], start: 0, total: 1 };
+    routeService.streamSnapshotResponse = { seq: 7, partial: message };
+    registerSessionRoutes(routeApp, routeService, hub);
+    try {
+      for (const route of ["messages", "transcript-snapshot", "stream-snapshot"]) {
+        for (const mode of ["", "&media=inline", "&media=unknown", "&media=reference"]) {
+          const response = await routeApp.inject({ method: "GET", url: `/sessions/session-1/${route}?cwd=/repo${mode}` });
+          expect(response.statusCode).toBe(200);
+          expect(response.body).not.toContain("secret");
+          if (mode === "&media=reference") {
+            expect(response.body).not.toContain(image.data);
+            expect(response.body).toContain('"mediaId"');
+            expect(response.body).toContain('"byteSize":3');
+            const reference = hub.mediaIndex.reference(undefined, image);
+            if (reference === undefined) throw new Error("Expected image reference");
+            expect(hub.mediaIndex.get({ id: "session-1", cwd: "/repo" }, reference.mediaId)).toBeDefined();
+            expect(hub.mediaIndex.get({ id: "session-1", cwd: "/other" }, reference.mediaId)).toBeUndefined();
+          } else {
+            expect(response.body).toContain(image.data);
+            expect(response.body).not.toContain('"mediaId"');
+          }
+        }
+      }
+      expect(message.content).toEqual([image, { type: "thinking", thinking: "working", thinkingSignature: "secret" }]);
+    } finally { await routeApp.close(); }
+  });
+
+  it("serves private immutable binary media and distinguishes invalid ids, misses, and failures", async () => {
+    const routeApp = Fastify({ logger: false });
+    await routeApp.register(fastifyWebsocket);
+    const routeService = new CapturingRouteSessionService();
+    const hub = new SessionEventHub();
+    const data = Buffer.from([1, 2, 3]);
+    const projected = hub.mediaIndex.reference({ id: "session-1", cwd: "/repo" }, { type: "image", data: data.toString("base64"), mimeType: "image/png" });
+    if (projected === undefined) throw new Error("Expected image reference");
+    const mediaId = projected.mediaId;
+    routeService.mediaResponse = { data, mimeType: "image/png" };
+    registerSessionRoutes(routeApp, routeService, hub);
+    const url = `/sessions/session-1/media/${mediaId}?cwd=${encodeURIComponent(resolve("/repo"))}`;
+    try {
+      const response = await routeApp.inject({ method: "GET", url });
+      expect(response.statusCode).toBe(200);
+      expect(response.rawPayload).toEqual(data);
+      expect(response.headers).toMatchObject({ "content-type": "image/png", "content-length": "3", "cache-control": "private, max-age=31536000, immutable", "x-content-type-options": "nosniff" });
+      expect(routeService.mediaCalls).toEqual([{ lookup: { id: "session-1", cwd: resolve("/repo") }, mediaId }]);
+      for (const invalid of ["bad", mediaId.toUpperCase(), "0".repeat(63), "0".repeat(65)]) {
+        expect((await routeApp.inject({ method: "GET", url: `/sessions/session-1/media/${invalid}?cwd=/repo` })).statusCode).toBe(400);
+      }
+      expect((await routeApp.inject({ method: "GET", url: `/sessions/session-1/media/${mediaId}` })).statusCode).toBe(400);
+      expect(routeService.mediaCalls).toHaveLength(1);
+      routeService.mediaResponse = undefined;
+      expect((await routeApp.inject({ method: "GET", url })).statusCode).toBe(404);
+      routeService.mediaError = new Error("Session not found");
+      expect((await routeApp.inject({ method: "GET", url })).statusCode).toBe(404);
+      routeService.mediaError = new Error("disk failed");
+      expect((await routeApp.inject({ method: "GET", url })).statusCode).toBe(500);
+    } finally { await routeApp.close(); }
+  });
+
+  it("negotiates websocket projection from each subscriber's media query", async () => {
+    const routeApp = Fastify({ logger: false });
+    await routeApp.register(fastifyWebsocket);
+    const hub = new SessionEventHub();
+    registerSessionRoutes(routeApp, new CapturingRouteSessionService(), hub);
+    await routeApp.ready();
+    const inline = await routeApp.injectWS("/sessions/session-1/events?media=unknown");
+    const reference = await routeApp.injectWS("/sessions/session-1/events?media=reference&cwd=ignored");
+    try {
+      const inlineFrame: Promise<unknown[]> = once(inline, "message");
+      const referenceFrame: Promise<unknown[]> = once(reference, "message");
+      const image = { type: "image", data: "AQID", mimeType: "image/png" };
+      hub.publish("session-1", { type: "tool.end", toolName: "read", toolCallId: "call", text: "[image]", content: [image], isError: false }, { id: "session-1", cwd: "/repo" });
+      const [legacyPayload] = await inlineFrame;
+      const [referencePayload] = await referenceFrame;
+      expect(JSON.parse(String(legacyPayload))).toMatchObject({ content: [image], seq: 1 });
+      expect(JSON.parse(String(referencePayload))).toMatchObject({ content: [hub.mediaIndex.reference({ id: "session-1", cwd: "/repo" }, image)], seq: 1 });
+      expect(String(referencePayload)).not.toContain(image.data);
+    } finally {
+      inline.terminate();
+      reference.terminate();
+      await routeApp.close();
+    }
+  });
+
   it("returns the join-time stream snapshot, forwarding workspace context", async () => {
     const routeApp = Fastify({ logger: false });
     await routeApp.register(fastifyWebsocket);
@@ -1062,6 +1171,24 @@ describe("session routes", () => {
     }
   });
 
+  it("returns a transcript snapshot with workspace and limit forwarding", async () => {
+    const routeApp = Fastify({ logger: false });
+    await routeApp.register(fastifyWebsocket);
+    const routeService = new CapturingRouteSessionService();
+    registerSessionRoutes(routeApp, routeService, new SessionEventHub());
+    try {
+      const response = await routeApp.inject({ method: "GET", url: `/sessions/session-1/transcript-snapshot?cwd=${encodeURIComponent(resolve("/repo"))}&limit=25` });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ page: routeService.messagesResponse, status: { sessionId: "session-1" }, seq: 0, partial: null });
+      expect(routeService.transcriptSnapshotCalls).toEqual([{ lookup: { id: "session-1", cwd: resolve("/repo") }, page: { limit: 25 } }]);
+      routeService.transcriptSnapshot = () => Promise.reject(new Error("Session not found"));
+      expect((await routeApp.inject({ method: "GET", url: "/sessions/missing/transcript-snapshot?cwd=/repo" })).statusCode).toBe(404);
+    } finally {
+      await routeService.dispose();
+      await routeApp.close();
+    }
+  });
+
   it("maps stream-snapshot lookup failures to 404", async () => {
     const routeApp = Fastify({ logger: false });
     await routeApp.register(fastifyWebsocket);
@@ -1075,6 +1202,35 @@ describe("session routes", () => {
 
       expect(response.statusCode).toBe(404);
       expect(response.json()).toEqual({ error: "Session not found" });
+    } finally {
+      await routeService.dispose();
+      await routeApp.close();
+    }
+  });
+
+  it("validates and forwards queue message mutations with workspace context", async () => {
+    const routeApp = Fastify({ logger: false });
+    await routeApp.register(fastifyWebsocket);
+    const routeService = new CapturingRouteSessionService();
+    registerSessionRoutes(routeApp, routeService, new SessionEventHub());
+    const calls: unknown[] = [];
+    routeService.mutateQueueMessage = (ref, mutation) => {
+      calls.push({ ref, mutation });
+      return routeService.clearQueue(ref);
+    };
+    try {
+      const mutation = { action: "toggle", index: 0, expectedQueue: [{ kind: "steer", text: "original" }] };
+      const response = await routeApp.inject({ method: "POST", url: "/sessions/session-1/queue/message", payload: { cwd: "/repo", ...mutation } });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ sessionId: "session-1", queuedMessages: [] });
+      expect(calls).toEqual([{ ref: { id: "session-1", cwd: resolve("/repo") }, mutation }]);
+      const invalid = await routeApp.inject({ method: "POST", url: "/sessions/session-1/queue/message", payload: { cwd: "/repo", ...mutation, index: 0.5 } });
+      expect(invalid.statusCode).toBe(400);
+      expect(calls).toHaveLength(1);
+      routeService.clearQueueError = new Error("Queued messages changed; refresh the queue and try again");
+      const stale = await routeApp.inject({ method: "POST", url: "/sessions/session-1/queue/message", payload: { cwd: "/repo", ...mutation } });
+      expect(stale.statusCode).toBe(400);
+      expect(stale.json()).toEqual({ error: "Queued messages changed; refresh the queue and try again" });
     } finally {
       await routeService.dispose();
       await routeApp.close();
@@ -1304,6 +1460,9 @@ class CapturingRouteSessionService implements SessionRouteService {
   dismissWarningError: Error | undefined;
   unreadError: Error | undefined;
   messagesResponse: MessagePage = { messages: [], start: 0, total: 0 };
+  mediaResponse: SessionMedia | undefined;
+  mediaError: Error | undefined;
+  readonly mediaCalls: { lookup: SessionRouteRef; mediaId: string }[] = [];
   streamSnapshotResponse: SessionStreamSnapshot = { seq: 0, partial: null };
   readonly streamSnapshotCalls: SessionRouteRef[] = [];
   readonly cleanupPreviewCalls: NormalizedSessionCleanupRequest[] = [];
@@ -1323,16 +1482,16 @@ class CapturingRouteSessionService implements SessionRouteService {
   reloadError: Error | undefined;
   clearQueueError: Error | undefined;
 
-  submitAsk(lookup: SessionRouteRef, askId: string, submission: AskUserSubmission): Promise<AskUserCloseResponse> {
+  submitAsk(lookup: SessionRouteRef, askId: string, submission: AskUserSubmission): Promise<SessionStatus> {
     if (this.askError !== undefined) return Promise.reject(this.askError);
     this.submitAskCalls.push({ lookup, askId, submission });
-    return Promise.resolve({ result: "closed", sessionStatus: idleStatus(lookup) });
+    return Promise.resolve(idleStatus(lookup));
   }
 
-  cancelAsk(lookup: SessionRouteRef, askId: string): Promise<AskUserCloseResponse> {
+  cancelAsk(lookup: SessionRouteRef, askId: string): Promise<SessionStatus> {
     if (this.askError !== undefined) return Promise.reject(this.askError);
     this.cancelAskCalls.push({ lookup, askId });
-    return Promise.resolve({ result: "stale", sessionStatus: idleStatus(lookup) });
+    return Promise.resolve(idleStatus(lookup));
   }
 
   answerDialog(lookup: SessionRouteRef, dialogId: string, value: ExtensionDialogAnswer): Promise<ExtensionDialogCloseResponse> {
@@ -1431,6 +1590,11 @@ class CapturingRouteSessionService implements SessionRouteService {
     });
   }
 
+  mutateQueueMessage(lookup: SessionRouteRef, mutation: Parameters<SessionRouteService["mutateQueueMessage"]>[1]): Promise<SessionStatus> {
+    void mutation;
+    return this.clearQueue(lookup);
+  }
+
   clearQueue(lookup: SessionRouteRef): Promise<SessionStatus> {
     this.clearQueueCalls.push(lookup);
     if (this.clearQueueError !== undefined) return Promise.reject(this.clearQueueError);
@@ -1446,12 +1610,13 @@ class CapturingRouteSessionService implements SessionRouteService {
     });
   }
 
-  messagePageRequests: ({ before?: number; limit?: number } | undefined)[] = [];
-  messagePageResponses: MessagePage[] = [];
+  messages(): Promise<MessagePage> {
+    return Promise.resolve(this.messagesResponse);
+  }
 
-  messages(_lookup?: SessionRouteRef, page?: { before?: number; limit?: number }): Promise<MessagePage> {
-    this.messagePageRequests.push(page);
-    return Promise.resolve(this.messagePageResponses.shift() ?? this.messagesResponse);
+  media(lookup: SessionRouteRef, mediaId: string): Promise<SessionMedia | undefined> {
+    this.mediaCalls.push({ lookup, mediaId });
+    return this.mediaError === undefined ? Promise.resolve(this.mediaResponse) : Promise.reject(this.mediaError);
   }
 
   status(lookup: SessionRouteRef) {
@@ -1466,6 +1631,12 @@ class CapturingRouteSessionService implements SessionRouteService {
       tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       cost: 0,
     });
+  }
+
+  readonly transcriptSnapshotCalls: { lookup: SessionRouteRef; page?: { limit?: number } }[] = [];
+  async transcriptSnapshot(lookup: SessionRouteRef, page?: { limit?: number }) {
+    this.transcriptSnapshotCalls.push({ lookup, ...(page === undefined ? {} : { page }) });
+    return { page: this.messagesResponse, status: await this.status(lookup), ...this.streamSnapshotResponse };
   }
 
   streamSnapshot(lookup: SessionRouteRef): Promise<SessionStreamSnapshot> {

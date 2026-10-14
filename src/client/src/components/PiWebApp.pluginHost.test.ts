@@ -1,13 +1,14 @@
 // @vitest-environment happy-dom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import relayPlugin from "../../../../pi-packages/relays/pi-web-plugin";
 import { FilesRuntime } from "../../../../pi-web-plugins/files/FilesRuntime";
 import { TerminalBrowserRuntime } from "../../../../pi-web-plugins/terminal/TerminalBrowserRuntime";
 import { TERMINAL_BROWSER_FACADE_CAPABILITY, TerminalFacade, type RequiredTerminalBrowserFacadeV1, type RequiredTerminalWorkspaceBindingV1 } from "../../../../pi-web-plugins/terminal/TerminalFacade";
 import { InMemoryTerminalSelectionMemory } from "../../../../pi-web-plugins/terminal/terminalSelection";
-import type { WorkspaceFilesCapabilityV1, WorkspacePanelContext as PublicWorkspacePanelContext } from "../../../plugin-api";
+import type { QualifiedContributionId, WorkspaceFilesCapabilityV1, WorkspacePanelContext as PublicWorkspacePanelContext } from "../../../plugin-api";
 import type { Machine, Project, SessionInfo, TerminalCommandRun, Workspace } from "../api";
-import { machineScopedBundledPluginId } from "../../../shared/machinePluginIds";
+import { machineScopedBundledPluginId, machineScopedPluginId } from "../../../shared/machinePluginIds";
 import { initialAppState } from "../appState";
 import { AppShellController } from "../appShell/appShellController";
 import { loadCachedNewSessions, markCachedNewSessionInfo, rememberCachedNewSession } from "../cachedNewSessions";
@@ -19,13 +20,17 @@ import { browserErrorScopeKey, machineBrowserErrorScope, workspaceBrowserErrorSc
 import type { MachineNavigationSnapshot } from "../controllers/machineNavigationMemory";
 import type { NavigationFreshness, NavigationScope } from "../controllers/types";
 import { SessionController, type SessionEventSocket } from "../controllers/sessionController";
+import { WorkspaceController } from "../controllers/workspaceController";
 import type { SessionUiEvent } from "../sessionSocket";
 import { loadExternalPlugins, type PluginManifestEntry } from "../plugins/external";
 import { PluginRegistry } from "../plugins/registry";
-import type { PiWebPlugin, PiWebPluginRegistration, PiWebPluginRegistrationDeclaration, PluginCapability, PluginRuntimeContext, WorkspaceInvalidation, WorkspacePanelContext, WorkspacePanelNavigationV1 } from "../plugins/types";
+import { adaptPublicPlugin } from "../plugins/publicContext";
+import type { PiWebPlugin, PiWebPluginRegistration, PiWebPluginRegistrationDeclaration, PluginCapability, PluginRuntimeContext, SessionLabelContext, WorkspaceInvalidation, WorkspacePanelContext, WorkspacePanelNavigationV1 } from "../plugins/types";
 import { PiWebApp } from "./PiWebApp";
 import { html, render } from "lit";
 import { WorkspacePanel } from "./WorkspacePanel";
+import { AppNavigationPanel } from "./appShell/AppNavigationPanel";
+import { SessionList } from "./SessionList";
 
 async function expectWorkspaceContentError(app: PiWebApp, message: string): Promise<void> {
   const host = document.createElement("div");
@@ -46,6 +51,7 @@ vi.mock("../plugins/external", () => ({ loadExternalPlugins: vi.fn() }));
 const project: Project = { id: "project-1", name: "Project", path: "/repo", createdAt: "now" };
 const remoteMachine: Machine = { id: "remote-1", name: "Remote", kind: "remote", createdAt: "now", updatedAt: "now" };
 const TERMINAL_PANEL_ID = "pi-web.terminal:workspace.terminal";
+const testApps = new Set<PiWebApp>();
 
 const workspace: Workspace = {
   id: "workspace-1",
@@ -62,13 +68,18 @@ beforeEach(() => {
   vi.mocked(loadExternalPlugins).mockReset();
 });
 
-afterEach(() => {
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-  document.body.replaceChildren();
-  window.localStorage.clear();
-  window.sessionStorage.clear();
+afterEach(async () => {
+  try {
+    await disposeTestApps();
+  } finally {
+    testApps.clear();
+    document.body.replaceChildren();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    window.localStorage.clear();
+    window.sessionStorage.clear();
+  }
 });
 
 describe("PiWebApp plugin host", () => {
@@ -78,8 +89,7 @@ describe("PiWebApp plugin host", () => {
     const substitute = vi.fn(() => html`<p>Wrong panel</p>`);
     const panel = new WorkspacePanel();
     panel.workspace = workspace;
-    panel.panelContext = workspacePanelContextFromApp(app);
-    panel.panels = [{ id: "test:other", localId: "other", pluginId: "test", title: "Other", render: substitute }];
+    panel.panels = [{ id: "test:other", title: "Other", render: substitute }];
     panel.tool = "missing:panel";
     panel.error = error;
     const select = vi.fn((tool: typeof panel.tool) => {
@@ -102,7 +112,7 @@ describe("PiWebApp plugin host", () => {
   it.each(["tool=missing", "tool=missing&view=missing", "tool=missing%3Apanel"])("leaves no tab selected for an unavailable route and allows explicit recovery: %s", async (query) => {
     const browser = installBrowserWindow(`http://localhost/app?project=project-1&workspace=workspace-1&${query}`);
     const originalUrl = browser.url.href;
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     await markPluginLoadingReady(app);
     await appPluginRegistry(app).register({ id: "files", plugin: pluginWithPanel("Files", vi.fn()) });
     setAppState(app, {
@@ -156,7 +166,7 @@ describe("PiWebApp plugin host", () => {
   it.each([1440, 1180, 761, 760, 390])("separates an unknown view from a valid tool at width %i", async (width) => {
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&tool=files%3Aworkspace.panel&view=schat");
     const originalUrl = browser.url.href;
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     const shell: unknown = Reflect.get(app, "appShell");
     if (!(shell instanceof AppShellController)) throw new Error("App shell unavailable");
     shell.isMobileNavigationLayout = width <= 760;
@@ -215,7 +225,7 @@ describe("PiWebApp plugin host", () => {
       if (tool !== undefined) params.set("tool", tool);
       const browser = installBrowserWindow(`http://localhost/app?${params}#anchor`);
       const originalUrl = browser.url.href;
-      const app = new PiWebApp();
+      const app = createDetachedApp();
       const shell: unknown = Reflect.get(app, "appShell");
       if (!(shell instanceof AppShellController)) throw new Error("App shell unavailable");
       shell.isMobileNavigationLayout = mobile;
@@ -261,16 +271,16 @@ describe("PiWebApp plugin host", () => {
   });
 
   it("restores the requested tool when its plugin becomes available without replacing the URL", async () => {
-    const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&view=workspace&tool=files");
+    const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&view=workspace&tool=files%3Aworkspace.panel");
     const originalUrl = browser.url.href;
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     await markPluginLoadingReady(app);
     setAppState(app, {
       ...initialAppState(), selectedProject: project, selectedWorkspace: workspace,
       workspaces: [workspace], workspaceTool: TERMINAL_PANEL_ID,
     });
     await callAsyncAppMethod(app, "restoreRoute", false);
-    await expectWorkspaceContentError(app, "Workspace panel unavailable: files");
+    await expectWorkspaceContentError(app, "Workspace panel unavailable: files:workspace.panel");
 
     await appPluginRegistry(app).register({
       id: "files",
@@ -278,7 +288,7 @@ describe("PiWebApp plugin host", () => {
         apiVersion: 4,
         name: "Recovering Files",
         activate: () => ({ contributions: { workspacePanels: [{
-          id: "workspace.panel", title: "Files", routeAliases: ["files"],
+          id: "workspace.panel", title: "Files",
           render: () => html`<p>Recovered Files</p>`,
         }] } }),
       },
@@ -299,9 +309,32 @@ describe("PiWebApp plugin host", () => {
     render(null, host);
   });
 
+  it.each(["files", "core:workspace.files", "core:workspace.terminal"])("keeps removed legacy tool %s unavailable even when current plugins are loaded", async (tool) => {
+    const browser = installBrowserWindow(`http://localhost/app?project=project-1&workspace=workspace-1&view=workspace&tool=${encodeURIComponent(tool)}&core.workspace.files--file=old.ts`);
+    const originalUrl = browser.url.href;
+    const app = createDetachedApp();
+    await markPluginLoadingReady(app);
+    await installTestTerminalComposition(app, "local");
+    setAppState(app, {
+      ...initialAppState(), selectedProject: project, selectedWorkspace: workspace,
+      workspaces: [workspace], workspaceTool: TERMINAL_PANEL_ID,
+    });
+    const readFile = vi.fn<WorkspaceFilesCapabilityV1["readFile"]>(() => Promise.reject(new Error("Legacy query must not open a file")));
+    await registerFilesRuntimePanel(app, new FilesRuntime(), testWorkspaceFiles({ readFile }), []);
+
+    await callAsyncAppMethod(app, "restoreRoute", false);
+    callAppMethod(app, "reconcileWorkspacePanelSelection");
+
+    await expectWorkspaceContentError(app, `Workspace panel unavailable: ${tool}`);
+    expect(readFile).not.toHaveBeenCalled();
+    expect(browser.url.href).toBe(originalUrl);
+    expect(browser.pushed).toEqual([]);
+    expect(browser.replaced).toEqual([]);
+  });
+
   it("commits a workspace view destination before applying the rendered selection", async () => {
     installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&tool=pi-web.terminal%3Aworkspace.terminal&view=chat");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     await installTestTerminalComposition(app, "local");
     setAppState(app, {
       ...initialAppState(),
@@ -330,7 +363,7 @@ describe("PiWebApp plugin host", () => {
 
   it.each(["chat", "navigation"] as const)("commits an explicit %s destination before applying the rendered selection", (view) => {
     installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&tool=core%3Aworkspace.terminal&view=workspace");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     setAppState(app, {
       ...initialAppState(),
       selectedProject: project,
@@ -355,7 +388,7 @@ describe("PiWebApp plugin host", () => {
 
   it("commits settings navigation before applying the rendered dialog", () => {
     installBrowserWindow("http://localhost/app");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
 
     let settingsAtCommit: unknown;
     vi.spyOn(window.history, "pushState").mockImplementation(() => {
@@ -374,7 +407,7 @@ describe("PiWebApp plugin host", () => {
     const previousWorkspace: Workspace = { id: "workspace-old", projectId: previousProject.id, path: "/old", label: "Old", isMain: true, effectiveConfig: {} };
     const previousSession: SessionInfo = { id: "session-old", cwd: previousWorkspace.path, path: "/old/.sessions/session-old", created: "now", modified: "now", messageCount: 0, firstMessage: "" };
     const browser = installBrowserWindow("http://localhost/app?project=project-old&workspace=workspace-old&session=session-old");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     setAppState(app, {
       ...initialAppState(),
       projects: [previousProject, nextProject],
@@ -418,7 +451,7 @@ describe("PiWebApp plugin host", () => {
     const nextWorkspace: Workspace = { id: "workspace-next", projectId: project.id, path: "/repo-next", label: "Next", isMain: false, effectiveConfig: {} };
     const previousSession: SessionInfo = { id: "session-old", cwd: previousWorkspace.path, path: "/repo/.sessions/session-old", created: "now", modified: "now", messageCount: 0, firstMessage: "" };
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-old&session=session-old&core.workspace.terminal--terminal=terminal-old");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     setAppState(app, {
       ...initialAppState(),
       projects: [project],
@@ -459,7 +492,7 @@ describe("PiWebApp plugin host", () => {
     const nextWorkspace: Workspace = { id: "workspace-next", projectId: project.id, path: "/repo-next", label: "Next", isMain: false, effectiveConfig: {} };
     const loadedWorkspaces = [previousWorkspace, nextWorkspace];
     const browser = installBrowserWindow(`http://localhost/app?project=${project.id}&workspace=${previousWorkspace.id}&view=chat`);
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     setAppState(app, {
       ...initialAppState(),
       projects: [project],
@@ -501,7 +534,7 @@ describe("PiWebApp plugin host", () => {
     const previousSession: SessionInfo = { id: "session-old", cwd: workspace.path, path: "/repo/.sessions/session-old", created: "now", modified: "now", messageCount: 0, firstMessage: "" };
     const nextSession: SessionInfo = { id: "session-next", cwd: workspace.path, path: "/repo/.sessions/session-next", created: "now", modified: "now", messageCount: 0, firstMessage: "" };
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&session=session-old&core.workspace.terminal--terminal=terminal-1");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     setAppState(app, {
       ...initialAppState(),
       projects: [project],
@@ -539,7 +572,7 @@ describe("PiWebApp plugin host", () => {
     const nextSession: SessionInfo = { id: "session-next", cwd: workspace.path, path: "/repo/.sessions/session-next", created: "now", modified: "now", messageCount: 0, firstMessage: "" };
     const loadedSessions = [previousSession, nextSession];
     const browser = installBrowserWindow(`http://localhost/app?project=${project.id}&workspace=${workspace.id}&session=${previousSession.id}&view=chat`);
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     setAppState(app, {
       ...initialAppState(),
       projects: [project],
@@ -587,11 +620,11 @@ describe("PiWebApp plugin host", () => {
     await selection;
   });
 
-  it.each([false, true])("archives a session opened through an abbreviated route (fallback: %s)", async (hasFallback) => {
+  it.each([false, true])("archives a session opened through its exact route (fallback: %s)", async (hasFallback) => {
     const selected: SessionInfo = { id: "abcdef-full", persisted: true, cwd: workspace.path, path: "/repo/selected.jsonl", created: "now", modified: "now", messageCount: 2, firstMessage: "Hello" };
     const fallback: SessionInfo = { ...selected, id: "next-session", path: "/repo/next.jsonl" };
-    const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&session=abcdef");
-    const app = new PiWebApp();
+    const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&session=abcdef-full");
+    const app = createDetachedApp();
     setAppState(app, {
       ...initialAppState(), selectedProject: project, selectedWorkspace: workspace,
       workspaces: [workspace], selectedSession: selected, sessions: hasFallback ? [selected, fallback] : [selected],
@@ -613,15 +646,17 @@ describe("PiWebApp plugin host", () => {
   it.each([
     { change: undefined, accepted: true },
     { change: ["session", "different-session"], accepted: false },
+    { change: ["session", "abcdef"], accepted: false },
+    { change: ["session", "abcdef-full-extra"], accepted: false },
     { change: ["session", "abcdef-other-full"], accepted: false },
     { change: ["machine", "remote-1"], accepted: false },
     { change: ["project", "project-2"], accepted: false },
     { change: ["workspace", "workspace-2"], accepted: false },
-  ] as const)("guards a tree fork from an abbreviated route against $change", async ({ change, accepted }) => {
+  ] as const)("guards a tree fork from an exact route against $change", async ({ change, accepted }) => {
     const selected: SessionInfo = { id: "abcdef-full", persisted: true, cwd: workspace.path, path: "/repo/selected.jsonl", created: "now", modified: "now", messageCount: 2, firstMessage: "Hello" };
     const forked: SessionInfo = { ...selected, id: "forked-session", path: "/repo/forked.jsonl" };
-    const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&session=abcdef");
-    const app = new PiWebApp();
+    const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&session=abcdef-full");
+    const app = createDetachedApp();
     setAppState(app, {
       ...initialAppState(), selectedProject: project, selectedWorkspace: workspace,
       workspaces: [workspace], selectedSession: selected, sessions: [selected],
@@ -657,7 +692,7 @@ describe("PiWebApp plugin host", () => {
   it("publishes Chat before starting a session from another workspace view", async () => {
     const previousSession: SessionInfo = { id: "session-old", cwd: workspace.path, path: "/repo/.sessions/session-old", created: "now", modified: "now", messageCount: 0, firstMessage: "" };
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&session=session-old&tool=core%3Aworkspace.terminal&view=workspace");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     if (!Reflect.set(app, "focusChatComposer", () => { callAppMethod(app, "selectMainView", "chat", { invalidateNavigationSelection: false }); })) throw new Error("Could not stub chat focus");
     setAppState(app, {
       ...initialAppState(),
@@ -705,7 +740,7 @@ describe("PiWebApp plugin host", () => {
     const previousSession: SessionInfo = { id: "session-old", cwd: workspace.path, path: "/repo/.sessions/session-old", created: "now", modified: "now", messageCount: 0, firstMessage: "" };
     const started: SessionInfo = { id: "session-started", cwd: workspace.path, path: "/repo/.sessions/session-started", created: "now", modified: "now", messageCount: 0, firstMessage: "" };
     const browser = installBrowserWindow(`http://localhost/app?project=project-1&workspace=workspace-1&session=session-old&tool=${encodeURIComponent(TERMINAL_PANEL_ID)}&view=workspace`);
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     await installTestTerminalComposition(app, "local");
     setAppState(app, {
       ...initialAppState(),
@@ -745,7 +780,7 @@ describe("PiWebApp plugin host", () => {
     const replacement: SessionInfo = { ...cached, id: "cached-replacement", path: "/repo/cached-replacement" };
     const initialTool = change === "tool" ? undefined : TERMINAL_PANEL_ID;
     const browser = installBrowserWindow(`http://localhost/app?project=project-1&workspace=workspace-1&session=${cached.id}${initialTool === undefined ? "" : `&tool=${encodeURIComponent(initialTool)}`}&view=chat`);
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     await installTestTerminalComposition(app, "local");
     await markPluginLoadingReady(app);
     setAppState(app, { ...initialAppState(), projects: [project], selectedProject: project, workspaces: [workspace], selectedWorkspace: workspace, sessions: [cached], workspaceTool: initialTool, mainView: "chat" });
@@ -762,10 +797,12 @@ describe("PiWebApp plugin host", () => {
       || !Reflect.set(sessions, "api", {
         ...defaultApi,
         startSession,
-        messages: (session: Parameters<typeof defaultApi.messages>[0]) => session.id === cached.id
-          ? Promise.reject(new Error("Session not found")) : Promise.resolve({ messages: [], start: 0, total: 0 }),
-        status: () => Promise.resolve({ sessionId: replacement.id, isStreaming: false, isCompacting: false, isBashRunning: false, pendingMessageCount: 0, queuedMessages: [], tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 }),
-        streamSnapshot: () => Promise.resolve({ seq: 0, partial: null }),
+        transcriptSnapshot: (session: Parameters<typeof defaultApi.transcriptSnapshot>[0]) => session.id === cached.id
+          ? Promise.reject(new Error("Session not found")) : Promise.resolve({
+            page: { messages: [], start: 0, total: 0 },
+            status: { sessionId: replacement.id, isStreaming: false, isCompacting: false, isBashRunning: false, pendingMessageCount: 0, queuedMessages: [], tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 },
+            seq: 0, partial: null,
+          }),
         thinkingLevels: () => Promise.resolve({ levels: [] }),
       })) throw new Error("Could not stub session boundaries");
     // Keep the real publication/ownership guard; isolate only destination loading
@@ -829,7 +866,7 @@ describe("PiWebApp plugin host", () => {
 
   it("does not focus a selection after a newer main-view navigation", async () => {
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&tool=core%3Aworkspace.terminal&view=workspace");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     setAppState(app, {
       ...initialAppState(),
       selectedProject: project,
@@ -870,7 +907,7 @@ describe("PiWebApp plugin host", () => {
     const previousWorkspace: Workspace = { id: "workspace-old", projectId: previousProject.id, path: "/old", label: "Old", isMain: true, effectiveConfig: {} };
     const nextWorkspace: Workspace = { id: "workspace-next", projectId: nextProject.id, path: "/next", label: "Next", isMain: true, effectiveConfig: {} };
     const browser = installBrowserWindow("http://localhost/app?project=project-old&workspace=workspace-old&view=chat");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     setAppState(app, {
       ...initialAppState(),
       projects: [previousProject, nextProject],
@@ -891,7 +928,6 @@ describe("PiWebApp plugin host", () => {
 
     await callAsyncAppMethod(app, "navigateRuntimeWorkspaceContribution", "local", nextWorkspace, {
       contributionId: TERMINAL_PANEL_ID,
-      navigationAliases: ["core:workspace.terminal"],
       query: { terminal: "terminal-next", start: undefined },
     }, {
       selection: { machineId: "local", projectId: previousProject.id, workspaceId: previousWorkspace.id, view: "chat" },
@@ -915,7 +951,7 @@ describe("PiWebApp plugin host", () => {
 
   it.each([false, true])("preserves newer navigation when runtime workspace recovery settles (superseded: %s)", async (superseded) => {
     const browser = installBrowserWindow("http://localhost/app?project=project-old&workspace=workspace-old&view=chat");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     const previousProject: Project = { id: "project-old", name: "Old project", path: "/old", createdAt: "now" };
     const nextProject: Project = { id: "project-next", name: "Next project", path: "/next", createdAt: "now" };
     const previousWorkspace: Workspace = { id: "workspace-old", projectId: previousProject.id, path: "/old", label: "Old", isMain: true, effectiveConfig: {} };
@@ -936,7 +972,6 @@ describe("PiWebApp plugin host", () => {
 
     const opening = callAsyncAppMethod(app, "navigateRuntimeWorkspaceContribution", "local", nextWorkspace, {
       contributionId: TERMINAL_PANEL_ID,
-      navigationAliases: ["core:workspace.terminal"],
       query: { terminal: "terminal-old", start: undefined },
     }, {
       selection: { machineId: "local", projectId: previousProject.id, workspaceId: previousWorkspace.id, view: "chat" },
@@ -968,7 +1003,7 @@ describe("PiWebApp plugin host", () => {
 
   it("keeps a newer contribution query when remembered machine navigation settles", async () => {
     const browser = installBrowserWindow("http://localhost/app?project=project-a&workspace=workspace-a&view=chat");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     const machineA: Machine = { id: "local", name: "Machine A", kind: "local", createdAt: "now", updatedAt: "now" };
     const machineB: Machine = { id: "remote-b", name: "Machine B", kind: "remote", createdAt: "now", updatedAt: "now" };
     const projectA: Project = { id: "project-a", name: "Project A", path: "/repo-a", createdAt: "now" };
@@ -1021,49 +1056,102 @@ describe("PiWebApp plugin host", () => {
     expect(browser.url.searchParams.get("browser-only.workspace.panel--file")).toBe("new.ts");
   });
 
-  it("restores the selection while plugins load and waits for them only to resolve a tool", async () => {
-    installBrowserWindow("http://localhost/app?project=missing-project&view=chat");
-    const app = new PiWebApp();
+  it.each([false, true])("loads session messages before plugins finish (tool route: %s)", async (withTool) => {
+    const session = runtimeRecoverySession(workspace);
+    const browser = installBrowserWindow(`http://localhost/app?project=${project.id}&workspace=${workspace.id}&session=${session.id}&view=chat${withTool ? "&tool=delayed%3Apanel" : ""}`);
+    const app = createDetachedApp();
     setAppState(app, { ...initialAppState(), projects: [project] });
-    let pluginLoads = 0;
-    let finishPlugins: (() => void) | undefined;
-    if (!Reflect.set(app, "loadPluginsForSelectedMachine", () => {
-      pluginLoads += 1;
-      return new Promise<void>((resolve) => { finishPlugins = resolve; });
-    })) {
-      throw new Error("Could not stub plugin loading");
-    }
-
-    await callAsyncAppMethod(app, "restoreRoute", false);
-    expect(pluginLoads).toBe(1);
-    expect(callAppMethod(app, "visibleBrowserErrorsForCurrentRoute", appState(app))).toEqual([
-      expect.objectContaining({ message: "Project not found: missing-project" }),
-    ]);
-
-    // A tool in the URL no longer delays resolving the selection itself.
-    installBrowserWindow("http://localhost/app?project=missing-project&view=workspace&tool=files");
-    await callAsyncAppMethod(app, "restoreRoute", false);
-    expect(pluginLoads).toBe(2);
-    expect(callAppMethod(app, "visibleBrowserErrorsForCurrentRoute", appState(app))).toEqual([
-      expect.objectContaining({ message: "Project not found: missing-project" }),
-    ]);
-
-    // Finalizing a restored tool route still waits for plugins before resolving the tool.
-    installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&view=workspace&tool=files");
-    setAppState(app, { ...appState(app), selectedProject: project, selectedWorkspace: workspace, workspaces: [workspace] });
+    const sessions = await installRuntimeRecoveryBoundaries(app, () => Promise.resolve([workspace]), session);
+    const sessionApi: unknown = Reflect.get(sessions, "api");
+    if (typeof sessionApi !== "object" || sessionApi === null) throw new Error("Missing session API");
+    const loadSnapshot: unknown = Reflect.get(sessionApi, "transcriptSnapshot");
+    if (typeof loadSnapshot !== "function") throw new Error("Missing transcript API");
+    const transcriptSnapshot = vi.fn((...args: unknown[]): unknown => Reflect.apply(loadSnapshot, sessionApi, args));
+    if (!Reflect.set(sessionApi, "transcriptSnapshot", transcriptSnapshot)) throw new Error("Could not observe transcript loading");
+    const pluginsReady = deferred<undefined>();
+    const loadPlugins = vi.fn(() => pluginsReady.promise);
+    if (!Reflect.set(app, "loadPluginsForSelectedMachine", loadPlugins)) throw new Error("Could not stub plugin loading");
     let settled = false;
     const restoring = callAsyncAppMethod(app, "restoreRoute", false).then(() => { settled = true; });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(pluginLoads).toBe(3);
-    expect(settled).toBe(false);
-    finishPlugins?.();
-    await restoring;
-    expect(settled).toBe(true);
+    try {
+      await vi.waitFor(() => { expect(transcriptSnapshot).toHaveBeenCalledOnce(); });
+      expect(appState(app).selectedSession?.id).toBe(session.id);
+      expect(loadPlugins).toHaveBeenCalledOnce();
+      if (withTool) {
+        expect(settled).toBe(false);
+        await appPluginRegistry(app).register({
+          id: "delayed",
+          plugin: {
+            apiVersion: 4,
+            name: "Delayed",
+            activate: () => ({ contributions: { workspacePanels: [{ id: "panel", title: "Delayed", render: () => html`<p>Ready</p>` }] } }),
+          },
+        });
+      } else {
+        await restoring;
+        expect(settled).toBe(true);
+      }
+      pluginsReady.resolve(undefined);
+      await restoring;
+      expect(settled).toBe(true);
+      if (withTool) expect(appState(app).workspaceTool).toBe("delayed:panel");
+      expect(browser.url.searchParams.get("session")).toBe(session.id);
+    } finally {
+      pluginsReady.resolve(undefined);
+      await restoring;
+      sessions.dispose();
+    }
+  });
+
+  it.each(["", "&project=missing-project"])("ignores an obsolete machine restore after navigating away and back (%s)", async (oldProjectQuery) => {
+    const localMachine: Machine = { id: "local", name: "Local", kind: "local", createdAt: "now", updatedAt: "now" };
+    const browser = installBrowserWindow(`http://localhost/app?machine=${remoteMachine.id}&view=chat${oldProjectQuery}`);
+    const app = createDetachedApp();
+    setAppState(app, { ...initialAppState(), machines: [localMachine, remoteMachine], selectedMachine: localMachine });
+    const session = runtimeRecoverySession(workspace);
+    const sessions = await installRuntimeRecoveryBoundaries(app, () => Promise.resolve([workspace]), session);
+    await markPluginLoadingReady(app, [remoteMachine.id]);
+    // Keep machine/project/selection orchestration real; suppress unrelated
+    // background sockets, health probes, and status polling.
+    for (const name of ["connectRealtime", "schedulePiWebStatusRefresh"]) {
+      if (!Reflect.set(app, name, () => undefined)) throw new Error(`Could not stub ${name}`);
+    }
+    const machines: unknown = Reflect.get(app, "machines");
+    if (typeof machines !== "object" || machines === null) throw new Error("Missing machine controller");
+    for (const name of ["refreshMachineHealth", "refreshMachineRuntime"]) {
+      if (!Reflect.set(machines, name, () => Promise.resolve())) throw new Error(`Could not stub ${name}`);
+    }
+    const oldProjects = deferred<Project[]>();
+    const loadProjects = vi.spyOn(defaultApi, "projects")
+      .mockReturnValueOnce(oldProjects.promise)
+      .mockResolvedValue([project]);
+    const oldRestore = callAsyncAppMethod(app, "restoreRoute", false);
+    try {
+      await vi.waitFor(() => { expect(loadProjects).toHaveBeenCalledTimes(1); });
+      browser.navigate("http://localhost/app?view=chat");
+      await callAsyncAppMethod(app, "restoreRoute", false);
+      browser.navigate(`http://localhost/app?machine=${remoteMachine.id}&project=${project.id}&workspace=${workspace.id}&session=${session.id}&view=chat`);
+      await callAsyncAppMethod(app, "restoreRoute", false);
+      expect(loadProjects).toHaveBeenCalledTimes(3);
+      expect(appState(app).selectedSession?.id).toBe(session.id);
+      const latestUrl = browser.url.href;
+      oldProjects.resolve([project]);
+      await oldRestore;
+      expect(appState(app).selectedProject?.id).toBe(project.id);
+      expect(appState(app).selectedWorkspace?.id).toBe(workspace.id);
+      expect(appState(app).selectedSession?.id).toBe(session.id);
+      expect(browser.url.href).toBe(latestUrl);
+      expect(callAppMethod(app, "visibleBrowserErrorsForCurrentRoute", appState(app))).toEqual([]);
+    } finally {
+      oldProjects.resolve([project]);
+      await oldRestore;
+      sessions.dispose();
+    }
   });
 
   it("preserves a missing project route while clearing its workspace surface", async () => {
     const browser = installBrowserWindow("http://localhost/app?project=missing-project&workspace=missing-workspace&view=chat&browser-only.workspace.panel--file=missing.ts");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     setAppState(app, {
       ...initialAppState(),
       projects: [project],
@@ -1090,7 +1178,7 @@ describe("PiWebApp plugin host", () => {
 
   it("preserves a missing session route while retaining its workspace", async () => {
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&session=deleted-session&view=chat");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     setAppState(app, {
       ...initialAppState(),
       projects: [project],
@@ -1130,7 +1218,7 @@ describe("PiWebApp plugin host", () => {
   ])("preserves the complete requested URL for %s", async (scenario, message) => {
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&session=requested-session&view=chat&files.workspace.files--file=keep.ts#anchor");
     const destination = browser.url.href;
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     setAppState(app, { ...initialAppState(), projects: [project] });
     await markPluginLoadingReady(app);
     const controller: unknown = Reflect.get(app, "workspaces");
@@ -1157,9 +1245,55 @@ describe("PiWebApp plugin host", () => {
     if (appState(app).selectedWorkspace === undefined) await expectWorkspaceContentError(app, message);
   });
 
+  it.each([
+    { source: "initial", archived: false },
+    { source: "initial", archived: true },
+    { source: "history", archived: false },
+    { source: "history", archived: true },
+    { source: "plugin", archived: false },
+    { source: "plugin", archived: true },
+  ])("reports a partial session ID as missing without selecting its full-ID match ($source, archived: $archived)", async ({ source, archived }) => {
+    const exact = { ...runtimeRecoverySession(workspace), id: "conversation-full", archived };
+    const baseUrl = "http://localhost/nested/pi/?project=project-1&workspace=workspace-1&view=chat&files.workspace.files--file=keep.ts";
+    const partialUrl = `${baseUrl}&session=conversation#anchor`;
+    const browser = installBrowserWindow(source === "initial" ? partialUrl : `${baseUrl}&session=${exact.id}#anchor`);
+    const app = createDetachedApp();
+    const sessions = await installRuntimeRecoveryBoundaries(app, () => Promise.resolve([workspace]), exact);
+    setAppState(app, source === "initial" ? { ...initialAppState(), projects: [project] } : {
+      ...initialAppState(), projects: [project], selectedProject: project, workspaces: [workspace], selectedWorkspace: workspace,
+      sessions: [exact], selectedSession: exact, messages: [{ role: "assistant", parts: [{ type: "text", text: "Old transcript" }] }],
+    });
+    const selectSession = vi.spyOn(sessions, "selectSession");
+
+    if (source === "plugin") {
+      await createPluginRuntimeContext(app).navigate({ sessionId: "conversation" }, { mode: "patch" });
+    } else {
+      if (source === "history") browser.navigate(partialUrl);
+      await callAsyncAppMethod(app, "restoreRoute", false);
+    }
+
+    expect(browser.url.searchParams.get("session")).toBe("conversation");
+    expect(browser.url.searchParams.get("files.workspace.files--file")).toBe("keep.ts");
+    expect(browser.url.pathname).toBe("/nested/pi/");
+    expect(browser.url.hash).toBe("#anchor");
+    expect(browser.replaced).toEqual([]);
+    expect(appState(app).selectedSession).toBeUndefined();
+    expect(appState(app).messages).toEqual([]);
+    expect(selectSession).not.toHaveBeenCalled();
+    expect(callAppMethod(app, "sessionEmptyMessage")).toBe("Session not found: conversation");
+    expect(callAppMethod(app, "visibleBrowserErrorsForCurrentRoute", appState(app))).toEqual([
+      expect.objectContaining({ message: "Session not found: conversation" }),
+    ]);
+
+    // A full ID still opens the intended active or archived conversation.
+    await createPluginRuntimeContext(app).navigate({ sessionId: exact.id }, { mode: "patch" });
+    expect(appState(app).selectedSession?.id).toBe(exact.id);
+    expect(selectSession).toHaveBeenCalledOnce();
+  });
+
   it("does not reuse retained notifications after leaving a missing session or requesting a different destination", async () => {
     installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&session=missing-session&view=chat");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     setAppState(app, { ...initialAppState(), projects: [project] });
     await markPluginLoadingReady(app);
     const controller: unknown = Reflect.get(app, "workspaces");
@@ -1197,7 +1331,7 @@ describe("PiWebApp plugin host", () => {
   it.each(["missing machine", "machine load failure", "project load failure"])("preserves the bootstrap destination for %s", async (scenario) => {
     const browser = installBrowserWindow(`http://localhost/app?${scenario === "project load failure" ? "" : "machine=removed-machine&"}project=project-1&workspace=workspace-1&session=requested-session&view=chat&files.workspace.files--file=keep.ts#anchor`);
     const destination = browser.url.href;
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     await markPluginLoadingReady(app);
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
       const url = input instanceof Request ? input.url : String(input);
@@ -1227,7 +1361,7 @@ describe("PiWebApp plugin host", () => {
 
   it("keeps an unavailable machine route explicit instead of resolving it locally", async () => {
     const browser = installBrowserWindow("http://localhost/app?machine=removed-machine&project=project-1&workspace=workspace-1&view=chat");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     setAppState(app, {
       ...initialAppState(),
       machines: [{ id: "local", name: "Local", kind: "local", createdAt: "now", updatedAt: "now" }],
@@ -1292,7 +1426,7 @@ describe("PiWebApp plugin host", () => {
   ] as const)("fences pending $phase loading (new selection: $cancelSelection)", async ({ phase, cancelSelection }) => {
     const session: SessionInfo = { id: "session-1", cwd: workspace.path, path: "/repo/session-1", created: "now", modified: "now", messageCount: 0, firstMessage: "" };
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&session=session-1&view=chat");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     await installTestTerminalComposition(app, "local");
     setAppState(app, { ...initialAppState(), projects: [project], workspaceTool: TERMINAL_PANEL_ID, mainView: "chat" });
     await markPluginLoadingReady(app);
@@ -1324,9 +1458,10 @@ describe("PiWebApp plugin host", () => {
     if (!Reflect.set(sessions, "socket", socket)
       || !Reflect.set(sessions, "notifications", undefined)
       || !Reflect.set(sessions, "api", {
-        messages: async () => { await waitAt("refresh"); return { messages: [], start: 0, total: 0 }; },
-        status: () => Promise.resolve(status),
-        streamSnapshot: () => Promise.resolve({ seq: 0, partial: null }),
+        transcriptSnapshot: async () => {
+          await waitAt("refresh");
+          return { page: { messages: [], start: 0, total: 0 }, status, seq: 0, partial: null };
+        },
         thinkingLevels: () => Promise.resolve({ levels: [] }),
       })) throw new Error("Could not stub session boundaries");
     const restoring = callAsyncAppMethod(app, "restoreRouteFor", {
@@ -1366,7 +1501,9 @@ describe("PiWebApp plugin host", () => {
     expect(appState(app).selectedSession?.id).toBe(session.id);
     expect(appState(app).mainView).toBe("workspace");
     expect(browser.url.href).toBe(destination);
-    expect(setHandler).toHaveBeenCalledOnce();
+    // The shared join keeps its original socket handler rather than swapping
+    // handlers after the fetch; buffered and subsequent events still reach it.
+    expect(handler).toBeTypeOf("function");
     sessions.flushPendingUpdates();
     expect(appState(app).status?.cost).toBe(phase === "refresh" ? 2 : 0);
     const liveEvent: SessionUiEvent = { type: "status.update", status: { ...status, cost: 1 } };
@@ -1376,13 +1513,97 @@ describe("PiWebApp plugin host", () => {
     sessions.dispose();
   });
 
+  it.each([
+    { transition: "clear", initialId: "conversation-full", nextId: null, needsNewJoin: true, delayedRestore: false, validDestination: true },
+    { transition: "set explicit ID", initialId: undefined, nextId: "conversation-full", needsNewJoin: true, delayedRestore: false, validDestination: true },
+    { transition: "surface only", initialId: "conversation-full", nextId: "conversation-full", needsNewJoin: false, delayedRestore: false, validDestination: true },
+    { transition: "clear before restoration starts", initialId: "conversation-full", nextId: null, needsNewJoin: true, delayedRestore: true, validDestination: true },
+    { transition: "reject partial ID", initialId: "conversation-full", nextId: "conversation", needsNewJoin: false, delayedRestore: false, validDestination: false },
+  ])("resolves a $transition URL patch during chat loading", async ({ initialId, nextId, needsNewJoin, delayedRestore, validDestination }) => {
+    const browser = installBrowserWindow(`http://localhost/app?project=project-1&workspace=workspace-1${initialId === undefined ? "" : `&session=${initialId}`}&view=chat`);
+    const app = createDetachedApp();
+    const session: SessionInfo = { ...runtimeRecoverySession(workspace), id: "conversation-full" };
+    const sessions = await installRuntimeRecoveryBoundaries(app, () => Promise.resolve([workspace]), session);
+    setAppState(app, { ...initialAppState(), projects: [project] });
+    const workspaces: unknown = Reflect.get(app, "workspaces");
+    if (!(workspaces instanceof WorkspaceController)) throw new Error("Workspace controller unavailable");
+    const selectWorkspace = vi.spyOn(workspaces, "selectWorkspace");
+    const firstSnapshot = deferred<Awaited<ReturnType<typeof defaultApi.transcriptSnapshot>>>();
+    const status = { sessionId: session.id, isStreaming: false, isCompacting: false, isBashRunning: false,
+      pendingMessageCount: 0, queuedMessages: [], tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 };
+    const snapshot = (text: string, seq: number): Awaited<ReturnType<typeof defaultApi.transcriptSnapshot>> => ({
+      page: { messages: [{ role: "assistant", content: [{ type: "text", text }] }], start: 0, total: 1 },
+      status, seq, partial: null,
+    });
+    const transcriptSnapshot = vi.fn<typeof defaultApi.transcriptSnapshot>()
+      .mockReturnValueOnce(firstSnapshot.promise)
+      .mockResolvedValue(snapshot("Replacement transcript", 2));
+    const api: unknown = Reflect.get(sessions, "api");
+    if (typeof api !== "object" || api === null) throw new Error("Session API unavailable");
+    Reflect.set(api, "transcriptSnapshot", transcriptSnapshot);
+    let handler: ((event: SessionUiEvent) => void) | undefined;
+    const connect = vi.fn<SessionEventSocket["connect"]>((_session, onEvent) => { handler = onEvent; });
+    const close = vi.fn(() => { handler = undefined; });
+    const socket: SessionEventSocket = { connect, close, setHandler: (onEvent) => { handler = onEvent; } };
+    Reflect.set(sessions, "socket", socket);
+    const restoring = callAsyncAppMethod(app, "restoreRoute", false);
+    await vi.waitFor(() => { expect(transcriptSnapshot).toHaveBeenCalledOnce(); });
+    expect(appState(app).selectedSession?.id).toBe(session.id);
+
+    if (delayedRestore) {
+      // A browser destination can retire the load before its restoration starts.
+      // The selected row must still be marked non-reusable after that load exits.
+      const destination = new URL(browser.url);
+      destination.searchParams.delete("session");
+      destination.searchParams.set("view", "workspace");
+      browser.navigate(destination.href);
+      firstSnapshot.resolve(snapshot("Initial transcript", 1));
+      await restoring;
+      await callAsyncAppMethod(app, "restoreRoute", false);
+    } else {
+      const patching = createPluginRuntimeContext(app).navigate({ sessionId: nextId, view: "workspace" }, { mode: "patch" });
+      // Both joins, if needed, share the pending read's refresh coordinator. Release
+      // the old response before awaiting navigation; a fresh read must replace it.
+      firstSnapshot.resolve(snapshot("Initial transcript", 1));
+      await Promise.all([restoring, patching]);
+      expect(selectWorkspace).toHaveBeenCalledTimes(validDestination ? 1 : 2);
+    }
+
+    expect(browser.url.searchParams.get("session")).toBe(nextId);
+    if (!validDestination) {
+      expect(appState(app).selectedSession).toBeUndefined();
+      expect(appState(app).messages).toEqual([]);
+      expect(callAppMethod(app, "sessionEmptyMessage")).toBe(`Session not found: ${String(nextId)}`);
+      expect(transcriptSnapshot).toHaveBeenCalledOnce();
+      expect(connect).toHaveBeenCalledOnce();
+      expect(handler).toBeUndefined();
+      return;
+    }
+    expect(appState(app).selectedSession?.id).toBe(session.id);
+    expect(appState(app).messages).toMatchObject([{ role: "assistant", parts: [{ type: "text", text: needsNewJoin ? "Replacement transcript" : "Initial transcript" }] }]);
+    expect(transcriptSnapshot).toHaveBeenCalledTimes(needsNewJoin ? 2 : 1);
+    expect(connect).toHaveBeenCalledTimes(needsNewJoin ? 2 : 1);
+    expect(handler).toBeTypeOf("function");
+    // A retired join must not close the replacement connection when it settles.
+    const closesAfterNavigation = close.mock.calls.length;
+    handler?.({ type: "status.update", seq: 3, status: { ...status, cost: 3 } });
+    sessions.flushPendingUpdates();
+    expect(appState(app).status?.cost).toBe(3);
+    expect(close).toHaveBeenCalledTimes(closesAfterNavigation);
+
+    // Once loaded, explicitly naming the same conversation can reuse its join.
+    await createPluginRuntimeContext(app).navigate({ sessionId: session.id }, { mode: "patch" });
+    expect(transcriptSnapshot).toHaveBeenCalledTimes(needsNewJoin ? 2 : 1);
+    expect(connect).toHaveBeenCalledTimes(needsNewJoin ? 2 : 1);
+  });
+
   it("does not let an older route restore apply its workspace response after a newer route request", async () => {
     const firstProject: Project = { id: "project-first", name: "First", path: "/first", createdAt: "now" };
     const secondProject: Project = { id: "project-second", name: "Second", path: "/second", createdAt: "now" };
     const firstWorkspace: Workspace = { id: "workspace-first", projectId: firstProject.id, path: "/first", label: "First", isMain: true, effectiveConfig: {} };
     const secondWorkspace: Workspace = { id: "workspace-second", projectId: secondProject.id, path: "/second", label: "Second", isMain: true, effectiveConfig: {} };
     const browser = installBrowserWindow(`http://localhost/app?project=${firstProject.id}&workspace=${firstWorkspace.id}&view=chat`);
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     setAppState(app, {
       ...initialAppState(),
       projects: [firstProject, secondProject],
@@ -1435,7 +1656,7 @@ describe("PiWebApp plugin host", () => {
     const project: Project = { id: "project", name: "Project", path: "/repo", createdAt: "now" };
     const workspace: Workspace = { id: "workspace", projectId: project.id, path: "/repo", label: "Current", isMain: true, effectiveConfig: {} };
     const browser = installBrowserWindow(`http://localhost/app?project=${project.id}&workspace=${workspace.id}&session=missing&view=chat`);
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     setAppState(app, { ...initialAppState(), projects: [project] });
     await markPluginLoadingReady(app);
     if (!Reflect.set(app, "refreshWorkspaceDeletionRuns", () => Promise.resolve())) throw new Error("Could not stub workspace deletion refresh");
@@ -1478,7 +1699,7 @@ describe("PiWebApp plugin host", () => {
     const secondProject: Project = { id: "project-second", name: "Second", path: "/second", createdAt: "now" };
     const localMachine: Machine = { id: "local", name: "Local", kind: "local", createdAt: "now", updatedAt: "now" };
     const browser = installBrowserWindow(`http://localhost/app?project=${firstProject.id}&workspace=workspace-first&view=chat`);
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     setAppState(app, { ...initialAppState(), machines: [localMachine], selectedMachine: localMachine });
 
     const machines: unknown = Reflect.get(app, "machines");
@@ -1524,7 +1745,7 @@ describe("PiWebApp plugin host", () => {
   it("keeps a newer terminal query when route restore finishes after session reconciliation", async () => {
     const restoredSession: SessionInfo = { id: "session-1", cwd: workspace.path, path: "/repo/.sessions/session-1", created: "now", modified: "now", messageCount: 0, firstMessage: "" };
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&session=session-1&view=chat&pi-web.terminal.workspace.terminal--terminal=terminal-old");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     setAppState(app, {
       ...initialAppState(),
       projects: [project],
@@ -1575,7 +1796,7 @@ describe("PiWebApp plugin host", () => {
 
   it("invalidates only the URL fields in a navigation freshness scope", () => {
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&view=chat");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     const selectionOperation = beginNavigationOperation(app, ["project", "workspace", "session"]);
     expect(selectionOperation.isCurrent()).toBe(true);
 
@@ -1588,7 +1809,7 @@ describe("PiWebApp plugin host", () => {
 
   it("retires an in-flight route restore when a synchronous view action publishes a newer destination", () => {
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&tool=core%3Aworkspace.terminal&view=workspace");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     setAppState(app, {
       ...initialAppState(),
       selectedProject: project,
@@ -1607,7 +1828,7 @@ describe("PiWebApp plugin host", () => {
 
   it.each([false, true])("replaces the selected creation without losing its surface (return via Back: %s)", async (returnViaBack) => {
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&view=chat");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     const session = runtimeRecoverySession(workspace);
     setAppState(app, { ...initialAppState(), projects: [project], selectedProject: project, selectedWorkspace: workspace, workspaces: [workspace], mainView: "chat" });
     const sessions = await installRuntimeRecoveryBoundaries(app, () => Promise.resolve([workspace]), session);
@@ -1659,7 +1880,7 @@ describe("PiWebApp plugin host", () => {
     const url = new URL("http://localhost/app?project=project-1&workspace=workspace-1");
     for (const [key, value] of new URLSearchParams(selection)) url.searchParams.set(key, value);
     const browser = installBrowserWindow(url.href);
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     const before = browser.url.href;
     const result = await callAppMethod(app, "commitAndRestoreNavigation", {
       machineId: "local", projectId: project.id, workspaceId: workspace.id, sessionId: "completed", surface: {},
@@ -1672,7 +1893,7 @@ describe("PiWebApp plugin host", () => {
 
   it("preserves an unresolved creation link without starting or joining a session", async () => {
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&session=creating:expired&view=chat");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     setAppState(app, { ...initialAppState(), projects: [project] });
     const sessions = await installRuntimeRecoveryBoundaries(app, () => Promise.resolve([workspace]), runtimeRecoverySession(workspace));
     const select = vi.spyOn(sessions, "selectSession");
@@ -1687,9 +1908,195 @@ describe("PiWebApp plugin host", () => {
     expect(select).not.toHaveBeenCalled();
   });
 
-  it.each([null, [], "project", { projectId: 12 }, { machineId: null }, { workspaceId: false }, { sessionId: {} }, { tool: 1 }, { view: "plugin:panel" }])("rejects malformed plugin destinations without navigation or UI: %j", async (destination) => {
+  it("supplies detached unselected row contexts through the navigation panel and preserves their machine target", async () => {
+    installBrowserWindow("http://localhost/app?machine=remote-1&project=project-1&workspace=workspace-1");
+    const app = createDetachedApp();
+    await markPluginLoadingReady(app, [remoteMachine.id]);
+    const row = { ...runtimeRecoverySession(workspace), id: "workflow-row", metadata: { workflow: { leg: 2 } } };
+    setAppState(app, { ...initialAppState(), selectedMachine: remoteMachine, selectedProject: project, selectedWorkspace: workspace,
+      selectedSession: { ...row, id: "selected-other" }, sessions: [row] });
+    const contexts: SessionLabelContext[] = [];
+    await appPluginRegistry(app).register({ id: "workflow", plugin: adaptPublicPlugin({ apiVersion: 4, name: "Workflow", activate: () => ({ contributions: {
+      sessionLabels: [{ id: "membership", items: (context) => {
+        contexts.push(context);
+        const leg = context.session.metadata?.["workflow"]?.["leg"];
+        return [{ type: "text", text: typeof leg === "number" ? `Leg ${String(leg)}` : "Unknown leg" }];
+      } }],
+    } }) }) });
+    const host = document.createElement("div");
+    document.body.append(host);
+    render(callAppMethod(app, "renderNavigationPanel"), host);
+    const panel = host.querySelector("app-navigation-panel");
+    if (!(panel instanceof AppNavigationPanel)) throw new Error("Navigation panel not rendered");
+    panel.sessionsCollapsed = false;
+    await panel.updateComplete;
+    const list = panel.shadowRoot?.querySelector("session-list");
+    if (!(list instanceof SessionList)) throw new Error("Session list not rendered");
+    await list.updateComplete;
+    expect(list.shadowRoot?.querySelector(".session-labels")?.textContent).toContain("Leg 2");
+    const context = contexts.at(-1);
+    if (context === undefined) throw new Error("Row callback not invoked");
+    expect(context.session).toEqual({ id: row.id, cwd: row.cwd, metadata: row.metadata, archived: false, pending: false });
+    expect(context.state.selectedSession?.id).toBe("selected-other");
+    expect(context.state).not.toHaveProperty("sessions");
+    expect(context.session).not.toHaveProperty("path");
+    expect(context.session).not.toHaveProperty("firstMessage");
+    expect(context.session.metadata).not.toBe(row.metadata);
+    Reflect.set(context.session.metadata?.["workflow"] ?? {}, "leg", 99);
+    expect(row.metadata.workflow.leg).toBe(2);
+    expect(context.projects?.machineId).toBe(remoteMachine.id);
+
+    const navigate = vi.fn(() => Promise.resolve());
+    Reflect.set(app, "navigate", navigate);
+    setAppState(app, initialAppState());
+    await context.navigate({ projectId: workspace.projectId, workspaceId: workspace.id, tool: "workflow:panel", query: { item: "exact" } }, { mode: "patch" });
+    expect(navigate).toHaveBeenCalledWith({ projectId: workspace.projectId, workspaceId: workspace.id,
+      tool: "workflow:panel", query: { item: "exact" } }, { mode: "patch" }, remoteMachine.id);
+    render(null, host);
+  });
+
+  it.each([
+    { machineId: "local", archived: false, omitSession: false },
+    { machineId: remoteMachine.id, archived: false, omitSession: false },
+    { machineId: "local", archived: true, omitSession: false },
+    { machineId: "local", archived: false, omitSession: true },
+  ])("opens a Relay label without resetting the current chat ($machineId, archived: $archived, omitted: $omitSession)", async ({ machineId, archived, omitSession }) => {
+    const selected = { ...runtimeRecoverySession(workspace), id: "conversation-12345", archived };
+    const sessionRoute = omitSession ? undefined : selected.id;
+    const params = new URLSearchParams({ project: project.id, workspace: workspace.id,
+      view: "chat", "files.workspace.files--file": "keep.ts" });
+    if (sessionRoute !== undefined) params.set("session", sessionRoute);
+    if (machineId !== "local") params.set("machine", machineId);
+    const browser = installBrowserWindow(`http://localhost/nested/pi/?${params}#anchor`);
+    const app = createDetachedApp();
+    const sessions = await installRuntimeRecoveryBoundaries(app, () => Promise.resolve([workspace]), selected);
+    if (machineId !== "local") await markPluginLoadingReady(app, [machineId]);
+    const selectedMachine = machineId === "local" ? undefined : remoteMachine;
+    const row: SessionInfo = { ...selected, id: "relay-row", archived: false, metadata: {
+      "@jmfederico/pi-relay": { version: 1, packetPath: "custom packets/workflow & notes", relayName: "workflow & notes", leg: "2" },
+    } };
+    const messages: ReturnType<typeof initialAppState>["messages"] = [{ role: "assistant", parts: [{ type: "text", text: "Keep this transcript" }] }];
+    setAppState(app, { ...initialAppState(), selectedMachine, projects: [project], selectedProject: project,
+      workspaces: [workspace], selectedWorkspace: workspace, sessions: [selected, row], selectedSession: selected,
+      messages, mainView: "chat", workspaceTool: TERMINAL_PANEL_ID });
+    // Match the external loader's public-to-internal callback boundary; the adapter
+    // supplies detached public state before invoking the real package contribution.
+    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
+    await appPluginRegistry(app).register({ id: "relay", plugin: adaptPublicPlugin(relayPlugin as unknown as PiWebPlugin) });
+    const clearSession = vi.spyOn(sessions, "clearActiveSession");
+    const selectSession = vi.spyOn(sessions, "selectSession");
+    const workspaces: unknown = Reflect.get(app, "workspaces");
+    if (!(workspaces instanceof WorkspaceController)) throw new Error("Workspace controller unavailable");
+    const selectWorkspace = vi.spyOn(workspaces, "selectWorkspace");
+    const host = document.createElement("div");
+    document.body.append(host);
+    render(callAppMethod(app, "renderNavigationPanel"), host);
+    const navigation = host.querySelector("app-navigation-panel");
+    if (!(navigation instanceof AppNavigationPanel)) throw new Error("Navigation panel missing");
+    navigation.sessionsCollapsed = false;
+    await navigation.updateComplete;
+    const list = navigation.shadowRoot?.querySelector("session-list");
+    if (!(list instanceof SessionList)) throw new Error("Session list missing");
+    await list.updateComplete;
+    const button = list.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Open Relay workflow & notes, leg 2"]');
+    expect(button).not.toBeNull();
+    button?.click();
+    await vi.waitFor(() => { expect(appState(app).workspaceTool).toBe("relay:workspace.relays"); });
+
+    expect(appState(app).selectedSession).toBe(selected);
+    expect(appState(app).messages).toBe(messages);
+    expect(clearSession).not.toHaveBeenCalled();
+    expect(selectSession).not.toHaveBeenCalled();
+    expect(selectWorkspace).not.toHaveBeenCalled();
+    expect(browser.url.pathname).toBe("/nested/pi/");
+    expect(browser.url.hash).toBe("#anchor");
+    expect(browser.url.searchParams.get("session")).toBe(sessionRoute ?? null);
+    expect(browser.url.searchParams.get("files.workspace.files--file")).toBe("keep.ts");
+    expect(browser.url.searchParams.get("relay.workspace.relays--relay")).toBe("custom packets/workflow & notes");
+    expect(browser.url.searchParams.get("view")).toBe("workspace");
+    expect(browser.pushed).toHaveLength(1);
+    expect(browser.replaced).toEqual([]);
+    expect(historyUrl(browser.pushed, 0).searchParams.get("relay.workspace.relays--relay")).toBe("custom packets/workflow & notes");
+    render(null, host);
+  });
+
+  it.each([
+    { kind: "action", toolRoute: "workflow:panel" },
+    { kind: "panel", toolRoute: "workflow:panel" },
+    { kind: "application", toolRoute: "workflow:panel" },
+  ])("patches a query from a $kind context with independent history replacement (tool: $toolRoute)", async ({ kind, toolRoute }) => {
+    const browser = installBrowserWindow(`http://localhost/app?project=project-1&workspace=workspace-1&session=session-next&tool=${encodeURIComponent(toolRoute)}&view=workspace&workflow.panel--item=old&legacy.panel--item=stale&files.workspace.files--file=keep.ts`);
+    const app = createDetachedApp();
+    const session = runtimeRecoverySession(workspace);
+    const sessions = await installRuntimeRecoveryBoundaries(app, () => Promise.resolve([workspace]), session);
+    await appPluginRegistry(app).register({ id: "workflow", plugin: { apiVersion: 4, name: "Workflow", activate: () => ({ contributions: {
+      workspacePanels: [{ id: "panel", title: "Workflow", render: () => html`Workflow` }],
+    } }) } });
+    setAppState(app, { ...initialAppState(), projects: [project], selectedProject: project, workspaces: [workspace],
+      selectedWorkspace: workspace, sessions: [session], selectedSession: session, workspaceTool: "workflow:panel", mainView: "workspace" });
+    const selectSession = vi.spyOn(sessions, "selectSession");
+    let navigate = createPluginRuntimeContext(app).navigate;
+    if (kind === "panel") navigate = workspacePanelContextFromApp(app).navigate;
+    if (kind === "application") {
+      const context: unknown = callAppMethod(app, "createApplicationPanelContext");
+      if (typeof context !== "object" || context === null || !("navigate" in context) || typeof context.navigate !== "function") {
+        throw new Error("Application context unavailable");
+      }
+      const callback = context.navigate;
+      navigate = async (destination, options) => { await Reflect.apply(callback, context, [destination, options]); };
+    }
+    await navigate({ query: { item: "new" } }, { mode: "patch", history: "replace" });
+    expect(browser.pushed).toEqual([]);
+    expect(browser.replaced).toHaveLength(1);
+    expect(browser.url.searchParams.get("tool")).toBe(toolRoute);
+    expect(browser.url.searchParams.get("workflow.panel--item")).toBe("new");
+    expect(browser.url.searchParams.get("legacy.panel--item")).toBe("stale");
+    expect(browser.url.searchParams.get("files.workspace.files--file")).toBe("keep.ts");
+    expect(selectSession).not.toHaveBeenCalled();
+
+    await navigate({ query: { item: "newer" } }, { mode: "patch" });
+    expect(browser.pushed).toHaveLength(1);
+    expect(historyUrl(browser.pushed, 0).searchParams.get("workflow.panel--item")).toBe("newer");
+    window.history.back();
+    await vi.waitFor(() => { expect(browser.url.searchParams.get("workflow.panel--item")).toBe("new"); });
+    await callAsyncAppMethod(app, "restoreRoute", false);
+    expect(appState(app).selectedSession).toBe(session);
+    expect(selectSession).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("patches a session destination without relisting unchanged ancestors (another workspace: %s)", async (otherWorkspace) => {
+    const previous = { ...runtimeRecoverySession(workspace), id: "previous-session" };
+    const targetWorkspace = otherWorkspace ? { ...workspace, id: "workspace-2", path: "/repo/tree" } : workspace;
+    const next = runtimeRecoverySession(targetWorkspace);
+    const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&session=previous-session&view=chat&files.workspace.files--file=keep.ts");
+    const app = createDetachedApp();
+    const sessions = await installRuntimeRecoveryBoundaries(app, () => Promise.resolve([workspace, targetWorkspace]), next);
+    setAppState(app, { ...initialAppState(), projects: [project], selectedProject: project, workspaces: [workspace, targetWorkspace],
+      selectedWorkspace: workspace, sessions: otherWorkspace ? [previous] : [previous, next], selectedSession: previous });
+    const selectSession = vi.spyOn(sessions, "selectSession");
+    await createPluginRuntimeContext(app).navigate({ sessionId: next.id, ...(otherWorkspace ? { workspaceId: targetWorkspace.id } : {}) }, { mode: "patch" });
+    expect(browser.url.searchParams.get("project")).toBe(project.id);
+    expect(browser.url.searchParams.get("workspace")).toBe(targetWorkspace.id);
+    expect(browser.url.searchParams.get("session")).toBe(next.id);
+    expect(browser.url.searchParams.get("files.workspace.files--file")).toBe(otherWorkspace ? null : "keep.ts");
+    expect(appState(app).selectedSession?.id).toBe(next.id);
+    expect(appState(app).selectedWorkspace?.id).toBe(targetWorkspace.id);
+    expect(selectSession).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    null, [], "project", { projectId: 12 }, { machineId: null }, { workspaceId: false }, { sessionId: {} }, { tool: 1 }, { view: "plugin:panel" },
+    { query: null }, { query: [] }, { query: "raw query" }, { query: {} },
+    { tool: "example:panel", query: {} },
+    { tool: "example:panel", projectId: project.id, query: {} },
+    { tool: "example:panel", workspaceId: workspace.id, query: {} },
+    { tool: "malformed", projectId: project.id, workspaceId: workspace.id, query: {} },
+    { tool: "example:panel", projectId: project.id, workspaceId: workspace.id, query: { "Bad key": "value" } },
+    { tool: "example:panel", projectId: project.id, workspaceId: workspace.id, query: { item: {} } },
+    { tool: "example:panel", projectId: project.id, workspaceId: workspace.id, query: { item: "x".repeat(4097) } },
+  ])("rejects malformed plugin destinations without navigation or UI: %j", async (destination) => {
     const browser = installBrowserWindow("http://localhost/app?project=before");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     const before = appState(app);
     await expect(Reflect.apply(createPluginRuntimeContext(app).navigate, undefined, [destination])).rejects.toBeInstanceOf(TypeError);
     expect(appState(app)).toBe(before);
@@ -1697,9 +2104,90 @@ describe("PiWebApp plugin host", () => {
     expect(browser.replaced).toEqual([]);
   });
 
+  describe("scoped plugin navigation validation", () => {
+    async function captureNavigate(app: PiWebApp, kind: "label" | "message" | "displayed-message"): Promise<PluginRuntimeContext["navigate"]> {
+      setVerifiedPluginMode(app, remoteMachine.id, "recovery-disabled");
+      const session = runtimeRecoverySession(workspace);
+      setAppState(app, { ...initialAppState(), selectedMachine: remoteMachine, selectedProject: project, selectedWorkspace: workspace,
+        selectedSession: session, messages: [{ role: "user", entryId: "entry-1", parts: [{ type: "text", text: "Hello" }] }] });
+      let navigate: PluginRuntimeContext["navigate"] | undefined;
+      await appPluginRegistry(app).register({ id: "scoped-navigation", plugin: adaptPublicPlugin({ apiVersion: 4, name: "Scoped navigation", activate: () => ({ contributions: {
+        sessionLabels: [{ id: "label", items: (context) => { navigate = context.navigate; return []; } }],
+        messageActions: [
+          { id: "entry", title: "Entry navigation", run: (context) => { navigate = context.navigate; } },
+          { target: "display", id: "display", title: "Display navigation", run: (context) => { navigate = context.navigate; } },
+        ],
+      } }) }) });
+      if (kind === "label") {
+        callAppMethod(app, "sessionLabelItems", session);
+      } else {
+        await callAsyncAppMethod(app, kind === "message" ? "handleMessageAction" : "handleDisplayedMessageAction", {
+          machine: remoteMachine, session, message: { entryId: "entry-1", role: "user", text: "Hello" },
+        }, kind === "message" ? "scoped-navigation:entry" : "scoped-navigation:display");
+      }
+      if (navigate === undefined) throw new Error(`Missing ${kind} navigation callback`);
+      return navigate;
+    }
+
+    it.each(["label", "message", "displayed-message"] as const)("rejects raw malformed %s destinations/options with a promise and no effects", async (kind) => {
+      const browser = installBrowserWindow("http://localhost/nested/pi/?machine=remote-1&project=project-1&workspace=workspace-1&session=session-next&view=chat&files.workspace.files--file=keep.ts#anchor");
+      const app = createDetachedApp();
+      const navigate = await captureNavigate(app, kind);
+      const before = appState(app);
+      const beforeUrl = browser.url.href;
+      const invalidValues: unknown[] = [null, [], ["project"], "project", "", 42, false, 42n, Symbol("invalid")];
+      const malformedInputs = [
+        ...[undefined, ...invalidValues].flatMap((destination) => [
+          { destination, options: undefined }, { destination, options: { mode: "patch" } },
+        ]),
+        ...invalidValues.map((options) => ({ destination: {}, options })),
+      ];
+      for (const { destination, options } of malformedInputs) {
+        // Direct invocation also catches synchronous throws before a promise is returned.
+        const result: unknown = Reflect.apply(navigate, undefined, [destination, options]);
+        expect(result).toBeInstanceOf(Promise);
+        await expect(result).rejects.toBeInstanceOf(TypeError);
+        expect(appState(app)).toBe(before);
+        expect(browser.url.href).toBe(beforeUrl);
+        expect(browser.pushed).toEqual([]);
+        expect(browser.replaced).toEqual([]);
+      }
+    });
+
+    it.each(["label", "message", "displayed-message"] as const)("preserves captured %s machine defaults and explicit patch null after selection changes", async (kind) => {
+      const originalUrl = "http://localhost/nested/pi/?machine=remote-1&project=project-1&workspace=workspace-1&session=session-next&view=chat&files.workspace.files--file=keep.ts#anchor";
+      const browser = installBrowserWindow(originalUrl);
+      const app = createDetachedApp();
+      const navigate = await captureNavigate(app, kind);
+      setAppState(app, initialAppState());
+      // This boundary owns publication, not the independent route-loading pipeline.
+      Reflect.set(app, "restoreCommittedNavigation", () => Promise.resolve(false));
+
+      await navigate({ view: "workspace" }, { mode: "patch" });
+      expect(Object.fromEntries(browser.url.searchParams)).toEqual({ machine: remoteMachine.id, project: project.id, workspace: workspace.id,
+        session: "session-next", view: "workspace", "files.workspace.files--file": "keep.ts" });
+
+      browser.navigate(originalUrl.replace("machine=remote-1&", ""));
+      await navigate({}, { mode: "patch" });
+      expect(Object.fromEntries(browser.url.searchParams)).toEqual({ machine: remoteMachine.id, view: "chat" });
+
+      browser.navigate(originalUrl);
+      await navigate({ machineId: null }, { mode: "patch" });
+      expect(Object.fromEntries(browser.url.searchParams)).toEqual({ view: "chat" });
+
+      browser.navigate(originalUrl);
+      await navigate({ projectId: project.id });
+      expect(Object.fromEntries(browser.url.searchParams)).toEqual({ machine: remoteMachine.id, project: project.id });
+      expect(browser.url.pathname).toBe("/nested/pi/");
+      expect(browser.url.hash).toBe("#anchor");
+      expect(browser.pushed).toHaveLength(4);
+      expect(browser.replaced).toEqual([]);
+    });
+  });
+
   it.each(["action", "panel"])("publishes a complete plugin destination from a %s context and accepts supersession", async (kind) => {
     const browser = installBrowserWindow("http://localhost/app?machine=remote&project=old&workspace=old&session=old&tool=old%3Apanel&view=workspace&old.panel--key=value");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     setAppState(app, { ...initialAppState(), selectedMachine: { id: "remote", name: "Remote", kind: "remote", createdAt: "now", updatedAt: "now" }, selectedWorkspace: workspace });
     // Isolate destination publication from restoration; false is the pipeline's superseded outcome.
     const restored = deferredValue<boolean>();
@@ -1717,9 +2205,53 @@ describe("PiWebApp plugin host", () => {
     expect(Object.values(appState(app).browserErrors)).toEqual([]);
   });
 
+  it("publishes an exact tool query as part of a complete destination under nested paths", async () => {
+    const browser = installBrowserWindow("http://localhost/nested/pi/?project=old&workspace=old&tool=old%3Apanel&old.panel--item=previous&unrelated=value#anchor");
+    const app = createDetachedApp();
+    Reflect.set(app, "restoreCommittedNavigation", () => Promise.resolve(false));
+    await createPluginRuntimeContext(app).navigate({ machineId: remoteMachine.id, projectId: project.id, workspaceId: workspace.id,
+      tool: "workflow:panel", view: "workspace", query: { item: "exact / packet & name", legs: [2, 3], archived: false } });
+    expect(browser.url.pathname).toBe("/nested/pi/");
+    expect(browser.url.hash).toBe("#anchor");
+    expect(browser.url.searchParams.get("unrelated")).toBe("value");
+    expect(browser.url.searchParams.has("old.panel--item")).toBe(false);
+    expect(browser.url.searchParams.get("machine")).toBe(remoteMachine.id);
+    expect(browser.url.searchParams.get("tool")).toBe("workflow:panel");
+    expect(browser.url.searchParams.get("workflow.panel--item")).toBe("exact / packet & name");
+    expect(browser.url.searchParams.getAll("workflow.panel--legs")).toEqual(["2", "3"]);
+    expect(browser.url.searchParams.get("workflow.panel--archived")).toBe("false");
+    expect(browser.pushed).toHaveLength(1);
+    expect(machineNavigationSnapshot(app, remoteMachine.id)?.surface.contributionQuery).toEqual({
+      "workflow.panel--item": "exact / packet & name", "workflow.panel--legs": ["2", "3"], "workflow.panel--archived": "false",
+    });
+  });
+
+  it("restores the exact query into the target panel's scoped context", async () => {
+    installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1");
+    const app = createDetachedApp();
+    await markPluginLoadingReady(app);
+    let received: WorkspacePanelContext | undefined;
+    await appPluginRegistry(app).register({ id: "workflow", plugin: { apiVersion: 4, name: "Workflow", activate: () => ({ contributions: {
+      workspacePanels: [{ id: "panel", title: "Workflow", render: (context) => { received = context; return html`<p>Workflow</p>`; } }],
+    } }) } });
+    setAppState(app, { ...initialAppState(), selectedProject: project, selectedWorkspace: workspace, projects: [project], workspaces: [workspace] });
+    await createPluginRuntimeContext(app).navigate({ projectId: project.id, workspaceId: workspace.id, tool: "workflow:panel", view: "workspace",
+      query: { item: "packet-name" } });
+    const host = document.createElement("div");
+    document.body.append(host);
+    render(callAppMethod(app, "renderWorkspacePanel"), host);
+    const panel = host.querySelector("workspace-panel");
+    if (!(panel instanceof WorkspacePanel)) throw new Error("Workspace panel not rendered");
+    await panel.updateComplete;
+    expect(received?.navigation?.query).toEqual({ item: "packet-name" });
+    expect(received?.workspace.id).toBe(workspace.id);
+    expect(appState(app).workspaceTool).toBe("workflow:panel");
+    render(null, host);
+  });
+
   it("restores a plugin session destination without starting a session", async () => {
     installBrowserWindow("http://localhost/app");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     const session = runtimeRecoverySession(workspace);
     setAppState(app, { ...initialAppState(), projects: [project] });
     const sessions = await installRuntimeRecoveryBoundaries(app, () => Promise.resolve([workspace]), session);
@@ -1735,7 +2267,7 @@ describe("PiWebApp plugin host", () => {
   // this case owns the plugin promise contract when restoration displays an error.
   it("resolves plugin route failures through unavailable UI", async () => {
     const browser = installBrowserWindow("http://localhost/app");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     setAppState(app, { ...initialAppState(), projects: [project] });
     await markPluginLoadingReady(app);
     await expect(createPluginRuntimeContext(app).navigate({ projectId: "missing-project", view: "chat" })).resolves.toBeUndefined();
@@ -1747,7 +2279,7 @@ describe("PiWebApp plugin host", () => {
   it("leaves malformed tool IDs to the host's unavailable UI rather than rejecting", async () => {
     const tool = "missing";
     const browser = installBrowserWindow("http://localhost/app");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     setAppState(app, { ...initialAppState(), projects: [project] });
     await installRuntimeRecoveryBoundaries(app, () => Promise.resolve([workspace]), runtimeRecoverySession(workspace));
     await expect(createPluginRuntimeContext(app).navigate({ projectId: project.id, workspaceId: workspace.id, view: "workspace", tool })).resolves.toBeUndefined();
@@ -1757,7 +2289,7 @@ describe("PiWebApp plugin host", () => {
 
   it("rejects an async navigation whose tool/view origin changed in the URL", async () => {
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&tool=core%3Aworkspace.terminal&view=chat");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     const destination: MachineNavigationSnapshot = {
       machineId: "local",
       projectId: project.id,
@@ -1867,8 +2399,11 @@ describe("PiWebApp plugin host", () => {
   });
 
   it("binds panel navigation snapshots and writes to the selected machine/workspace only", async () => {
-    const browser = installBrowserWindow("http://localhost/app?machine=remote-1&project=project-1&workspace=workspace-1&browser-only.workspace.panel--file=canonical.ts&legacy.workspace.panel--file=legacy.ts&legacy.workspace.panel--mode=preview");
-    const app = new PiWebApp();
+    const runtimePluginId = machineScopedPluginId("remote-1", "browser-only");
+    const panelId: QualifiedContributionId = `${runtimePluginId}:workspace.panel`;
+    const queryKey = `${runtimePluginId}.workspace.panel--file`;
+    const browser = installBrowserWindow(`http://localhost/app?machine=remote-1&project=project-1&workspace=workspace-1&${queryKey}=canonical.ts&browser-only.workspace.panel--file=source.ts&browser-only.workspace.panel--mode=preview&legacy.workspace.panel--unrelated=ignored`);
+    const app = createDetachedApp();
     setAppState(app, {
       ...initialAppState(),
       selectedMachine: remoteMachine,
@@ -1882,7 +2417,9 @@ describe("PiWebApp plugin host", () => {
     setVerifiedPluginMode(app, remoteMachine.id, "recovery-disabled");
     let navigation: WorkspacePanelNavigationV1 | undefined;
     await appPluginRegistry(app).register({
-      id: "browser-only",
+      id: runtimePluginId,
+      sourcePluginId: "browser-only",
+      machineId: "remote-1",
       plugin: {
         apiVersion: 4,
         name: "Browser only",
@@ -1891,7 +2428,6 @@ describe("PiWebApp plugin host", () => {
             workspacePanels: [{
               id: "workspace.panel",
               title: "Panel",
-              navigationAliases: ["legacy:workspace.panel"],
               render: (context) => {
                 navigation = context.navigation;
                 return html`<p>Panel</p>`;
@@ -1901,24 +2437,25 @@ describe("PiWebApp plugin host", () => {
         }),
       },
     });
-    const panel = appPluginRegistry(app).getWorkspacePanels().find(({ id }) => id === "browser-only:workspace.panel");
+    const panel = appPluginRegistry(app).getWorkspacePanels().find(({ id }) => id === panelId);
     const context = workspacePanelContextFromApp(app);
 
     panel?.render(context);
 
     expect(navigation).toMatchObject({
       version: 1,
-      contributionId: "browser-only:workspace.panel",
+      contributionId: panelId,
       query: { file: "canonical.ts", mode: "preview" },
     });
     const firstSnapshot = navigation;
     firstSnapshot?.set("file", "src/main.ts");
     expect(browser.pushed).toHaveLength(1);
-    expect(browser.url.searchParams.get("browser-only.workspace.panel--file")).toBe("src/main.ts");
-    expect(browser.url.searchParams.has("legacy.workspace.panel--file")).toBe(false);
+    expect(browser.url.searchParams.get(queryKey)).toBe("src/main.ts");
+    expect(browser.url.searchParams.has("browser-only.workspace.panel--file")).toBe(false);
+    expect(browser.url.searchParams.get("legacy.workspace.panel--unrelated")).toBe("ignored");
     expect(machineNavigationSnapshot(app, "remote-1")?.surface.contributionQuery).toMatchObject({
-      "browser-only.workspace.panel--file": "src/main.ts",
-      "legacy.workspace.panel--mode": "preview",
+      [queryKey]: "src/main.ts",
+      "browser-only.workspace.panel--mode": "preview",
     });
 
     browser.navigate("http://localhost/app?machine=remote-1&project=project-1&workspace=workspace-1&browser-only.workspace.panel--file=back.ts");
@@ -1945,7 +2482,7 @@ describe("PiWebApp plugin host", () => {
     const nextProject: Project = { id: "project-next", name: "Next project", path: "/next", createdAt: "now" };
     const nextWorkspace: Workspace = { id: "workspace-next", projectId: nextProject.id, path: "/next", label: "Next", isMain: true, effectiveConfig: {} };
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&view=chat");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     await installTestTerminalComposition(app, "local");
     setAppState(app, {
       ...initialAppState(),
@@ -1975,7 +2512,7 @@ describe("PiWebApp plugin host", () => {
 
   it("rejects retained terminal callbacks after same-workspace surface navigation", async () => {
     const browser = installBrowserWindow(`http://localhost/app?project=project-1&workspace=workspace-1&tool=${encodeURIComponent(TERMINAL_PANEL_ID)}&view=workspace`);
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     await installTestTerminalComposition(app, "local");
     setAppState(app, {
       ...initialAppState(),
@@ -2001,7 +2538,7 @@ describe("PiWebApp plugin host", () => {
 
   it("keeps retained terminal callbacks valid across unrelated workspace query changes", async () => {
     const browser = installBrowserWindow(`http://localhost/app?project=project-1&workspace=workspace-1&tool=${encodeURIComponent(TERMINAL_PANEL_ID)}&view=workspace&browser-only.workspace.panel--file=old.ts`);
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     await installTestTerminalComposition(app, "local");
     setAppState(app, {
       ...initialAppState(),
@@ -2026,7 +2563,7 @@ describe("PiWebApp plugin host", () => {
 
   it("keeps Terminal selection unchanged when the real host rejects a retained panel setter", () => {
     const browser = installBrowserWindow(`http://localhost/app?project=project-1&workspace=workspace-1&tool=${encodeURIComponent(TERMINAL_PANEL_ID)}&view=workspace&pi-web.terminal.workspace.terminal--terminal=terminal-old`);
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     setAppState(app, {
       ...initialAppState(),
       selectedProject: project,
@@ -2042,7 +2579,7 @@ describe("PiWebApp plugin host", () => {
       workspace,
       { id: "local", name: "local", kind: "local" },
       TERMINAL_PANEL_ID,
-      ["core:workspace.terminal"],
+      TERMINAL_PANEL_ID,
       undefined,
       freshness,
     );
@@ -2067,7 +2604,7 @@ describe("PiWebApp plugin host", () => {
 
   it("keeps workspace refresh completion independent of panel surface freshness", async () => {
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&tool=core%3Aworkspace.terminal&view=workspace");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     setAppState(app, {
       ...initialAppState(),
       selectedProject: project,
@@ -2095,9 +2632,9 @@ describe("PiWebApp plugin host", () => {
     expect(invalidated).toHaveBeenCalledOnce();
   });
 
-  it("restores Files legacy routes and query-only history through the real runtime invalidation path", async () => {
-    const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&tool=files&view=workspace&core.workspace.files--file=legacy.ts&core.workspace.files--mode=preview");
-    const app = new PiWebApp();
+  it("restores Files current routes and query-only history through the real runtime invalidation path", async () => {
+    const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&tool=files%3Aworkspace.files&view=workspace&files.workspace.files--file=initial.ts&files.workspace.files--mode=preview&core.workspace.files--file=ignored.ts");
+    const app = createDetachedApp();
     setAppState(app, {
       ...initialAppState(),
       selectedProject: project,
@@ -2125,9 +2662,9 @@ describe("PiWebApp plugin host", () => {
     await registerFilesRuntimePanel(app, runtime, files, contexts);
 
     await callAsyncAppMethod(app, "restoreRoute", false);
-    const legacyContext = contexts[0];
-    if (legacyContext === undefined) throw new Error("Files did not receive the legacy route context");
-    await vi.waitFor(() => { expect(runtime.snapshot(legacyContext).selectedFileContent?.content).toBe("loaded:legacy.ts"); });
+    const initialContext = contexts[0];
+    if (initialContext === undefined) throw new Error("Files did not receive the current route context");
+    await vi.waitFor(() => { expect(runtime.snapshot(initialContext).selectedFileContent?.content).toBe("loaded:initial.ts"); });
 
     expect(appState(app)).toMatchObject({
       workspaceTool: "files:workspace.files",
@@ -2136,10 +2673,10 @@ describe("PiWebApp plugin host", () => {
     expect(contexts[0]?.navigation).toMatchObject({
       version: 1,
       contributionId: "files:workspace.files",
-      query: { file: "legacy.ts", mode: "preview" },
+      query: { file: "initial.ts", mode: "preview" },
     });
 
-    browser.navigate("http://localhost/app?project=project-1&workspace=workspace-1&tool=files&view=workspace&files.workspace.files--file=back.ts");
+    browser.navigate("http://localhost/app?project=project-1&workspace=workspace-1&tool=files%3Aworkspace.files&view=workspace&files.workspace.files--file=back.ts");
     callAppMethod(app, "onPopState");
     await vi.waitFor(() => { expect(contexts).toHaveLength(2); });
     const backContext = contexts[1];
@@ -2152,12 +2689,12 @@ describe("PiWebApp plugin host", () => {
       contributionId: "files:workspace.files",
       query: { file: "back.ts" },
     });
-    expect(readFile.mock.calls.map(([path]) => path)).toEqual(["legacy.ts", "back.ts"]);
+    expect(readFile.mock.calls.map(([path]) => path)).toEqual(["initial.ts", "back.ts"]);
   });
 
   it("restores Terminal query-only history through its real runtime invalidation", async () => {
-    const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&tool=core%3Aworkspace.terminal&view=workspace&core.workspace.terminal--terminal=terminal-1");
-    const app = new PiWebApp();
+    const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&tool=pi-web.terminal%3Aworkspace.terminal&view=workspace&pi-web.terminal.workspace.terminal--terminal=terminal-1&core.workspace.terminal--terminal=ignored-terminal");
+    const app = createDetachedApp();
     setAppState(app, {
       ...initialAppState(),
       selectedProject: project,
@@ -2186,8 +2723,6 @@ describe("PiWebApp plugin host", () => {
             workspacePanels: [{
               id: "workspace.terminal",
               title: "Terminal",
-              routeAliases: ["core:workspace.terminal"],
-              navigationAliases: ["core:workspace.terminal"],
               onInvalidate: (context) => {
                 const runtimeContext: PublicWorkspacePanelContext = {
                   navigate: context.navigate,
@@ -2239,8 +2774,8 @@ describe("PiWebApp plugin host", () => {
     const projectB: Project = { id: "project-b", name: "Project B", path: "/repo-b", createdAt: "now" };
     const workspaceA: Workspace = { id: "workspace-a", projectId: projectA.id, path: "/repo-a", label: "A", isMain: true, effectiveConfig: {} };
     const workspaceB: Workspace = { id: "workspace-b", projectId: projectB.id, path: "/repo-b", label: "B", isMain: true, effectiveConfig: {} };
-    const browser = installBrowserWindow("http://localhost/app?project=project-a&workspace=workspace-a&tool=files%3Aworkspace.files&view=workspace&core.workspace.files--file=a.ts&core.workspace.files--mode=raw");
-    const app = new PiWebApp();
+    const browser = installBrowserWindow("http://localhost/app?project=project-a&workspace=workspace-a&tool=files%3Aworkspace.files&view=workspace&files.workspace.files--file=a.ts&files.workspace.files--mode=raw");
+    const app = createDetachedApp();
     if (!Reflect.set(app, "schedulePiWebStatusRefresh", () => undefined)) throw new Error("Could not stub deferred status refresh");
     setAppState(app, {
       ...initialAppState(),
@@ -2339,7 +2874,7 @@ describe("PiWebApp plugin host", () => {
     expect(contextA.navigation?.query).toEqual({ file: "a.ts", mode: "raw" });
     expect(browser.url.searchParams.has("machine")).toBe(false);
     expect(browser.url.searchParams.get("project")).toBe(projectA.id);
-    expect(browser.url.searchParams.get("core.workspace.files--file")).toBe("a.ts");
+    expect(browser.url.searchParams.get("files.workspace.files--file")).toBe("a.ts");
     resolveRead(1);
     await toA;
 
@@ -2350,15 +2885,16 @@ describe("PiWebApp plugin host", () => {
     });
     expect(readFile.mock.calls.map(([path]) => path)).toEqual(["b.ts", "a.ts"]);
     expect(browser.url.searchParams.has("machine")).toBe(false);
-    expect(browser.url.searchParams.get("core.workspace.files--file")).toBe("a.ts");
-    expect(browser.url.searchParams.get("core.workspace.files--mode")).toBe("raw");
-    expect(browser.url.searchParams.has("files.workspace.files--file")).toBe(false);
+    expect(browser.url.searchParams.get("files.workspace.files--file")).toBe("a.ts");
+    expect(browser.url.searchParams.get("files.workspace.files--mode")).toBe("raw");
+    expect(browser.url.searchParams.has("core.workspace.files--file")).toBe(false);
     expect(browser.pushed).toHaveLength(2);
-    expect(browser.replaced).toHaveLength(2);
-    expect(historyUrl(browser.replaced, 0).searchParams.get("files.workspace.files--file")).toBe("b.ts");
-    expect(historyUrl(browser.replaced, 0).searchParams.has("core.workspace.files--file")).toBe(false);
-    expect(historyUrl(browser.replaced, 1).searchParams.get("core.workspace.files--file")).toBe("a.ts");
-    expect(historyUrl(browser.replaced, 1).searchParams.has("files.workspace.files--file")).toBe(false);
+    // Each destination and its contribution query are published atomically.
+    expect(browser.replaced).toEqual([]);
+    expect(historyUrl(browser.pushed, 0).searchParams.get("files.workspace.files--file")).toBe("b.ts");
+    expect(historyUrl(browser.pushed, 0).searchParams.has("core.workspace.files--file")).toBe(false);
+    expect(historyUrl(browser.pushed, 1).searchParams.get("files.workspace.files--file")).toBe("a.ts");
+    expect(historyUrl(browser.pushed, 1).searchParams.has("core.workspace.files--file")).toBe(false);
   });
 
   it("preserves the origin history entry when remembered Files is unavailable", async () => {
@@ -2371,7 +2907,7 @@ describe("PiWebApp plugin host", () => {
     const browser = installBrowserWindow("http://localhost/app?project=project-a&workspace=workspace-a&tool=core%3Aworkspace.terminal&view=workspace");
     const originUrl = browser.url.href;
     const historyLength = window.history.length;
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     if (!Reflect.set(app, "schedulePiWebStatusRefresh", () => undefined)) throw new Error("Could not stub deferred status refresh");
     setAppState(app, {
       ...initialAppState(),
@@ -2416,7 +2952,8 @@ describe("PiWebApp plugin host", () => {
     });
     expect(window.history.length).toBe(historyLength + 1);
     expect(browser.pushed).toHaveLength(1);
-    expect(browser.replaced).toHaveLength(1);
+    expect(browser.replaced).toEqual([]);
+    expect(historyUrl(browser.pushed, 0).searchParams.get("files.workspace.files--file")).toBe("b.ts");
     await expectWorkspaceContentError(app, "Workspace panel unavailable: files:workspace.files");
     expect([...browser.pushed, ...browser.replaced].every((href) => new URL(href).searchParams.get("machine") === machineB.id)).toBe(true);
     expect(browser.url.searchParams.get("files.workspace.files--file")).toBe("b.ts");
@@ -2434,7 +2971,7 @@ describe("PiWebApp plugin host", () => {
     const fallbackWorkspace: Workspace = { id: "workspace-fallback", projectId: projectB.id, path: "/repo-b", label: "Fallback", isMain: true, effectiveConfig: {} };
     const browser = installBrowserWindow("http://localhost/app?project=project-a&workspace=workspace-a&tool=core%3Aworkspace.terminal&view=workspace");
     const originUrl = browser.url.href;
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     if (!Reflect.set(app, "schedulePiWebStatusRefresh", () => undefined)) throw new Error("Could not stub deferred status refresh");
     setAppState(app, {
       ...initialAppState(),
@@ -2503,7 +3040,7 @@ describe("PiWebApp plugin host", () => {
     const fallbackWorkspace: Workspace = { id: "workspace-fallback", projectId: fallbackProject.id, path: "/fallback", label: "Fallback", isMain: true, effectiveConfig: {} };
     const browser = installBrowserWindow("http://localhost/app?project=project-a&workspace=workspace-a&tool=core%3Aworkspace.terminal&view=workspace");
     const originUrl = browser.url.href;
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     if (!Reflect.set(app, "schedulePiWebStatusRefresh", () => undefined)) throw new Error("Could not stub deferred status refresh");
     setAppState(app, {
       ...initialAppState(),
@@ -2541,7 +3078,8 @@ describe("PiWebApp plugin host", () => {
     await callAsyncAppMethod(app, "selectMachineWithMemory", machineB);
 
     expect(browser.pushed).toHaveLength(1);
-    expect(browser.replaced.length).toBeGreaterThanOrEqual(1);
+    expect(browser.replaced).toEqual([]);
+    expect(historyUrl(browser.pushed, 0).searchParams.get("files.workspace.files--file")).toBe("missing.ts");
     expect(browser.url.searchParams.get("project")).toBe("project-missing");
     expect(browser.url.searchParams.get("workspace")).toBe("workspace-missing");
     expect(browser.url.searchParams.get("files.workspace.files--file")).toBe("missing.ts");
@@ -2586,7 +3124,7 @@ describe("PiWebApp plugin host", () => {
 
   it.each([1440, 1000, 760])("keeps a known unavailable panel destination without view fallback at width %i", async (width) => {
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&tool=core%3Aworkspace.files&view=workspace");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     setAppState(app, {
       ...initialAppState(),
       selectedProject: project,
@@ -2636,7 +3174,7 @@ describe("PiWebApp plugin host", () => {
 
   it("preserves an unresolved panel deep link after plugin loading completes", async () => {
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&tool=missing&view=missing");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     setAppState(app, {
       ...initialAppState(),
       selectedProject: project,
@@ -2666,7 +3204,7 @@ describe("PiWebApp plugin host", () => {
 
   it("preserves an unavailable panel on popstate and the adjacent history entries", async () => {
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&tool=core%3Aworkspace.terminal&view=workspace&step=origin");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     setAppState(app, {
       ...initialAppState(),
       selectedProject: project,
@@ -2702,7 +3240,7 @@ describe("PiWebApp plugin host", () => {
 
   it.each([false, true])("preserves actual Files loading failures without overwriting unrelated notifications (existing: %s)", async (existingNotification) => {
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&tool=core%3Aworkspace.files&view=workspace");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     stubPluginLoadRendering(app);
     setAppState(app, {
       ...initialAppState(),
@@ -2768,7 +3306,7 @@ describe("PiWebApp plugin host", () => {
 
   it("does not let a stale plugin refresh replace a newer view URL", async () => {
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&view=chat");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     setAppState(app, {
       ...initialAppState(),
       selectedProject: project,
@@ -2795,7 +3333,7 @@ describe("PiWebApp plugin host", () => {
       initialUrl.searchParams.set("tool", TERMINAL_PANEL_ID);
       initialUrl.searchParams.set("view", "workspace");
       const browser = installBrowserWindow(initialUrl.href);
-      const app = new PiWebApp();
+      const app = createDetachedApp();
       stubPluginLoadRendering(app);
       const state: ReturnType<typeof initialAppState> = {
         ...initialAppState(),
@@ -2970,6 +3508,53 @@ describe("PiWebApp plugin host", () => {
     expect(Reflect.get(app, "workspaceDeletionPollTimer")).toBeUndefined();
   });
 
+  it.each(["new run with empty response", "updated run with stale response", "newer run for same target"] as const)(
+    "retains workspace deletion progress during polling: %s",
+    async (scenario) => {
+      const targetWorkspaceId = "workspace-target";
+      const queuedRun: TerminalCommandRun = {
+        id: "deletion-run",
+        origin: "core",
+        projectId: project.id,
+        workspaceId: workspace.id,
+        terminalId: "deletion-terminal",
+        title: "Remove target",
+        command: "remove-target",
+        status: "queued",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        metadata: { "pi.operation": "workspace.delete", "target.workspaceId": targetWorkspaceId },
+      };
+      const runningRun: TerminalCommandRun = {
+        ...queuedRun,
+        status: "running",
+        ...(scenario === "newer run for same target"
+          ? { id: "newer-deletion-run", createdAt: "2026-01-01T00:01:00.000Z" }
+          : {}),
+      };
+      const app = createApp();
+      setAppState(app, {
+        ...initialAppState(),
+        selectedProject: project,
+        selectedWorkspace: workspace,
+        workspaces: [workspace],
+        workspaceDeletionRuns: scenario === "new run with empty response" ? {} : { [targetWorkspaceId]: queuedRun },
+      });
+      await markPluginLoadingReady(app);
+      const queryResult = deferredValue<TerminalCommandRun[]>();
+      const listCommandRuns = vi.fn<RequiredTerminalBrowserFacadeV1["listCommandRuns"]>(() => queryResult.promise);
+      replaceTestTerminalFacade(app, { ...testTerminalFacade(), listCommandRuns });
+
+      const refreshing = callAsyncAppMethod(app, "refreshWorkspaceDeletionRuns");
+      expect(listCommandRuns).toHaveBeenCalledOnce();
+      expect(callAppMethod(app, "recordWorkspaceDeletionRun", runningRun, "local")).toBe(true);
+      queryResult.resolve(scenario === "new run with empty response" ? [] : [queuedRun]);
+      await refreshing;
+
+      expect(appState(app).workspaceDeletionRuns).toEqual({ [targetWorkspaceId]: runningRun });
+      expect(Reflect.get(app, "workspaceDeletionPollTimer")).toBeDefined();
+    },
+  );
+
   it("aborts an old project deletion refresh and lets the new scope refresh immediately", async () => {
     const otherProject: Project = { id: "project-2", name: "Other", path: "/other", createdAt: "now" };
     const otherWorkspace: Workspace = { ...workspace, id: "workspace-2", projectId: otherProject.id, path: "/other", label: "other" };
@@ -3127,7 +3712,7 @@ describe("PiWebApp plugin host", () => {
     const originWorkspace: Workspace = { ...workspace, id: "workspace-origin", path: "/repo-origin", label: "origin" };
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-origin&tool=core%3Aworkspace.terminal&view=workspace");
     const originUrl = browser.url.href;
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     setAppState(app, {
       ...initialAppState(),
       selectedProject: project,
@@ -3158,7 +3743,7 @@ describe("PiWebApp plugin host", () => {
 
   it("adds a one-shot start request only when the Terminal surface is explicitly opened", async () => {
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&tool=files%3Aworkspace.files&view=workspace");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     setAppState(app, {
       ...initialAppState(),
       selectedProject: project,
@@ -3179,7 +3764,7 @@ describe("PiWebApp plugin host", () => {
   it("does not publish a command terminal after its workspace restore is superseded", async () => {
     const otherWorkspace: Workspace = { ...workspace, id: "workspace-2", label: "other" };
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-2&tool=core%3Aworkspace.terminal&view=workspace");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     setAppState(app, {
       ...initialAppState(),
       selectedProject: project,
@@ -3200,7 +3785,6 @@ describe("PiWebApp plugin host", () => {
     })) throw new Error("Could not stub Terminal workspace restoration");
     const opening = callAsyncAppMethod(app, "navigateRuntimeWorkspaceContribution", "local", workspace, {
       contributionId: TERMINAL_PANEL_ID,
-      navigationAliases: ["core:workspace.terminal"],
       query: { terminal: "terminal-from-command", start: undefined },
     }, {
       selection: { machineId: "local", projectId: project.id, workspaceId: otherWorkspace.id, tool: "core:workspace.terminal", view: "workspace" },
@@ -3218,7 +3802,7 @@ describe("PiWebApp plugin host", () => {
 
   it("binds a remote Terminal facade to the matching machine and backend revision", async () => {
     installBrowserWindow("http://localhost/app?machine=remote-1&project=project-1&workspace=workspace-1");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     stubPluginLoadRendering(app);
     setAppState(app, {
       ...initialAppState(),
@@ -3389,7 +3973,7 @@ describe("PiWebApp plugin host", () => {
 
   it("preserves an attributable required-load failure through deep-link restoration until valid retry", async () => {
     installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&tool=core%3Aworkspace.terminal");
-    const app = new PiWebApp();
+    const app = createDetachedApp();
     stubPluginLoadRendering(app);
     setAppState(app, { ...initialAppState(), projects: [project] });
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -3789,6 +4373,40 @@ describe("PiWebApp plugin host", () => {
     expect(appPluginRegistry(app).hasPlugin("shutdown-probe")).toBe(false);
   });
 
+  it("cancels primary and background reconnects when detached test apps are disposed", async () => {
+    class FakeWebSocket {
+      static readonly CONNECTING = 0;
+      static readonly instances: FakeWebSocket[] = [];
+      readyState = 1;
+      onclose: (() => void) | null = null;
+
+      constructor() { FakeWebSocket.instances.push(this); }
+      close(): void { this.readyState = 3; }
+    }
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const app = createApp();
+    await markPluginLoadingReady(app);
+    const localMachine: Machine = { id: "local", name: "Local", kind: "local", createdAt: "now", updatedAt: "now" };
+    setAppState(app, { ...initialAppState(), machines: [localMachine, remoteMachine], selectedMachine: remoteMachine });
+    callAppMethod(app, "connectRealtime");
+    callAppMethod(app, "syncMachineActivitySubscriptions");
+    expect(FakeWebSocket.instances).toHaveLength(2);
+
+    for (const transport of FakeWebSocket.instances) {
+      transport.close();
+      transport.onclose?.();
+    }
+    expect(vi.getTimerCount()).toBe(2);
+
+    await disposeTestApps();
+
+    for (const transport of FakeWebSocket.instances) transport.onclose?.();
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+
   it("retries a plugin whose activation failed without retaining partial contributions", async () => {
     const app = createApp();
     stubPluginLoadRendering(app);
@@ -3846,7 +4464,22 @@ describe("PiWebApp plugin host", () => {
 
 function createApp(): PiWebApp {
   installBrowserWindow("http://localhost/app");
-  return new PiWebApp();
+  return createDetachedApp();
+}
+
+function createDetachedApp(): PiWebApp {
+  const app = new PiWebApp();
+  testApps.add(app);
+  return app;
+}
+
+async function disposeTestApps(): Promise<void> {
+  // Detached fixtures never receive a DOM disconnection when the body is cleared.
+  // Shut down their socket owners before restoring timers and browser globals.
+  for (const app of testApps) {
+    app.disconnectedCallback();
+    await appPluginRegistry(app).dispose();
+  }
 }
 
 function installBrowserWindow(href: string): {
@@ -4000,8 +4633,6 @@ async function registerFilesRuntimePanel(
           workspacePanels: [{
             id: "workspace.files",
             title: "Files",
-            routeAliases: ["files", "core:workspace.files"],
-            navigationAliases: ["core:workspace.files"],
             invalidationResources: ["workspace.files"],
             onInvalidate: (context, invalidation) => {
               const runtimeContext: PublicWorkspacePanelContext = {
@@ -4056,9 +4687,11 @@ async function installRuntimeRecoveryBoundaries(
   if (!Reflect.set(sessions, "socket", socket)
     || !Reflect.set(sessions, "notifications", undefined)
     || !Reflect.set(sessions, "api", {
-      messages: () => Promise.resolve({ messages: [], start: 0, total: 0 }),
-      status: () => Promise.resolve({ sessionId: session.id, isStreaming: false, isCompacting: false, isBashRunning: false, pendingMessageCount: 0, queuedMessages: [], tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 }),
-      streamSnapshot: () => Promise.resolve({ seq: 0, partial: null }),
+      transcriptSnapshot: () => Promise.resolve({
+        page: { messages: [], start: 0, total: 0 },
+        status: { sessionId: session.id, isStreaming: false, isCompacting: false, isBashRunning: false, pendingMessageCount: 0, queuedMessages: [], tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 },
+        seq: 0, partial: null,
+      }),
       thinkingLevels: () => Promise.resolve({ levels: [] }),
     })) throw new Error("Could not stub session boundaries");
   return sessions;
@@ -4191,8 +4824,6 @@ function requiredTerminalPlugin(facade: RequiredTerminalBrowserFacadeV1 = testTe
           id: "workspace.terminal",
           title: "Terminal",
           order: 30,
-          routeAliases: ["core:workspace.terminal"],
-          navigationAliases: ["core:workspace.terminal"],
           render: () => html`<p>Terminal</p>`,
         }],
         actions: [{

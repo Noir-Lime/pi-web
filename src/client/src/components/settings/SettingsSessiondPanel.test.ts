@@ -13,6 +13,12 @@ describe("session daemon panel notices", () => {
     expect(sessiondDescription("Lab Mac (remote machine)")).toContain("Lab Mac (remote machine)");
   });
 
+  it("keeps restart timing and interruption consequences in the description", () => {
+    const description = sessiondDescription("local (local gateway)");
+    expect(description).toContain("Changes save immediately and take effect after that machine’s session daemon restarts.");
+    expect(description).toContain("Restarting interrupts active sessions and running work.");
+  });
+
   it("orders save/load error notices before the saved confirmation", () => {
     const notices = sessiondPanelNotices({
       error: "Failed to save session-daemon config.",

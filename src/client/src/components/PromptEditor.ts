@@ -10,6 +10,7 @@ import type { PromptAttachmentDelivery } from "../../../shared/apiTypes";
 import { capturePromptAttachments, effectivePromptAttachmentDelivery, isInlinePromptAttachment, promptAttachmentsCanUseInlineDelivery } from "../promptAttachmentCapture";
 import { inputModeForDraft, inputModesEqual, type InputMode } from "../inputModes";
 import { machineSessionKey } from "../machineKeys";
+import type { StagedPromptChip } from "../promptChips";
 import { detectPromptCompletionTrigger, fileCompletionInsertText, modelCompletionChoices, type PromptCompletionTrigger } from "../promptCompletions";
 import { promptArgumentHintExtension, setPromptArgumentHint } from "../promptArgumentHint";
 import { clearDraft, loadDraft, saveDraft } from "../promptDraftStorage";
@@ -19,14 +20,31 @@ import { createMobilePromptEnterMedia, shouldUsePromptEnterShiftShortcut } from 
 import { composerSendShortcut, matchesComposerSend } from "../composerShortcuts";
 import type { ShortcutPreferenceConfig } from "../keyboardShortcuts";
 import { promptEditorStyles, type CompletionItem } from "./shared";
-import { renderAttachIcon, renderSendIcon, renderStopIcon, renderThinkingGauge } from "./promptEditorIcons";
+import { renderAttachIcon, renderSendIcon, renderQueueIcon, renderSteerIcon, renderStopIcon, renderThinkingGauge } from "./promptEditorIcons";
 import { thinkingGauge, thinkingLevelLabel } from "../../../shared/thinkingLevels";
 import "./AutocompleteMenu";
+
+const promptPlaceholder = "Message pi... Use / for commands, @ for tracked files, @ space for all files, # for models";
+
+// Text nodes inside contenteditable can become iOS keyboard context, even in
+// non-editable placeholder widgets. Render the hint with CSS-generated content.
+function createPromptPlaceholder(): HTMLElement {
+  const hint = document.createElement("span");
+  hint.className = "prompt-placeholder";
+  hint.dataset["placeholder"] = promptPlaceholder;
+  return hint;
+}
+
+type PromptSendArgs = [text: string, streamingBehavior?: "steer" | "followUp", attachments?: PromptAttachment[], delivery?: PromptAttachmentDelivery, folder?: string, chips?: readonly StagedPromptChip[]];
+// Existing composer consumers may still send fire-and-forget; only a boolean
+// promise confirms the new chip-bearing submission path.
+type PromptSendHandler = ((...args: PromptSendArgs) => void | Promise<void>) | ((...args: PromptSendArgs) => Promise<boolean>);
 
 @customElement("prompt-editor")
 export class PromptEditor extends LitElement {
   @property({ type: Boolean }) disabled = false;
   @property({ attribute: false }) shortcuts: ShortcutPreferenceConfig = {};
+  @property() defaultStreamingBehavior: "steer" | "followUp" = "steer";
   @property() sessionId?: string;
   @property() cwd?: string;
   @property() machineId = "local";
@@ -43,7 +61,9 @@ export class PromptEditor extends LitElement {
   @property({ type: Boolean }) canStop = false;
   @property({ attribute: false }) status?: SessionStatus;
   @property({ type: Boolean }) sending = false;
-  @property({ attribute: false }) onSend?: (text: string, streamingBehavior?: "steer" | "followUp", attachments?: PromptAttachment[], delivery?: PromptAttachmentDelivery, folder?: string) => void | Promise<void>;
+  @property({ attribute: false }) promptChips: readonly StagedPromptChip[] = [];
+  @property({ attribute: false }) onRemoveChip?: (chip: StagedPromptChip) => void;
+  @property({ attribute: false }) onSend?: PromptSendHandler;
   @property({ attribute: false }) onStop?: () => void;
   @property({ attribute: false }) onSelectModel?: () => void;
   @property({ attribute: false }) onSelectThinking?: () => void;
@@ -63,6 +83,8 @@ export class PromptEditor extends LitElement {
   @state() private attachments: readonly PendingAttachment[] = [];
   @state() private attachmentDelivery: PromptAttachmentDelivery = loadAttachmentDelivery();
   @state() private attachmentError: string | undefined = undefined;
+  @state() private chipSendingKey: string | undefined = undefined;
+  @state() private chipError: string | undefined = undefined;
   private attachmentSeq = 0;
   private requestVersion = 0;
   private editor: EditorView | undefined;
@@ -84,6 +106,7 @@ export class PromptEditor extends LitElement {
     this.draft = currentKey !== undefined ? loadDraft(currentKey) : "";
     this.attachments = currentKey !== undefined ? loadStagedAttachments(currentKey) : [];
     this.attachmentError = undefined;
+    this.chipError = undefined;
     this.currentInputMode = inputModeForDraft(this.draft);
     this.completions = [];
     this.selectedIndex = 0;
@@ -116,10 +139,11 @@ export class PromptEditor extends LitElement {
   }
 
   override render() {
-    const shellInputMode = this.currentInputMode.kind === "shell" ? this.currentInputMode : undefined;
+    const shellInputMode = this.promptChips.length === 0 && this.currentInputMode.kind === "shell" ? this.currentInputMode : undefined;
     const shellMode = shellInputMode !== undefined;
     const queuesInput = this.canSteer || this.isCompacting;
-    const busy = this.disabled || this.sending;
+    const keyboardSteers = this.defaultSendBehavior() === "steer";
+    const busy = this.disabled || this.sending || this.chipSendingKey === this.composerKey();
     return html`
       <footer class=${shellMode ? "shell-mode" : ""} @paste=${(event: ClipboardEvent) => { void this.handlePaste(event); }} @dragover=${(event: DragEvent) => { this.handleDragOver(event); }} @drop=${(event: DragEvent) => { void this.handleDrop(event); }}>
         <div class="editor-wrap">
@@ -128,12 +152,14 @@ export class PromptEditor extends LitElement {
           <button class="editor-attach icon-button" ?disabled=${busy} title="Attach files" aria-label="Attach files" @click=${() => { this.attachmentInput?.click(); }}>${renderAttachIcon()}</button>
           ${shellMode ? html`<div class="mode-hint">Shell command${shellInputMode.excludeFromContext ? " · excluded from context" : ""}</div>` : null}
           ${this.isCompacting && !shellMode ? html`<div class="mode-hint">Compacting history · message will be queued</div>` : null}
+          ${this.renderPromptChips()}
           ${this.renderAttachments()}
           <autocomplete-menu .items=${this.completions} .selectedIndex=${this.selectedIndex} .onPick=${(item: CompletionItem) => { this.pick(item); }}></autocomplete-menu>
         </div>
         <div class="actions">
           ${this.renderCompactStatus()}
-          <button class="icon-button send-button" ?disabled=${busy} title=${queuesInput ? "Steer the current response at the next available boundary" : "Send message"} aria-label="Send message" @click=${() => { this.send(); }}>${renderSendIcon()}</button>
+          <button class="icon-button send-button ${keyboardSteers ? "" : "default-send-action"}" ?disabled=${busy} title=${queuesInput ? "Queue until the current activity finishes" : "Send message"} aria-label=${queuesInput ? "Queue message" : "Send message"} @click=${() => { this.send("followUp"); }}>${queuesInput ? renderQueueIcon() : renderSendIcon()}</button>
+          ${this.canSteer && !this.isCompacting ? html`<button class="icon-button steer-button ${keyboardSteers ? "default-send-action" : ""}" ?disabled=${busy} title="Steer the current response before the next model call" aria-label="Steer current response" @click=${() => { this.send("steer"); }}>${renderSteerIcon()}</button>` : null}
           <button class="icon-button stop-button" ?disabled=${this.disabled || !this.canStop} title=${this.canStop ? "Stop current work and clear queued messages" : "Nothing running"} aria-label="Stop current work" @click=${() => this.onStop?.()}>${renderStopIcon()}</button>
         </div>
       </footer>
@@ -180,6 +206,21 @@ export class PromptEditor extends LitElement {
       <div class="compact-status" aria-label="Session status">
         <button class="select-model" title="Select model" @click=${() => this.onSelectModel?.()}>${provider}${model}</button>
         <button class="select-thinking icon-button" title=${`Thinking level: ${thinkingLevelLabel(status.thinkingLevel)}`} aria-label=${`Thinking level: ${thinkingLevelLabel(status.thinkingLevel)}`} @click=${() => this.onSelectThinking?.()}>${renderThinkingGauge(thinkingGauge(status.thinkingLevel, this.availableThinkingLevels))}</button>
+      </div>
+    `;
+  }
+
+  private renderPromptChips() {
+    if (this.promptChips.length === 0 && this.chipError === undefined) return null;
+    return html`
+      <div class="prompt-chips" aria-label="Pending plugin context">
+        ${this.promptChips.map((chip) => html`
+          <div class="prompt-chip" title=${chip.text}>
+            <span>${chip.label}</span>
+            <button type="button" aria-label=${`Remove ${chip.label}`} ?disabled=${this.disabled} @click=${() => this.onRemoveChip?.(chip)}>×</button>
+          </div>
+        `)}
+        ${this.chipError === undefined ? null : html`<div class="chip-error" role="alert">${this.chipError}</div>`}
       </div>
     `;
   }
@@ -296,7 +337,8 @@ export class PromptEditor extends LitElement {
             keyup: (event) => this.handleEditorKeyUp(event),
             blur: () => this.resetEditorModifierState(),
           }),
-          placeholder("Message pi... Use / for commands, @ for tracked files, @ space for all files, # for models"),
+          placeholder(createPromptPlaceholder),
+          EditorView.contentAttributes.of({ "aria-placeholder": promptPlaceholder }),
           promptArgumentHintExtension,
           this.editableCompartment.of(EditorView.editable.of(!this.disabled)),
           this.readOnlyCompartment.of(EditorState.readOnly.of(this.disabled)),
@@ -446,7 +488,7 @@ export class PromptEditor extends LitElement {
       return true;
     }
     if (send) {
-      this.send();
+      this.send(this.defaultSendBehavior());
       return true;
     }
     if (event.key === "Enter" && !event.ctrlKey && !event.metaKey && !event.altKey) {
@@ -494,23 +536,59 @@ export class PromptEditor extends LitElement {
     this.completions = [];
   }
 
-  private send() {
-    if (this.disabled || this.sending) return;
+  private defaultSendBehavior(): "steer" | "followUp" | undefined {
+    if (this.isCompacting) return "followUp";
+    return this.canSteer ? this.defaultStreamingBehavior : undefined;
+  }
+
+  private send(streamingBehavior?: "steer" | "followUp") {
+    if (this.disabled || this.sending || this.chipSendingKey === this.composerKey()) return;
     const text = this.draft.trim();
     const pending = this.attachments;
-    if (text === "" && pending.length === 0) return;
-    const behavior = "steer";
+    const chips = this.promptChips;
+    if (text === "" && pending.length === 0 && chips.length === 0) return;
+    const behavior = this.canSteer || this.isCompacting ? streamingBehavior : undefined;
     const attachments = pending.length > 0 ? this.currentAttachments() : undefined;
     const delivery = this.effectiveAttachmentDelivery();
     // Folder delivery sends the displayed workspace-effective folder explicitly
     // (the uploads pattern): the save lands exactly where the label pointed,
     // independent of how the session cwd would resolve its own project config.
     const folder = attachments !== undefined && delivery === "folder" ? this.attachmentsFolder : undefined;
+    if (chips.length > 0) {
+      void this.sendWithChips(text, behavior, attachments, attachments === undefined ? undefined : delivery, folder, chips);
+      return;
+    }
     this.resetComposer();
     // Sending is owned by the controller (it drives the chat activity dock and,
     // for folder mode, orchestrates the upload + reference rewrite), so this is
     // fire-and-forget here.
     void this.onSend?.(text, behavior, attachments, attachments === undefined ? undefined : delivery, folder);
+  }
+
+  private composerKey(): string {
+    return machineSessionKey(this.machineId, this.sessionId ?? "");
+  }
+
+  private async sendWithChips(text: string, behavior: "steer" | "followUp" | undefined, attachments: PromptAttachment[] | undefined, delivery: PromptAttachmentDelivery | undefined, folder: string | undefined, chips: readonly StagedPromptChip[]): Promise<void> {
+    const key = this.composerKey();
+    const draft = this.draft;
+    const pending = this.attachments;
+    this.chipSendingKey = key;
+    this.chipError = undefined;
+    try {
+      const accepted = await this.onSend?.(text, behavior, attachments, delivery, folder, chips);
+      if (key !== this.composerKey() || !this.isConnected) return;
+      if (accepted === true) {
+        // Do not erase edits made during delivery, or the next conversation.
+        if (draft === this.draft && pending === this.attachments) this.resetComposer();
+      } else {
+        this.chipError = "Message not submitted. Context kept for retry.";
+      }
+    } catch (error) {
+      if (key === this.composerKey()) this.chipError = `Message not submitted: ${String(error)}`;
+    } finally {
+      if (this.chipSendingKey === key) this.chipSendingKey = undefined;
+    }
   }
 
   private resetComposer() {

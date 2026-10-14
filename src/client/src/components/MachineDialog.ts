@@ -90,29 +90,29 @@ export class MachineDialog extends LitElement {
         .label=${"Add machine"}
         @keydown=${(event: KeyboardEvent) => { this.handleKeyDown(event); }}
       >
-        <form @submit=${(event: SubmitEvent) => { this.handleSubmit(event); }}>
+        <form aria-describedby=${this.error === "" ? "" : "machine-error"} @submit=${(event: SubmitEvent) => { this.handleSubmit(event); }}>
           <header>
             <strong>Add machine</strong>
-            <button type="button" @click=${() => { this.onCancel?.(); }} aria-label="Close">×</button>
+            <button type="button" @click=${() => { this.onCancel?.(); }} aria-label="Close add machine">×</button>
           </header>
           <div class="body">
-            ${this.error === "" ? null : html`<div class="dialog-error" role="alert">${this.error}</div>`}
+            ${this.error === "" ? null : html`<div id="machine-error" class="dialog-error" role="alert">${this.error}</div>`}
             <label>
               Remote PI WEB URL
-              <input name="baseUrl" type="url" .value=${this.url} @input=${(event: InputEvent) => { this.handleUrlInput(event); }} placeholder="http://dev-box.local:8504" autocomplete="url" inputmode="url" />
+              <input name="baseUrl" type="url" aria-describedby="machine-url-help" aria-invalid=${urlError !== undefined ? "true" : "false"} .value=${this.url} @input=${(event: InputEvent) => { this.handleUrlInput(event); }} placeholder="http://dev-box.local:8504" autocomplete="url" inputmode="url" />
             </label>
-            <small class=${urlError === undefined ? "hint" : "field-error"}>${urlError ?? "Enter the reachable base URL first, including http:// or https://."}</small>
+            <small id="machine-url-help" aria-live="polite" class=${urlError === undefined ? "hint" : "field-error"}>${urlError ?? "Enter the reachable base URL first, including http:// or https://."}</small>
             ${hasUrl ? html`
               <label>
                 Machine name
-                <input name="name" type="text" .value=${this.name} @input=${(event: InputEvent) => { this.handleNameInput(event); }} placeholder=${this.previousSuggestedName || "Dev Box"} autocomplete="off" />
+                <input name="name" type="text" aria-describedby="machine-name-help" aria-invalid=${this.name.trim() === "" ? "true" : "false"} .value=${this.name} @input=${(event: InputEvent) => { this.handleNameInput(event); }} placeholder=${this.previousSuggestedName || "Dev Box"} autocomplete="off" />
               </label>
-              <small class="hint">Suggested from the URL. Edit it to use a friendlier sidebar label.</small>
+              <small id="machine-name-help" class=${this.name.trim() === "" ? "field-error" : "hint"}>${this.name.trim() === "" ? "Enter a machine name." : "Suggested from the URL. Edit it to use a friendlier sidebar label."}</small>
               <label>
                 Bearer token <span class="optional">optional</span>
-                <input name="token" type="password" .value=${this.token} @input=${(event: InputEvent) => { this.handleTokenInput(event); }} placeholder="Leave blank if the remote machine does not require one" autocomplete="off" />
+                <input name="token" type="password" aria-describedby="machine-token-help" .value=${this.token} @input=${(event: InputEvent) => { this.handleTokenInput(event); }} placeholder="Leave blank if the remote machine does not require one" autocomplete="off" />
               </label>
-              <small class="hint">Paste only the token value; PI WEB sends it as an Authorization: Bearer header.</small>
+              <small id="machine-token-help" class="hint">If the remote machine requires a token, paste it without the “Bearer” prefix.</small>
             ` : html`<p class="hint intro">After you enter a URL, PI WEB will suggest a machine name and let you add an optional bearer token.</p>`}
           </div>
           <footer>

@@ -11,12 +11,13 @@ import {
   gatewayServerDraftFromConfig,
   machineAccessConfigPatchFromDraft,
   machineAccessDraftFromConfig,
+  reconcileConfigDraft,
   type GatewayServerConfigDraft,
   type MachineAccessConfigDraft,
 } from "./settingsConfigDraft";
 
 function generalDescription(targetLabel: string): TemplateResult {
-  return html`Gateway server fields edit this local gateway. File access and upload defaults edit ${targetLabel}.`;
+  return html`Gateway settings apply to this server. File access and uploads apply to ${targetLabel}.`;
 }
 
 @customElement("settings-general-panel")
@@ -30,6 +31,7 @@ export class SettingsGeneralPanel extends LitElement {
   @property() machineError = "";
   @property() savedMessage = "";
   @property() targetLabel = "selected machine";
+  @property() targetId = "local";
   @property({ attribute: false }) onReload?: () => void | Promise<void>;
   @property({ attribute: false }) onReloadMachine?: () => void | Promise<void>;
   @property({ attribute: false }) onSave?: (config: PiWebConfigValues) => void | Promise<void>;
@@ -39,14 +41,44 @@ export class SettingsGeneralPanel extends LitElement {
   @state() private gatewayLocalError = "";
   @state() private machineLocalError = "";
 
+  private gatewayBaseline = emptyGatewayServerConfigDraft();
+  private machineBaseline = emptyMachineAccessConfigDraft();
+  private gatewaySubmission: { draft: GatewayServerConfigDraft; expected: GatewayServerConfigDraft } | undefined;
+  private machineSubmission: { draft: MachineAccessConfigDraft; expected: MachineAccessConfigDraft } | undefined;
+
+  get hasUnsavedMachineChanges(): boolean {
+    return !draftsEqual(this.machineDraft, this.machineBaseline);
+  }
+
+  discardMachineChanges(): void {
+    this.machineDraft = { ...this.machineBaseline };
+    this.machineLocalError = "";
+  }
+
   protected override willUpdate(changed: PropertyValues<this>): void {
     if (changed.has("configResponse") && this.configResponse !== undefined) {
-      this.gatewayDraft = gatewayServerDraftFromConfig(this.configResponse.config);
-      this.gatewayLocalError = "";
+      const incoming = gatewayServerDraftFromConfig(this.configResponse.config);
+      const submission = this.gatewaySubmission;
+      const acknowledged = submission !== undefined && draftsEqual(incoming, submission.expected);
+      this.gatewayDraft = reconcileConfigDraft(this.gatewayDraft, acknowledged ? submission.draft : this.gatewayBaseline, incoming);
+      this.gatewayBaseline = incoming;
+      if (acknowledged) this.gatewaySubmission = undefined;
     }
-    if (changed.has("machineConfigResponse") && this.machineConfigResponse !== undefined) {
-      this.machineDraft = machineAccessDraftFromConfig(this.machineConfigResponse.config);
+    // Never rebase one machine's edits onto another, including cached panels
+    // whose unavailable transition occurred while they were disconnected.
+    if (changed.has("targetId") || changed.has("targetLabel") || (changed.has("machineConfigResponse") && this.machineConfigResponse === undefined)) {
+      this.machineDraft = emptyMachineAccessConfigDraft();
+      this.machineBaseline = emptyMachineAccessConfigDraft();
+      this.machineSubmission = undefined;
       this.machineLocalError = "";
+    }
+    if ((changed.has("machineConfigResponse") || changed.has("targetId") || changed.has("targetLabel")) && this.machineConfigResponse !== undefined) {
+      const incoming = machineAccessDraftFromConfig(this.machineConfigResponse.config);
+      const submission = this.machineSubmission;
+      const acknowledged = submission !== undefined && draftsEqual(incoming, submission.expected);
+      this.machineDraft = reconcileConfigDraft(this.machineDraft, acknowledged ? submission.draft : this.machineBaseline, incoming);
+      this.machineBaseline = incoming;
+      if (acknowledged) this.machineSubmission = undefined;
     }
   }
 
@@ -55,12 +87,13 @@ export class SettingsGeneralPanel extends LitElement {
       <settings-panel-frame
         heading="General configuration"
         .description=${generalDescription(this.targetLabel)}
-        actionLabel="Reload"
-        .actionDisabled=${this.loading || this.machineLoading}
+        actionLabel="Refresh settings"
+        .actionDisabled=${this.loading || this.machineLoading || this.saving}
         .notices=${this.panelNotices()}
         .onAction=${() => { this.reloadAll(); }}
       >
         <div class="settings-sections">
+          <slot name="appearance"></slot>
           ${this.renderGatewayServerSettings()}
           <settings-restart-card></settings-restart-card>
           ${this.renderSelectedMachineAccessSettings()}
@@ -75,13 +108,13 @@ export class SettingsGeneralPanel extends LitElement {
       <section class="settings-card" aria-label="Gateway server settings">
         <div class="card-heading">
           <h3>Gateway server</h3>
-          <p>Host, port, and allowed hosts are saved in the gateway config. Address changes require the web service to restart before the running server binds to the new address.</p>
+          <p>Save host, port, and allowed hosts on this gateway. Restart the web service to apply host or port changes.</p>
         </div>
-        ${config === undefined && this.loading ? html`<div class="loading-card">Loading gateway configuration…</div>` : html`
+        ${config === undefined ? html`<div class="loading-card">${this.loading ? "Loading gateway configuration…" : "Gateway settings are unavailable. Choose Refresh settings to try again."}</div>` : html`
           <div class="config-path-card">
             <span>Gateway config file</span>
-            <code>${config?.path ?? "Unknown"}</code>
-            <small>${config?.exists === true ? "Existing file" : "This file will be created on save"}</small>
+            <code>${config.path}</code>
+            <small>${config.exists ? "Existing file" : "This file will be created on save"}</small>
           </div>
           <form class="config-form" @submit=${(event: Event) => { void this.saveGatewayConfig(event); }}>
             <label class="field">
@@ -104,20 +137,22 @@ export class SettingsGeneralPanel extends LitElement {
 
             <div class="field">
               <span class="field-heading">
-                <span>Allowed hosts</span>
+                <label for="allowed-hosts-mode">Allowed hosts</label>
                 ${this.renderOverrideBadge("allowedHosts")}
               </span>
-              <select .value=${this.gatewayDraft.allowedHostsMode} @change=${(event: Event) => { this.updateGatewayDraft({ allowedHostsMode: selectValue(event) === "all" ? "all" : "list" }); }}>
+              <select id="allowed-hosts-mode" aria-describedby="allowed-hosts-help" .value=${this.gatewayDraft.allowedHostsMode} @change=${(event: Event) => { this.updateGatewayDraft({ allowedHostsMode: selectValue(event) === "all" ? "all" : "list" }); }}>
                 <option value="list">Only listed hosts</option>
                 <option value="all">Allow every host</option>
               </select>
-              <textarea .value=${this.gatewayDraft.allowedHostsText} ?disabled=${this.gatewayDraft.allowedHostsMode === "all"} rows="4" placeholder="example.local&#10;192.168.1.20" spellcheck="false" @input=${(event: Event) => { this.updateGatewayDraft({ allowedHostsText: textAreaValue(event) }); }}></textarea>
-              <small>Enter one host per line, or choose “Allow every host” to write <code>true</code>.</small>
+              <label for="allowed-hosts-list">Host list</label>
+              <textarea id="allowed-hosts-list" aria-describedby="allowed-hosts-help" .value=${this.gatewayDraft.allowedHostsText} ?disabled=${this.gatewayDraft.allowedHostsMode === "all"} rows="4" placeholder="example.local&#10;192.168.1.20" spellcheck="false" @input=${(event: Event) => { this.updateGatewayDraft({ allowedHostsText: textAreaValue(event) }); }}></textarea>
+              <small id="allowed-hosts-help">Enter one host per line. “Allow every host” disables the host restriction.</small>
             </div>
 
             ${this.renderGatewayEffectiveConfig()}
 
             <footer class="form-actions">
+              ${draftsEqual(this.gatewayDraft, this.gatewayBaseline) ? null : html`<small>Unsaved changes</small>`}
               <button class="primary" ?disabled=${this.loading || this.saving}>${this.saving ? "Saving…" : "Save gateway server config"}</button>
             </footer>
           </form>
@@ -132,10 +167,10 @@ export class SettingsGeneralPanel extends LitElement {
       <section class="settings-card" aria-label="Selected machine file access and upload settings">
         <div class="card-heading">
           <h3>Selected machine file access and uploads</h3>
-          <p>External filesystem roots and upload defaults are saved on ${this.targetLabel}.</p>
+          <p>Save file access and upload defaults on ${this.targetLabel}.</p>
         </div>
         ${this.renderMachineMessages()}
-        ${config === undefined ? html`<div class="loading-card">${this.machineLoading ? "Loading selected-machine file access config…" : "Selected-machine file access config is unavailable. Reload before saving file/upload settings."}</div>` : html`
+        ${config === undefined ? html`<div class="loading-card">${this.machineLoading ? "Loading selected-machine file access config…" : "File access settings are unavailable. Choose Refresh settings to try again."}</div>` : html`
           <div class="config-path-card">
             <span>Selected machine config file</span>
             <code>${config.path}</code>
@@ -169,6 +204,7 @@ export class SettingsGeneralPanel extends LitElement {
             ${this.renderMachineEffectiveConfig()}
 
             <footer class="form-actions">
+              ${draftsEqual(this.machineDraft, this.machineBaseline) ? null : html`<small>Unsaved changes</small>`}
               <button class="primary" ?disabled=${this.machineLoading || this.saving}>${this.saving ? "Saving…" : "Save file/upload config"}</button>
             </footer>
           </form>
@@ -180,7 +216,7 @@ export class SettingsGeneralPanel extends LitElement {
   private panelNotices(): readonly SettingsNotice[] {
     const notices: SettingsNotice[] = [];
     const gatewayError = this.gatewayLocalError || this.error;
-    if (gatewayError !== "") notices.push({ type: "error", title: "Gateway server", content: gatewayError });
+    if (gatewayError !== "") notices.push({ type: "error", title: "Configuration", content: gatewayError });
     if (this.savedMessage !== "") notices.push({ type: "success", content: this.savedMessage });
     return notices;
   }
@@ -188,7 +224,7 @@ export class SettingsGeneralPanel extends LitElement {
   private renderMachineMessages(): TemplateResult | null {
     const error = this.machineLocalError || this.machineError;
     if (error === "") return null;
-    return html`<div class="message error-message">${error}</div>`;
+    return html`<div class="message error-message" role="alert">${error}</div>`;
   }
 
   private renderOverrideBadge(key: keyof PiWebConfigEnvOverrides): TemplateResult | null {
@@ -199,8 +235,9 @@ export class SettingsGeneralPanel extends LitElement {
   private renderGatewayEffectiveConfig(): TemplateResult {
     const effective = this.configResponse?.effectiveConfig ?? {};
     return html`
-      <section class="effective-card" aria-label="Effective gateway configuration summary">
-        <h3>Effective gateway settings after environment overrides</h3>
+      <section class="effective-card" aria-label="Gateway settings after environment overrides">
+        <h3>Gateway settings after overrides</h3>
+        <p>Environment overrides take priority. Host and port apply after the web service restarts; these values do not verify the running address.</p>
         <dl>
           <div><dt>Host</dt><dd>${effective.host ?? html`<span class="muted">127.0.0.1 default</span>`}</dd></div>
           <div><dt>Port</dt><dd>${effective.port ?? html`<span class="muted">8504 default</span>`}</dd></div>
@@ -231,9 +268,18 @@ export class SettingsGeneralPanel extends LitElement {
 
   private async saveGatewayConfig(event: Event): Promise<void> {
     event.preventDefault();
+    if (this.configResponse === undefined || this.loading || this.saving || this.onSave === undefined) return;
     this.gatewayLocalError = "";
     try {
-      await this.onSave?.(gatewayServerConfigFromDraft(this.gatewayDraft, this.configResponse?.config ?? {}));
+      const config = gatewayServerConfigFromDraft(this.gatewayDraft, this.configResponse.config);
+      const submission = { draft: this.gatewayDraft, expected: gatewayServerDraftFromConfig(config) };
+      this.gatewaySubmission = submission;
+      try {
+        await this.onSave(config);
+        await this.updateComplete;
+      } finally {
+        if (this.gatewaySubmission === submission) this.gatewaySubmission = undefined;
+      }
     } catch (error) {
       this.gatewayLocalError = errorMessage(error);
     }
@@ -241,11 +287,21 @@ export class SettingsGeneralPanel extends LitElement {
 
   private async saveMachineAccessConfig(event: Event): Promise<void> {
     event.preventDefault();
+    if (this.machineConfigResponse === undefined || this.machineLoading || this.saving || this.onSaveMachineConfig === undefined) return;
     this.machineLocalError = "";
+    const target = this.targetId;
     try {
-      await this.onSaveMachineConfig?.(machineAccessConfigPatchFromDraft(this.machineDraft));
+      const config = machineAccessConfigPatchFromDraft(this.machineDraft);
+      const submission = { draft: this.machineDraft, expected: machineAccessDraftFromConfig(config) };
+      this.machineSubmission = submission;
+      try {
+        await this.onSaveMachineConfig(config);
+        await this.updateComplete;
+      } finally {
+        if (this.machineSubmission === submission) this.machineSubmission = undefined;
+      }
     } catch (error) {
-      this.machineLocalError = errorMessage(error);
+      if (this.targetId === target) this.machineLocalError = errorMessage(error);
     }
   }
 
@@ -292,7 +348,8 @@ export class SettingsGeneralPanel extends LitElement {
     .effective-card dl > div { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 12px; align-items: baseline; }
     dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
     .muted { color: var(--pi-muted); }
-    .form-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 2px; }
+    .form-actions { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding-top: 2px; }
+    .form-actions small { color: var(--pi-muted); }
     .primary { border-color: var(--pi-accent); background: var(--pi-selection-bg); color: var(--pi-text-bright); }
 
     @media (max-width: 760px) {
@@ -322,6 +379,13 @@ function selectValue(event: Event): string {
 
 function textAreaValue(event: Event): string {
   return event.target instanceof HTMLTextAreaElement ? event.target.value : "";
+}
+
+function draftsEqual<T extends object>(left: T, right: T): boolean {
+  for (const key in left) {
+    if (left[key] !== right[key]) return false;
+  }
+  return true;
 }
 
 function errorMessage(error: unknown): string {

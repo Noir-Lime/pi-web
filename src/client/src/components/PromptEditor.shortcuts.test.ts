@@ -29,6 +29,53 @@ function press(editor: PromptEditor, key: string, modifiers: KeyboardEventInit =
   return event;
 }
 
+describe("composer send behavior", () => {
+  it.each([
+    { preference: "steer" as const, streaming: false, compacting: false, expected: undefined },
+    { preference: "steer" as const, streaming: true, compacting: false, expected: "steer" },
+    { preference: "followUp" as const, streaming: true, compacting: false, expected: "followUp" },
+    { preference: "steer" as const, streaming: true, compacting: true, expected: "followUp" },
+    { preference: "followUp" as const, streaming: false, compacting: true, expected: "followUp" },
+  ])("uses $expected for keyboard while keeping button behavior stable ($preference, streaming=$streaming, compacting=$compacting)", async ({ preference, streaming, compacting, expected }) => {
+    const editor = await mount("mod+enter");
+    editor.defaultStreamingBehavior = preference;
+    editor.canSteer = streaming;
+    editor.isCompacting = compacting;
+    await editor.updateComplete;
+    const highlighted = editor.renderRoot.querySelectorAll(".default-send-action");
+    expect(highlighted).toHaveLength(1);
+    expect(highlighted[0]?.getAttribute("aria-label")).toBe(expected === "steer" ? "Steer current response" : streaming || compacting ? "Queue message" : "Send message");
+    press(editor, "Enter", { ctrlKey: true });
+    if (editor.onSend === undefined) throw new Error("Missing send callback");
+    expect(vi.mocked(editor.onSend).mock.calls[0]?.[1]).toBe(expected);
+    editor.replaceText("Next message");
+    const button = editor.shadowRoot?.querySelector<HTMLButtonElement>(".send-button");
+    expect(button?.getAttribute("aria-label")).toBe(streaming || compacting ? "Queue message" : "Send message");
+    button?.click();
+    expect(editor.onSend).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(editor.onSend).mock.calls[1]?.[1]).toBe(streaming || compacting ? "followUp" : undefined);
+    if (compacting) expect(editor.shadowRoot?.querySelector(".steer-button")).toBeNull();
+  });
+
+  it.each(["steer", "followUp"] as const)("keeps button order and steering action stable when keyboard default is %s", async (preference) => {
+    const editor = await mount("mod+enter");
+    expect(editor.defaultStreamingBehavior).toBe("steer");
+    editor.defaultStreamingBehavior = preference;
+    editor.canSteer = true;
+    await editor.updateComplete;
+    expect([...editor.renderRoot.querySelectorAll<HTMLButtonElement>(".actions button")].map((button) => button.getAttribute("aria-label"))).toEqual(["Queue message", "Steer current response", "Stop current work"]);
+    const steer = editor.shadowRoot?.querySelector<HTMLButtonElement>(".steer-button");
+    steer?.click();
+    expect(editor.onSend).toHaveBeenCalledOnce();
+    if (editor.onSend === undefined) throw new Error("Missing send callback");
+    expect(vi.mocked(editor.onSend).mock.calls[0]?.[1]).toBe("steer");
+    editor.defaultStreamingBehavior = preference === "steer" ? "followUp" : "steer";
+    await editor.updateComplete;
+    expect(editor.renderRoot.querySelector(".default-send-action")?.getAttribute("aria-label")).toBe(preference === "steer" ? "Queue message" : "Steer current response");
+    expect([...editor.renderRoot.querySelectorAll<HTMLButtonElement>(".actions button")].map((button) => button.getAttribute("aria-label"))).toEqual(["Queue message", "Steer current response", "Stop current work"]);
+  });
+});
+
 describe("composer keyboard handling", () => {
   it("inserts newlines with Enter/Shift+Enter and sends with the configured combination", async () => {
     const editor = await mount("mod+enter");

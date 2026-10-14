@@ -320,6 +320,7 @@ describe("session API compatibility", () => {
 
     await expect(sessionsApi.clearQueue({ id: "s /?", cwd: "/repo with spaces" }, "remote /?")).resolves.toEqual({
       sessionId: "s /?",
+      recentlyActiveElsewhere: false,
       isStreaming: true,
       isCompacting: false,
       isBashRunning: false,
@@ -334,6 +335,33 @@ describe("session API compatibility", () => {
     expect(url).toBe("https://pi.example.test/api/machines/remote%20%2F%3F/sessions/s%20%2F%3F/queue/clear");
     expect(init?.method).toBe("POST");
     expect(JSON.parse(requestBody(init))).toEqual({ cwd: "/repo with spaces" });
+  });
+
+  it("serializes queue mutations with their expected snapshot on encoded machine routes", async () => {
+    const fetchMock = stubJsonFetch({ sessionId: "s /?", isStreaming: true, isCompacting: false, isBashRunning: false, pendingMessageCount: 0, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 });
+    const mutation = { action: "toggle" as const, index: 0, expectedQueue: [{ kind: "steer" as const, text: "adjust" }] };
+    await sessionsApi.mutateQueuedMessage({ id: "s /?", cwd: "/repo with spaces" }, mutation, "remote /?");
+    const [url, init] = fetchCall(fetchMock, 0);
+    expect(url).toBe("https://pi.example.test/api/machines/remote%20%2F%3F/sessions/s%20%2F%3F/queue/message");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(requestBody(init))).toEqual({ cwd: "/repo with spaces", ...mutation });
+  });
+
+  it("submits question answers and skips through encoded machine routes with ordinary status responses", async () => {
+    const wireStatus = { sessionId: "s /?", isStreaming: true, isCompacting: false, isBashRunning: false, pendingMessageCount: 0, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 };
+    const fetchMock = stubSequenceFetch([jsonResponse(wireStatus), jsonResponse(wireStatus)]);
+    const ref = { id: "s /?", cwd: "/repo with spaces" };
+    const answers = [{ id: "q1", values: ["pg"] }];
+
+    await expect(sessionsApi.submitAsk(ref, "ask 1", { answers }, "remote /?")).resolves.toMatchObject(wireStatus);
+    await expect(sessionsApi.cancelAsk(ref, "ask 1", "remote /?")).resolves.toMatchObject(wireStatus);
+
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      "https://pi.example.test/api/machines/remote%20%2F%3F/sessions/s%20%2F%3F/ask/submit",
+      "https://pi.example.test/api/machines/remote%20%2F%3F/sessions/s%20%2F%3F/ask/cancel",
+    ]);
+    expect(JSON.parse(requestBody(fetchCall(fetchMock, 0)[1]))).toEqual({ cwd: ref.cwd, askId: "ask 1", answers });
+    expect(JSON.parse(requestBody(fetchCall(fetchMock, 1)[1]))).toEqual({ cwd: ref.cwd, askId: "ask 1" });
   });
 
   it("answers and cancels extension dialogs through encoded machine routes", async () => {
@@ -364,7 +392,7 @@ describe("session API compatibility", () => {
     expect(JSON.parse(requestBody(cancelInit))).toEqual({ cwd: "/repo with spaces", dialogId: "dialog 1" });
   });
 
-  it("posts session tree navigation through an encoded cwd-scoped machine route", async () => {
+  it("posts exact-entry session tree navigation without retainCheckpoint through an encoded machine route", async () => {
     const fetchMock = stubJsonFetch({ cancelled: false, editorText: "edit this" });
     const navigation = { targetId: "entry /?", expectedLeafId: "leaf-1", summary: { mode: "custom" as const, instructions: "focus on tests" } };
 
@@ -375,6 +403,24 @@ describe("session API compatibility", () => {
     expect(url).toBe("https://pi.example.test/api/machines/remote%20%2F%3F/sessions/s%20%2F%3F/tree/navigate");
     expect(init?.method).toBe("POST");
     expect(JSON.parse(requestBody(init))).toEqual({ cwd: "/repo with spaces", ...navigation });
+  });
+
+  it.each([true, false])("serializes retainCheckpoint=%s for session tree navigation", async (retainCheckpoint) => {
+    const fetchMock = stubJsonFetch({ cancelled: false });
+
+    await sessionsApi.navigateTree(
+      { id: "s-1", cwd: "/repo" },
+      { targetId: "entry-1", expectedLeafId: "leaf-1", summary: { mode: "none" }, retainCheckpoint },
+    );
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(JSON.parse(requestBody(fetchCall(fetchMock, 0)[1]))).toEqual({
+      cwd: "/repo",
+      targetId: "entry-1",
+      expectedLeafId: "leaf-1",
+      summary: { mode: "none" },
+      retainCheckpoint,
+    });
   });
 
   it("keeps session tree navigation under a canonical nested deployment base", async () => {
@@ -392,7 +438,7 @@ describe("session API compatibility", () => {
     expect(fetchCall(fetchMock, 0)[0]).toBe("https://pi.example.test/nested/pi-web/api/machines/remote%20%2F%3F/sessions/session%20%2F%3F/tree/navigate");
   });
 
-  it("posts session tree forks through an encoded cwd-scoped machine route", async () => {
+  it("posts exact-entry session tree forks without retainCheckpoint through an encoded machine route", async () => {
     const fetchMock = stubJsonFetch({ cancelled: true });
     const fork = { entryId: "entry /?", expectedLeafId: "leaf-1" };
 
@@ -403,6 +449,23 @@ describe("session API compatibility", () => {
     expect(url).toBe("https://pi.example.test/api/machines/remote%20%2F%3F/sessions/s%20%2F%3F/tree/fork");
     expect(init?.method).toBe("POST");
     expect(JSON.parse(requestBody(init))).toEqual({ cwd: "/repo with spaces", ...fork });
+  });
+
+  it.each([true, false])("serializes retainCheckpoint=%s for session tree forks", async (retainCheckpoint) => {
+    const fetchMock = stubJsonFetch({ cancelled: true });
+
+    await sessionsApi.forkTree(
+      { id: "s-1", cwd: "/repo" },
+      { entryId: "entry-1", expectedLeafId: "leaf-1", retainCheckpoint },
+    );
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(JSON.parse(requestBody(fetchCall(fetchMock, 0)[1]))).toEqual({
+      cwd: "/repo",
+      entryId: "entry-1",
+      expectedLeafId: "leaf-1",
+      retainCheckpoint,
+    });
   });
 
   it("recognizes an old daemon only from the missing tree/fork route response", async () => {
@@ -434,6 +497,52 @@ describe("session API compatibility", () => {
     await expect(request).rejects.not.toBeInstanceOf(SessionTreeForkUnavailableError);
   });
 
+  it("requests reference images in paginated history while preserving reference and legacy inline payloads", async () => {
+    vi.stubEnv("BASE_URL", "./");
+    vi.stubGlobal("document", { baseURI: "https://pi.example.test/nested/pi-web/" });
+    const page = { messages: [{ role: "user", content: [
+      { type: "image", mediaId: "a".repeat(64), mimeType: "image/png", byteSize: 3 },
+      { type: "image", mimeType: "image/png", data: "QUJD" },
+    ] }], start: 5, total: 15 };
+    const fetchMock = stubJsonFetch(page);
+    await expect(sessionsApi.messages({ id: "s /?", cwd: "/repo with spaces" }, { limit: 10, before: 15 }, "remote /?")).resolves.toEqual(page);
+    expect(fetchCall(fetchMock, 0)[0]).toBe("https://pi.example.test/nested/pi-web/api/machines/remote%20%2F%3F/sessions/s%20%2F%3F/messages?cwd=%2Frepo+with+spaces&limit=10&before=15&media=reference");
+  });
+
+  it("reads a consistent transcript snapshot through a nested encoded machine route with cwd and limit", async () => {
+    vi.stubEnv("BASE_URL", "./");
+    vi.stubGlobal("document", { baseURI: "https://pi.example.test/nested/pi-web/" });
+    const page = { messages: [{ role: "user", content: "hello", entryId: "entry-1" }], start: 10, total: 11 };
+    const partial = { role: "assistant", content: [
+      { type: "text", text: "streaming" },
+      { type: "image", mediaId: "b".repeat(64), mimeType: "image/png", byteSize: 3 },
+    ] };
+    const fetchMock = stubJsonFetch({ page, status: dialogStatusWire(), seq: 12, partial });
+
+    await expect(sessionsApi.transcriptSnapshot({ id: "s /?", cwd: "/repo with spaces" }, { limit: 25 }, "remote /?")).resolves.toEqual({
+      page, status: parsedDialogStatus(), seq: 12, partial,
+    });
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [url, init] = fetchCall(fetchMock, 0);
+    expect(url).toBe("https://pi.example.test/nested/pi-web/api/machines/remote%20%2F%3F/sessions/s%20%2F%3F/transcript-snapshot?cwd=%2Frepo+with+spaces&limit=25&media=reference");
+    expect(init?.method ?? "GET").toBe("GET");
+  });
+
+  it.each([undefined, {}])("defaults transcript snapshots to local without an unspecified limit (%j)", async (options) => {
+    const fetchMock = stubJsonFetch({ page: { messages: [], start: 0, total: 0 }, status: dialogStatusWire(), seq: 0, partial: null });
+
+    await sessionsApi.transcriptSnapshot({ id: "s-1", cwd: "/repo" }, options);
+
+    expect(fetchCall(fetchMock, 0)[0]).toBe("https://pi.example.test/api/machines/local/sessions/s-1/transcript-snapshot?cwd=%2Frepo&media=reference");
+  });
+
+  it("rejects an incomplete transcript snapshot instead of returning a partial response", async () => {
+    stubJsonFetch({ page: { messages: [], start: 0, total: 0 }, status: dialogStatusWire(), seq: 0 });
+
+    await expect(sessionsApi.transcriptSnapshot({ id: "s-1", cwd: "/repo" })).rejects.toThrow("Expected field: partial");
+  });
+
   it("reads a session stream snapshot through an encoded machine route with cwd context", async () => {
     const fetchMock = stubJsonFetch({ seq: 12, partial: { role: "assistant", content: [{ type: "text", text: "streaming" }] } });
 
@@ -444,7 +553,7 @@ describe("session API compatibility", () => {
 
     expect(fetchMock).toHaveBeenCalledOnce();
     const [url, init] = fetchCall(fetchMock, 0);
-    expect(url).toBe("https://pi.example.test/api/machines/remote%20%2F%3F/sessions/s%20%2F%3F/stream-snapshot?cwd=%2Frepo+with+spaces");
+    expect(url).toBe("https://pi.example.test/api/machines/remote%20%2F%3F/sessions/s%20%2F%3F/stream-snapshot?cwd=%2Frepo+with+spaces&media=reference");
     expect(init?.method ?? "GET").toBe("GET");
   });
 
@@ -658,9 +767,9 @@ function dialogStatusWire() {
   };
 }
 
-// The parsed status normalizes the wire shape (queuedMessages defaults to []).
+// The parsed status normalizes older wire snapshots without queue/activity fields.
 function parsedDialogStatus() {
-  return { ...dialogStatusWire(), queuedMessages: [] };
+  return { ...dialogStatusWire(), queuedMessages: [], recentlyActiveElsewhere: false };
 }
 
 function piWebConfigResponse(config: PiWebConfigValues) {

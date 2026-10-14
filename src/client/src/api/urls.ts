@@ -1,4 +1,5 @@
 import type { SessionRef } from "../../../shared/apiTypes";
+import { SESSION_MEDIA_MODE } from "../../../shared/sessionMedia";
 import { resolveAppUrl } from "../appUrl";
 
 type SessionLookup = SessionRef | string;
@@ -11,34 +12,40 @@ function sessionCwd(session: SessionLookup): string | undefined {
   return typeof session === "string" ? undefined : session.cwd;
 }
 
-/**
- * Inline base64 length above which history pages return raster images as media
- * references instead (see server `projectBrowserMessageResponse`). About 48 KB
- * of image data: small images stay inline, screenshots load lazily.
- */
-export const MAX_INLINE_MEDIA_BASE64_LENGTH = 65_536;
-
-export function messagePath(session: SessionLookup, options?: { limit?: number; before?: number }, machineId = "local"): string {
+function referenceSessionPath(session: SessionLookup, endpoint: string, options: { limit?: number; before?: number } | undefined, machineId: string): string {
   const params = new URLSearchParams();
   const cwd = sessionCwd(session);
   if (cwd !== undefined && cwd !== "") params.set("cwd", cwd);
   if (options?.limit !== undefined) params.set("limit", String(options.limit));
   if (options?.before !== undefined) params.set("before", String(options.before));
-  params.set("maxInlineMedia", String(MAX_INLINE_MEDIA_BASE64_LENGTH));
-  const query = params.toString();
-  return `api/machines/${encodeURIComponent(machineId)}/sessions/${encodeURIComponent(sessionId(session))}/messages${query === "" ? "" : `?${query}`}`;
+  params.set("media", SESSION_MEDIA_MODE);
+  return `api/machines/${encodeURIComponent(machineId)}/sessions/${encodeURIComponent(sessionId(session))}/${endpoint}?${params.toString()}`;
 }
 
-/**
- * Browser-ready URL for a lazily loaded history image. `messageIndex` is a
- * lookup hint only; the content-hash `mediaId` alone identifies the image.
- */
-export function sessionMediaUrl(session: SessionLookup, mediaId: string, messageIndex: number, machineId = "local"): string {
-  const params = new URLSearchParams();
-  const cwd = sessionCwd(session);
-  if (cwd !== undefined && cwd !== "") params.set("cwd", cwd);
-  params.set("at", String(messageIndex));
-  return resolveAppUrl(`api/machines/${encodeURIComponent(machineId)}/sessions/${encodeURIComponent(sessionId(session))}/media/${encodeURIComponent(mediaId)}?${params.toString()}`);
+export function messagePath(session: SessionLookup, options?: { limit?: number; before?: number }, machineId = "local"): string {
+  return referenceSessionPath(session, "messages", options, machineId);
+}
+
+export function transcriptSnapshotPath(session: SessionRef, options?: { limit?: number }, machineId = "local"): string {
+  return referenceSessionPath(session, "transcript-snapshot", options, machineId);
+}
+
+export function streamSnapshotPath(session: SessionRef, machineId = "local"): string {
+  return referenceSessionPath(session, "stream-snapshot", undefined, machineId);
+}
+
+export function sessionEventsPath(session: SessionRef, machineId = "local"): string {
+  return referenceSessionPath(session, "events", undefined, machineId);
+}
+
+export function sessionMediaPath(session: SessionRef, mediaId: string, machineId = "local"): string {
+  const params = new URLSearchParams({ cwd: session.cwd });
+  return `api/machines/${encodeURIComponent(machineId)}/sessions/${encodeURIComponent(session.id)}/media/${encodeURIComponent(mediaId)}?${params.toString()}`;
+}
+
+/** Browser-ready URL for native image loading, always through the selected machine proxy. */
+export function sessionMediaUrl(session: SessionRef, mediaId: string, machineId = "local"): string {
+  return resolveAppUrl(sessionMediaPath(session, mediaId, machineId));
 }
 
 export function workspaceFileWriteUrl(projectId: string, workspaceId: string, path: string, options?: { createDirs?: boolean; overwrite?: boolean; machineId?: string }): string {
@@ -53,6 +60,8 @@ export interface WorkspaceFilePreviewUrlOptions {
   modifiedAt?: string;
   machineId?: string;
   download?: boolean;
+  /** Explicit user request to display a local image outside the workspace. */
+  showImage?: boolean;
 }
 
 export function workspaceFilePreviewPath(projectId: string, workspaceId: string, path: string, options?: WorkspaceFilePreviewUrlOptions): string {
@@ -60,6 +69,7 @@ export function workspaceFilePreviewPath(projectId: string, workspaceId: string,
   params.set("path", path);
   if (options?.modifiedAt !== undefined) params.set("v", options.modifiedAt);
   if (options?.download === true) params.set("download", "1");
+  if (options?.showImage === true) params.set("showImage", "1");
   const prefix = `api/machines/${encodeURIComponent(options?.machineId ?? "local")}`;
   return `${prefix}/projects/${encodeURIComponent(projectId)}/workspaces/${encodeURIComponent(workspaceId)}/file/preview?${params.toString()}`;
 }
