@@ -165,6 +165,15 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     return this.visibleTreeCache;
   }
 
+  /** Use the candidate tree, not potentially stale rendered rows after a mutation. */
+  automaticSessionCandidates(sessions: SessionInfo[]): SessionInfo[] {
+    return sessionNavigationCandidates(sessions, {
+      collapsed: this.collapsed,
+      expandedAgentParents: this.expandedAgentParents,
+      archivedExpanded: this.archivedExpanded,
+    });
+  }
+
   private agentGroupAttention(rows: readonly SessionRow[], groups: AgentSessionGroups): ReadonlyMap<string, AgentAttention> {
     const cached = this.agentAttentionCache;
     if (cached?.rows === rows && cached.statuses === this.statuses && cached.activities === this.activities
@@ -865,6 +874,24 @@ export function agentSessionGroups(rows: readonly SessionRow[]): AgentSessionGro
  * but never user/unknown children: those remain reachable, with their own toggle.
  * Orphans have no group and remain visible rather than losing their reveal control.
  */
+/** Before the list mounts, groups have their default collapsed state. */
+export function sessionNavigationCandidates(sessions: SessionInfo[], options: {
+  collapsed?: boolean;
+  expandedAgentParents?: ReadonlySet<string>;
+  archivedExpanded?: boolean;
+} = {}): SessionInfo[] {
+  if (options.collapsed === true) return [];
+  const expanded = options.expandedAgentParents ?? new Set<string>();
+  const currentRows = sessionRowsForCurrentTree(sessions);
+  const visibleIds = new Set(visibleAgentSessionRows(currentRows, expanded).map((row) => row.session.id));
+  if (options.archivedExpanded === true) {
+    const currentIds = new Set(currentRows.map((row) => row.session.id));
+    const archivedRows = sessionRows(sessions.filter((session) => session.archived === true && !currentIds.has(session.id)));
+    for (const row of visibleAgentSessionRows(archivedRows, expanded)) visibleIds.add(row.session.id);
+  }
+  return sessions.filter((session) => visibleIds.has(session.id));
+}
+
 export function visibleAgentSessionRows(
   rows: readonly SessionRow[],
   expandedParents: ReadonlySet<string>,

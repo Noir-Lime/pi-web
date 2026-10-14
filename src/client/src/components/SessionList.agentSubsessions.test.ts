@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionInfo } from "../api";
 import * as sessionPaths from "../sessionPaths";
-import { agentChildOffsets, agentSessionGroups, SessionList, sessionRowsForCurrentTree, visibleAgentSessionRows } from "./SessionList";
+import { agentChildOffsets, agentSessionGroups, SessionList, sessionNavigationCandidates, sessionRowsForCurrentTree, visibleAgentSessionRows } from "./SessionList";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -65,6 +65,14 @@ function toolbarButton(list: SessionList, text: string): HTMLButtonElement {
 }
 
 describe("conservative agent child projection", () => {
+  it("uses collapsed group defaults before the navigation list mounts", () => {
+    const parent = session("parent");
+    const agent = child("agent", parent, true);
+    const archived = session("archived", { archived: true });
+    expect(sessionNavigationCandidates([agent, archived, parent])).toEqual([parent]);
+    expect(sessionNavigationCandidates([agent, archived, parent], { collapsed: true })).toEqual([]);
+  });
+
   it("orders agent children before user/unknown siblings while preserving order within groups and roots", () => {
     const parent = session("parent");
     const user = child("user", parent, false);
@@ -127,6 +135,37 @@ describe("conservative agent child projection", () => {
 });
 
 describe("SessionList agent subsession controls", () => {
+  it("offers only visible rows for incidental navigation while allowing explicit reveals", async () => {
+    const parent = session("parent");
+    const agent = child("agent", parent, true);
+    const nested = child("nested", agent, true);
+    const archived = session("archived", { archived: true });
+    const sessions = [nested, agent, parent, archived];
+    const list = await mount(sessions);
+    const candidates = () => list.automaticSessionCandidates(sessions).map((item) => item.id);
+
+    expect(candidates()).toEqual([parent.id]);
+    agentToggle(list, parent.id).click();
+    await settle(list);
+    expect(candidates()).toEqual([agent.id, parent.id]);
+    agentToggle(list, agent.id).click();
+    await settle(list);
+    expect(candidates()).toEqual([nested.id, agent.id, parent.id]);
+    agentToggle(list, parent.id).click();
+    await settle(list);
+    expect(candidates()).toEqual([parent.id]);
+
+    // A deliberate selection still expands all ancestors.
+    list.selected = nested;
+    await settle(list);
+    expect(candidates()).toEqual([nested.id, agent.id, parent.id]);
+    button(list.shadowRoot, ".subheading .section-toggle").click();
+    await settle(list);
+    expect(candidates()).toContain(archived.id);
+    list.collapsed = true;
+    expect(candidates()).toEqual([]);
+  });
+
   it("updates collapsed chips for nested activity, sending, and unread completions", async () => {
     const parent = session("parent");
     const agent = child("agent", parent, true);

@@ -65,6 +65,8 @@ export interface SessionControllerDependencies {
   transcripts?: ChatTranscriptStore;
   notifications?: SessionNotificationSessionBridge;
   navigateToSession?: (session: SessionInfo | undefined, options?: NavigationDestinationOptions) => Promise<boolean>;
+  /** Restrict incidental replacement navigation to rows the user can currently see. */
+  automaticSessionCandidates?: (sessions: SessionInfo[]) => SessionInfo[];
   replacePromptEditorText?: (replacement: PromptEditorTextReplacement) => void | Promise<void>;
   onSelectedSessionReady?: (selection: SelectedSessionReady) => void;
   onModelScopeChanged?: (revision: number) => void;
@@ -139,6 +141,7 @@ export class SessionController {
   private readonly transcripts: ChatTranscriptStore;
   private readonly notifications: SessionNotificationSessionBridge | undefined;
   private readonly navigateToSession: SessionControllerDependencies["navigateToSession"];
+  private readonly automaticSessionCandidates: (sessions: SessionInfo[]) => SessionInfo[];
   private readonly replacePromptEditorText: SessionControllerDependencies["replacePromptEditorText"];
   private readonly onSelectedSessionReady: SessionControllerDependencies["onSelectedSessionReady"];
   private readonly onModelScopeChanged: SessionControllerDependencies["onModelScopeChanged"];
@@ -187,6 +190,7 @@ export class SessionController {
     this.transcripts = deps.transcripts ?? new ChatTranscriptStore();
     this.notifications = deps.notifications;
     this.navigateToSession = deps.navigateToSession;
+    this.automaticSessionCandidates = deps.automaticSessionCandidates ?? ((sessions) => sessions);
     this.replacePromptEditorText = deps.replacePromptEditorText;
     this.onSelectedSessionReady = deps.onSelectedSessionReady;
     this.onModelScopeChanged = deps.onModelScopeChanged;
@@ -233,6 +237,11 @@ export class SessionController {
     if (options?.forgetRememberedSelection === true && cwd !== undefined) this.sessionSelection.forgetWorkspace(this.workspaceSelectionKey(cwd));
     this.clearActiveSession();
     if (options?.updateUrl !== false) this.updateUrl();
+  }
+
+  private automaticReplacementSession(sessions: SessionInfo[]): SessionInfo | undefined {
+    const candidates = this.automaticSessionCandidates(sessions);
+    return candidates.find((session) => session.archived !== true) ?? candidates[0];
   }
 
   private async selectSessionAfterNavigation(session: SessionInfo, expected: NavigationSelection, options?: { updateUrl?: boolean | undefined }): Promise<void> {
@@ -294,7 +303,14 @@ export class SessionController {
         ? pending.session
         : undefined;
     }
-    return selectPreferredSession(sessions, { targetSessionId, latestSessionId: this.sessionSelection.latestSessionId(this.workspaceSelectionKey(cwd)) });
+    const latestSessionId = this.sessionSelection.latestSessionId(this.workspaceSelectionKey(cwd));
+    // Restore a specific requested/remembered session deliberately, but do not
+    // let a missing remembered session turn into an arbitrary hidden fallback.
+    if ((targetSessionId !== undefined && targetSessionId !== "")
+      || (latestSessionId !== undefined && latestSessionId !== "" && sessions.some((session) => session.id === latestSessionId))) {
+      return selectPreferredSession(sessions, { targetSessionId, latestSessionId });
+    }
+    return selectPreferredSession(this.automaticSessionCandidates(sessions));
   }
 
   /** Reusing a selected row must not abandon a join retired by a newer URL. */
@@ -858,7 +874,7 @@ export class SessionController {
       await this.api.archive(session, machineId);
       const state = this.getState();
       const sessions = markSessionArchived(state.sessions, session.id, new Date().toISOString());
-      const selectionChange = selectionAfterArchivingSession(sessions, state.selectedSession?.id, session.id);
+      const selectionChange = selectionAfterArchivingSession(this.automaticSessionCandidates(sessions), state.selectedSession?.id, session.id);
       this.setState({ sessions });
       const expected = this.navigationSelection();
 
@@ -878,7 +894,7 @@ export class SessionController {
       const archivedIds = response.sessionIds !== undefined && response.sessionIds.length > 0 ? response.sessionIds : [session.id];
       const state = this.getState();
       const sessions = markSessionsArchived(state.sessions, archivedIds, new Date().toISOString());
-      const selectionChange = selectionAfterArchivingSessions(sessions, state.selectedSession?.id, archivedIds);
+      const selectionChange = selectionAfterArchivingSessions(this.automaticSessionCandidates(sessions), state.selectedSession?.id, archivedIds);
       this.setState({ sessions });
       const expected = this.navigationSelection();
 
@@ -903,7 +919,7 @@ export class SessionController {
       if (archivedIds.length > 0) {
         const state = this.getState();
         const nextSessions = markSessionsArchived(state.sessions, archivedIds, generatedAt ?? new Date().toISOString());
-        const selectionChange = selectionAfterArchivingSessions(nextSessions, state.selectedSession?.id, archivedIds);
+        const selectionChange = selectionAfterArchivingSessions(this.automaticSessionCandidates(nextSessions), state.selectedSession?.id, archivedIds);
         this.setState({ sessions: nextSessions });
         const expected = this.navigationSelection();
 
@@ -934,7 +950,7 @@ export class SessionController {
         this.setState({ sessions: nextSessions });
         if (state.selectedSession !== undefined && deletedIdSet.has(state.selectedSession.id)) {
           const expected = this.navigationSelection();
-          const next = nextSessions.find((session) => session.archived !== true) ?? nextSessions[0];
+          const next = this.automaticReplacementSession(nextSessions);
           if (next !== undefined) await this.selectSessionAfterNavigation(next, expected);
           else await this.clearSessionAfterNavigation(expected);
         }
@@ -974,11 +990,11 @@ export class SessionController {
       const expected = this.navigationSelection();
 
       if (state.selectedSession !== undefined && deletedIdSet.has(state.selectedSession.id)) {
-        const next = nextSessions.find((session) => session.archived !== true) ?? nextSessions[0];
+        const next = this.automaticReplacementSession(nextSessions);
         if (next !== undefined) await this.selectSessionAfterNavigation(next, expected);
         else await this.clearSessionAfterNavigation(expected);
       } else {
-        const selectionChange = selectionAfterArchivingSessions(nextSessions, state.selectedSession?.id, archivedIds);
+        const selectionChange = selectionAfterArchivingSessions(this.automaticSessionCandidates(nextSessions), state.selectedSession?.id, archivedIds);
         if (selectionChange.type === "select") await this.selectSessionAfterNavigation(selectionChange.session, expected);
         else if (selectionChange.type === "clear") await this.clearSessionAfterNavigation(expected);
       }
@@ -1017,7 +1033,7 @@ export class SessionController {
           if (refreshedSelected !== selectedSession) this.setState({ selectedSession: refreshedSelected });
           return;
         }
-        const next = sessions.find((session) => session.archived !== true) ?? sessions[0];
+        const next = this.automaticReplacementSession(sessions);
         if (next !== undefined) await this.selectSessionAfterNavigation(next, expected);
         else await this.clearSessionAfterNavigation(expected);
       });
@@ -1057,7 +1073,7 @@ export class SessionController {
     });
     const expected = this.navigationSelection();
     if (this.getState().selectedSession?.id !== session.id) return;
-    const next = sessions.find((candidate) => candidate.archived !== true) ?? sessions[0];
+    const next = this.automaticReplacementSession(sessions);
     if (next !== undefined) await this.selectSessionAfterNavigation(next, expected);
     else await this.clearSessionAfterNavigation(expected);
   }

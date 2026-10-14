@@ -11,6 +11,7 @@ import "../MachineList";
 import "../MachineSwitcher";
 import "../ProjectList";
 import "../WorkspaceList";
+import type { SessionList } from "../SessionList";
 import "../SessionList";
 
 export type NavigationFocusTarget = NavigationSection | "chat";
@@ -86,7 +87,12 @@ export class AppNavigationPanel extends LitElement {
   @query("machine-switcher") private machineSwitcher?: KeyboardNavigableSection;
   @query("project-list") private projectList?: KeyboardNavigableSection;
   @query("workspace-list") private workspaceList?: KeyboardNavigableSection;
-  @query("session-list") private sessionList?: KeyboardNavigableSection;
+  @query("session-list") private sessionList?: SessionList;
+
+  automaticSessionCandidates(sessions: SessionInfo[]): SessionInfo[] {
+    if (this.sessionsCollapsed) return [];
+    return this.sessionList?.automaticSessionCandidates(sessions) ?? [];
+  }
 
   async focusSection(section: NavigationSection): Promise<boolean> {
     await this.updateComplete;

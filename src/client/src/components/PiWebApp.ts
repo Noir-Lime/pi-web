@@ -68,7 +68,7 @@ import { canDeleteWorkspace, isWorkspaceDeletionPending, isWorkspaceDeletionRunP
 import "./MachineList";
 import "./ProjectList";
 import "./WorkspaceList";
-import { unreadSessionCount } from "./SessionList";
+import { sessionNavigationCandidates, unreadSessionCount } from "./SessionList";
 import "./SessionCleanupDialog";
 import "./SessionTreeNavigator";
 import "./ChatView";
@@ -200,6 +200,8 @@ export class PiWebApp extends LitElement {
     new SessionStorageSessionSelectionMemory(),
     {
       notifications: this.notifications,
+      automaticSessionCandidates: (sessions) => this.navigationPanel?.automaticSessionCandidates(sessions)
+        ?? sessionNavigationCandidates(sessions, { collapsed: this.navigationSections.isCollapsed("sessions") }),
       navigateToSession: (session, options) => this.navigateToSessionFromController(session, options),
       captureNavigation: () => navigationSelectionFromState(this.state),
       beginNavigationOperation: (scope) => this.beginNavigationOperation(scope),
