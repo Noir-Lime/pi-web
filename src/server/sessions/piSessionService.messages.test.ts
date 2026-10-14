@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PiSessionService } from "./piSessionService.js";
 import { CapturingSessionEventHub, fakeRuntime, fakeSessionManager, runtimeCreator, sessionGateway, sessionRecord, sessionRef, testModelRuntime } from "./piSessionService.testSupport.js";
 
@@ -22,6 +22,57 @@ describe("PiSessionService", () => {
       });
       return { fake, service, events };
     }
+
+    it("streams deltas and activity without rebuilding status until the message boundary", async () => {
+      const { fake, service, events } = messagesService([], { isStreaming: true });
+      try {
+        await service.status(sessionRef("session-1"));
+        const stats = vi.spyOn(fake.session, "getSessionStats");
+        const context = vi.spyOn(fake.session, "getContextUsage");
+        const statusCount = events.globalEvents.filter((event) => event.type === "status.update").length;
+        for (let i = 0; i < 100; i++) {
+          fake.emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "a" } });
+          fake.emit({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: "b" } });
+        }
+        expect(stats).not.toHaveBeenCalled();
+        expect(context).not.toHaveBeenCalled();
+        expect(events.globalEvents.filter((event) => event.type === "status.update")).toHaveLength(statusCount);
+        expect(events.sessionEvents.filter(({ event }) => event.type === "assistant.delta")).toHaveLength(100);
+        expect(events.sessionEvents.filter(({ event }) => event.type === "assistant.thinking.delta")).toHaveLength(100);
+        expect(events.globalEvents).toEqual(expect.arrayContaining([expect.objectContaining({ type: "activity.update" })]));
+
+        fake.emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "done" }] } });
+        expect(stats).toHaveBeenCalledTimes(1);
+        expect(events.globalEvents.filter((event) => event.type === "status.update")).toHaveLength(statusCount + 1);
+      } finally {
+        await service.dispose();
+      }
+    });
+
+    it.each([{ tokens: 100, contextWindow: 1000, percent: 10 }, undefined])("reuses SDK-provided context usage, including %j", async (contextUsage) => {
+      const { fake, service } = messagesService([]);
+      const stats = fake.session.getSessionStats();
+      fake.session.getSessionStats = () => ({ ...stats, contextUsage });
+      const context = vi.spyOn(fake.session, "getContextUsage");
+      try {
+        expect((await service.status(sessionRef("session-1"))).contextUsage).toEqual(contextUsage);
+        expect(context).not.toHaveBeenCalled();
+      } finally {
+        await service.dispose();
+      }
+    });
+
+    it("keeps context usage from older adapters without a stats context field", async () => {
+      const { fake, service } = messagesService([]);
+      const contextUsage = { tokens: 100, contextWindow: 1000, percent: 10 };
+      const context = vi.spyOn(fake.session, "getContextUsage").mockReturnValue(contextUsage);
+      try {
+        expect((await service.status(sessionRef("session-1"))).contextUsage).toEqual(contextUsage);
+        expect(context).toHaveBeenCalled();
+      } finally {
+        await service.dispose();
+      }
+    });
 
     it("projects history and completed events, but leaves streaming deltas and reconnect partials original", async () => {
       const message = { role: "assistant", content: [{ type: "text", text: "<think></think>answer" }] };
