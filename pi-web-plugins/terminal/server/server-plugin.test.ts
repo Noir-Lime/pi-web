@@ -40,6 +40,28 @@ describe.skipIf(process.platform === "win32")("Terminal peer server entry", () =
     await expect(backendRequest(backend, requestContext("terminal.close", { terminalId }))).resolves.toEqual({ closed: true });
   });
 
+  it("pushes scoped active-count changes without polling and detaches on abort", async () => {
+    const service = trackedService();
+    const backend = createTerminalPeer(service);
+    const sent: JsonValue[] = [];
+    const controller = new AbortController();
+    const openChannel = backend.openChannel?.bind(backend);
+    if (openChannel === undefined) throw new Error("Expected Terminal channel contribution");
+    const channel = await openChannel({ ...channelContext(null, sent, controller), operation: "terminal.activity" });
+    expect(sent).toEqual([{ activeCount: 0 }]);
+    const terminal = service.create({ projectId: "project-1", workspaceId: "workspace-1", cwd: process.cwd() });
+    expect(sent.at(-1)).toEqual({ activeCount: 1 });
+    service.create({ projectId: "project-1", workspaceId: "workspace-2", cwd: process.cwd() });
+    expect(sent).toHaveLength(2);
+    service.close({ projectId: "project-1", workspaceId: "workspace-1", cwd: process.cwd() }, terminal.id);
+    expect(sent.at(-1)).toEqual({ activeCount: 0 });
+    controller.abort();
+    await channel.closed;
+    const delivered = sent.length;
+    service.create({ projectId: "project-1", workspaceId: "workspace-1", cwd: process.cwd() });
+    expect(sent).toHaveLength(delivered);
+  });
+
   it("owns command-run control operations within the resolved workspace", async () => {
     const service = trackedService();
     const backend = createTerminalPeer(service);

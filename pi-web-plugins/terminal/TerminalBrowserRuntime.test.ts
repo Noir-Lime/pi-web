@@ -1,262 +1,138 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { JsonValue, PluginPeer, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
+import type { JsonValue, PluginPeer, PluginPeerChannel, PluginPeerChannelClose, PluginPeerChannelOptions, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
 import { TerminalBrowserRuntime } from "./TerminalBrowserRuntime";
 import { InMemoryTerminalSelectionMemory } from "./terminalSelection";
 
 beforeEach(() => { vi.useFakeTimers(); });
-afterEach(() => {
-  vi.clearAllTimers();
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
-});
+afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("Terminal browser runtime", () => {
-  it("owns active-count refresh and badge state for each machine workspace", async () => {
-    let now = 1_000;
-    const request = vi.fn<NonNullable<PluginPeer["request"]>>((operation: string): Promise<JsonValue> => Promise.resolve(operation === "terminal.list" ? [
-      { id: "active", cwd: "/repo", name: "Shell", createdAt: "now", exited: false },
-      { id: "exited", cwd: "/repo", name: "Build", createdAt: "now", exited: true, exitCode: 0 },
-    ] : []));
-    const context = workspaceContext("remote-1", request);
-    let renderRequests = 0;
-    context.host.requestRender = () => { renderRequests += 1; };
-    const runtime = new TerminalBrowserRuntime(new InMemoryTerminalSelectionMemory(), () => now);
-
-    expect(runtime.activeTerminalBadge(context)).toBeUndefined();
-    await vi.waitFor(() => { expect(renderRequests).toBe(1); });
-    expect(runtime.activeTerminalBadge(context)).toBe(1);
-    expect(request.mock.calls[0]?.slice(0, 2)).toEqual(["terminal.list", null]);
-    expect(request.mock.calls[0]?.[2]?.signal).toBeInstanceOf(AbortSignal);
-
-    now += 999;
-    expect(runtime.activeTerminalBadge(context)).toBe(1);
-    expect(request).toHaveBeenCalledOnce();
-    now += 1;
-    runtime.activeTerminalBadge(context);
-    await vi.waitFor(() => { expect(request).toHaveBeenCalledTimes(2); });
-  });
-
-  it("backs off badge refresh failures instead of retrying on every render", async () => {
-    let now = 1_000;
-    const request = vi.fn(() => Promise.reject(new Error("offline")));
-    const context = workspaceContext("remote-1", request);
-    const runtime = new TerminalBrowserRuntime(new InMemoryTerminalSelectionMemory(), () => now);
-
-    runtime.activeTerminalBadge(context);
-    await expect(runtime.refresh(context)).rejects.toThrow("offline");
-    expect(request).toHaveBeenCalledOnce();
-    runtime.activeTerminalBadge(context);
-    await Promise.resolve();
-    expect(request).toHaveBeenCalledOnce();
-
-    now += 5_000;
-    runtime.activeTerminalBadge(context);
-    await vi.waitFor(() => { expect(request).toHaveBeenCalledTimes(2); });
-  });
-
-  it("schedules failed badge recovery without a caller manually reinvoking the badge", async () => {
-    vi.useFakeTimers();
-    let attempt = 0;
-    const request = vi.fn((): Promise<JsonValue> => {
-      attempt += 1;
-      return attempt === 1
-        ? Promise.reject(new Error("offline"))
-        : Promise.resolve([{ id: "active", cwd: "/repo", name: "Shell", createdAt: "now", exited: false }]);
-    });
-    const context = workspaceContext("remote-1", request);
-    const runtime = new TerminalBrowserRuntime(new InMemoryTerminalSelectionMemory());
-
-    await expect(runtime.refresh(context)).rejects.toThrow("offline");
-    expect(runtime.activeTerminalBadge(context)).toBe("!");
-    expect(request).toHaveBeenCalledOnce();
-
-    await vi.advanceTimersByTimeAsync(5_000);
-    await vi.waitFor(() => { expect(request).toHaveBeenCalledTimes(2); });
-    expect(runtime.activeTerminalBadge(context)).toBe(1);
-  });
-
-  it("cancels in-flight refreshes and scheduled badge work when disposed", async () => {
-    let requestSignal: AbortSignal | undefined;
-    const request = vi.fn<NonNullable<PluginPeer["request"]>>((_operation, _input, options): Promise<JsonValue> => new Promise((_resolve, reject) => {
-      const signal = options?.signal;
-      requestSignal = signal;
-      signal?.addEventListener("abort", () => {
-        const reason: unknown = signal.reason;
-        reject(reason instanceof Error ? reason : new Error("Terminal refresh aborted"));
-      }, { once: true });
-    }));
-    const timer = globalThis.setTimeout(() => undefined, 60_000);
-    const setTimer = vi.fn((handler: () => void, timeout: number) => {
-      void handler;
-      void timeout;
-      return timer;
-    });
-    const clearTimer = vi.fn((id: ReturnType<typeof globalThis.setTimeout>) => { globalThis.clearTimeout(id); });
-    const context = workspaceContext("remote-1", request);
-    const runtime = new TerminalBrowserRuntime(new InMemoryTerminalSelectionMemory(), () => 1_000, setTimer, clearTimer);
-    runtime.activeTerminalBadge(context);
-    const refresh = runtime.refresh(context);
-    runtime.updateTerminals(context, [{ id: "active", cwd: "/repo", name: "Shell", createdAt: "now", exited: false }]);
-
-    expect(setTimer).toHaveBeenCalledOnce();
-    runtime.dispose();
-
-    expect(requestSignal?.aborted).toBe(true);
-    expect(clearTimer).toHaveBeenCalledWith(timer);
-    await expect(refresh).rejects.toMatchObject({ name: "AbortError" });
-    expect(runtime.activeTerminalBadge(context)).toBeUndefined();
-    await expect(runtime.refresh(context)).rejects.toMatchObject({ name: "AbortError" });
-  });
-
-  it("polls directly without rendering unchanged counts, including recovery from an error", async () => {
-    const request = vi.fn<NonNullable<PluginPeer["request"]>>().mockResolvedValue([]);
-    const context = workspaceContext("local", request);
+  it("uses one scoped activity channel and zero idle list requests, including while hidden", async () => {
+    const fixture = activityPeer();
+    const context = workspaceContext("local", fixture.request);
+    context.peer = fixture.peer;
     const requestRender = vi.fn();
     context.host.requestRender = requestRender;
     const runtime = new TerminalBrowserRuntime(new InMemoryTerminalSelectionMemory());
-    runtime.activeTerminalBadge(context);
-    await runtime.refresh(context);
-    requestRender.mockClear();
-
-    await vi.advanceTimersByTimeAsync(3_000);
-    expect(request).toHaveBeenCalledTimes(4);
-    expect(requestRender).not.toHaveBeenCalled();
-
-    request.mockRejectedValue(new Error("offline"));
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(runtime.activeTerminalBadge(context)).toBe("!");
-    expect(requestRender).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(requestRender).toHaveBeenCalledTimes(1);
-
-    request.mockResolvedValue([]);
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(requestRender).toHaveBeenCalledTimes(2);
-    expect(runtime.activeTerminalBadge(context)).toBeUndefined();
-  });
-
-  it("preserves failure backoff when a hidden badge is read before becoming visible", async () => {
-    const visibility = { hidden: false };
-    vi.stubGlobal("document", visibility);
-    const request = vi.fn(() => Promise.reject(new Error("offline")));
-    const context = workspaceContext("local", request);
-    const runtime = new TerminalBrowserRuntime(new InMemoryTerminalSelectionMemory());
-    runtime.activeTerminalBadge(context);
-    await expect(runtime.refresh(context)).rejects.toThrow("offline");
-    visibility.hidden = true;
-    runtime.activeTerminalBadge(context);
-    visibility.hidden = false;
-    await vi.advanceTimersByTimeAsync(4_999);
-    expect(request).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not start polling from passive updates or refreshes", async () => {
-    const request = vi.fn((): Promise<JsonValue> => Promise.resolve([]));
-    const context = workspaceContext("local", request);
-    const runtime = new TerminalBrowserRuntime(new InMemoryTerminalSelectionMemory());
-    await runtime.refresh(context);
-    runtime.updateTerminals(context, []);
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(request).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it.each(["success", "failure"])("does not rearm a stale workspace after in-flight %s", async (outcome) => {
-    let complete!: (value: JsonValue) => void;
-    let fail!: (error: Error) => void;
-    const oldRequest = vi.fn(() => new Promise<JsonValue>((resolve, reject) => { complete = resolve; fail = reject; }));
-    const nextRequest = vi.fn((): Promise<JsonValue> => Promise.resolve([]));
-    const runtime = new TerminalBrowserRuntime(new InMemoryTerminalSelectionMemory());
-    runtime.activeTerminalBadge(workspaceContext("local", oldRequest));
-    runtime.activeTerminalBadge(workspaceContext("remote", nextRequest));
-    if (outcome === "success") complete([]);
-    else fail(new Error("offline"));
-    await vi.advanceTimersByTimeAsync(3_000);
-    expect(oldRequest).toHaveBeenCalledOnce();
-    expect(nextRequest).toHaveBeenCalledTimes(4);
-    runtime.dispose();
-    await vi.advanceTimersByTimeAsync(3_000);
-    expect(nextRequest).toHaveBeenCalledTimes(4);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it.each(["success", "failure"])("ignores late in-flight %s after permanent disposal", async (outcome) => {
-    let complete!: (value: JsonValue) => void;
-    let fail!: (error: Error) => void;
-    const request = vi.fn<NonNullable<PluginPeer["request"]>>(() => new Promise<JsonValue>((resolve, reject) => {
-      complete = resolve;
-      fail = reject;
-    }));
-    const context = workspaceContext("local", request);
-    const requestRender = vi.fn();
-    context.host.requestRender = requestRender;
-    const runtime = new TerminalBrowserRuntime(new InMemoryTerminalSelectionMemory());
-    runtime.activeTerminalBadge(context);
-    const invalidation = runtime.invalidate(context);
-    const settled = outcome === "failure"
-      ? expect(invalidation).rejects.toThrow("offline")
-      : expect(invalidation).resolves.toBeUndefined();
-
-    runtime.dispose();
-    runtime.dispose();
-    expect(request.mock.calls[0]?.[2]?.signal?.aborted).toBe(true);
-    if (outcome === "success") complete([]);
-    else fail(new Error("offline"));
-    await settled;
-    runtime.updateTerminals(context, []);
-    expect(runtime.activeTerminalBadge(context)).toBeUndefined();
-    await expect(runtime.refresh(context)).rejects.toMatchObject({ name: "AbortError" });
-    await expect(runtime.invalidate(context)).rejects.toMatchObject({ name: "AbortError" });
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(requestRender).not.toHaveBeenCalled();
-    expect(request).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("pauses requests while hidden and stops a retained activation after navigation", async () => {
-    const location = { href: "https://example.test/?workspace=first" };
-    const visibility = { hidden: false };
-    vi.stubGlobal("window", { location });
-    vi.stubGlobal("document", visibility);
-    const request = vi.fn((): Promise<JsonValue> => Promise.resolve([]));
-    const context = workspaceContext("local", request);
-    const runtime = new TerminalBrowserRuntime(new InMemoryTerminalSelectionMemory());
-    runtime.activeTerminalBadge(context);
-    await runtime.refresh(context);
-    visibility.hidden = true;
-    await vi.advanceTimersByTimeAsync(3_000);
-    expect(request).toHaveBeenCalledOnce();
-    visibility.hidden = false;
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(request).toHaveBeenCalledTimes(2);
-    location.href = "https://example.test/?workspace=second";
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(vi.getTimerCount()).toBe(0);
     runtime.activeTerminalBadge(context);
     await vi.advanceTimersByTimeAsync(0);
-    expect(request).toHaveBeenCalledTimes(3);
+    expect(fixture.openChannel).toHaveBeenCalledOnce();
+    expect(fixture.openChannel.mock.calls[0]?.slice(0, 2)).toEqual(["terminal.activity", null]);
+    const connection = fixture.connections[0];
+    if (connection === undefined) throw new Error("Expected activity connection");
+    connection.options.onData({ activeCount: 2 });
+    expect(runtime.activeTerminalBadge(context)).toBe(2);
+    const renders = requestRender.mock.calls.length;
+    connection.options.onData({ activeCount: 2 });
+    expect(requestRender).toHaveBeenCalledTimes(renders);
+    vi.stubGlobal("document", { hidden: true });
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    expect(fixture.request).not.toHaveBeenCalled();
+    expect(fixture.openChannel).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+    connection.options.onData({ activeCount: 0 });
+    expect(runtime.activeTerminalBadge(context)).toBeUndefined();
+    runtime.dispose();
+    expect(connection.options.signal?.aborted).toBe(true);
+    expect(connection.close).toHaveBeenCalledOnce();
+  });
+
+  it("backs off failed opens and reconnects a closed activity channel without polling", async () => {
+    const fixture = activityPeer();
+    fixture.openChannel.mockRejectedValueOnce(new Error("offline"));
+    const context = workspaceContext("local", fixture.request);
+    context.peer = fixture.peer;
+    const runtime = new TerminalBrowserRuntime();
+    runtime.activeTerminalBadge(context);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runtime.activeTerminalBadge(context)).toBe("!");
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(fixture.openChannel).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fixture.openChannel).toHaveBeenCalledTimes(2);
+    const connection = fixture.connections[0];
+    if (connection === undefined) throw new Error("Expected activity connection");
+    expect(runtime.activeTerminalBadge(context)).toBeUndefined();
+    connection.finish({ code: 1006, reason: "offline", wasClean: false });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runtime.activeTerminalBadge(context)).toBe("!");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(fixture.openChannel).toHaveBeenCalledTimes(3);
+    expect(fixture.request).not.toHaveBeenCalled();
+    runtime.dispose();
+  });
+
+  it("cancels the previous workspace subscription and ignores its late data", async () => {
+    const first = activityPeer();
+    const next = activityPeer();
+    const context = workspaceContext("local", first.request);
+    context.peer = first.peer;
+    const other = workspaceContext("remote", next.request);
+    other.peer = next.peer;
+    const runtime = new TerminalBrowserRuntime();
+    runtime.activeTerminalBadge(context);
+    await vi.advanceTimersByTimeAsync(0);
+    runtime.activeTerminalBadge(other);
+    await vi.advanceTimersByTimeAsync(0);
+    const stale = first.connections[0];
+    if (stale === undefined) throw new Error("Expected old activity connection");
+    expect(stale.options.signal?.aborted).toBe(true);
+    expect(stale.close).toHaveBeenCalledOnce();
+    stale.options.onData({ activeCount: 99 });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(runtime.activeTerminalBadge(other)).toBeUndefined();
+    expect(first.openChannel).toHaveBeenCalledOnce();
+    expect(next.openChannel).toHaveBeenCalledOnce();
+    runtime.dispose();
+  });
+
+  it("cancels a pending open and closes its late channel after disposal", async () => {
+    const fixture = activityPeer();
+    let accept!: (channel: PluginPeerChannel) => void;
+    fixture.openChannel.mockImplementationOnce(() => new Promise((resolve) => { accept = resolve; }));
+    const context = workspaceContext("local", fixture.request);
+    context.peer = fixture.peer;
+    const runtime = new TerminalBrowserRuntime();
+    runtime.activeTerminalBadge(context);
+    await vi.advanceTimersByTimeAsync(0);
+    runtime.dispose();
+    const channel = { closed: new Promise<PluginPeerChannelClose>(() => undefined), send: vi.fn(), close: vi.fn() };
+    accept(channel);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(channel.close).toHaveBeenCalledOnce();
+    expect(fixture.openChannel.mock.calls[0]?.[2].signal?.aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not subscribe from passive updates or explicit list refreshes", async () => {
+    const fixture = activityPeer();
+    fixture.request.mockResolvedValue([]);
+    const context = workspaceContext("local", fixture.request);
+    context.peer = fixture.peer;
+    const runtime = new TerminalBrowserRuntime();
+    await runtime.refresh(context);
+    runtime.updateTerminals(context, []);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(fixture.request).toHaveBeenCalledOnce();
+    expect(fixture.openChannel).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+    runtime.dispose();
   });
 
   it("keeps selection in plugin-owned memory and publishes canonical navigation first", () => {
     const memory = new InMemoryTerminalSelectionMemory();
     const runtime = new TerminalBrowserRuntime(memory);
-    const rememberedAtPublication: (string | undefined)[] = [];
+    const remembered: (string | undefined)[] = [];
     const set = vi.fn();
     const context = workspaceContext("local", vi.fn(), { set });
-    set.mockImplementation(() => { rememberedAtPublication.push(memory.latestTerminalId(runtime.selectionScope(context))); });
-
+    set.mockImplementation(() => { remembered.push(memory.latestTerminalId(runtime.selectionScope(context))); });
     runtime.selectTerminal(context, "terminal-2");
-
-    expect(rememberedAtPublication).toEqual([undefined]);
+    expect(remembered).toEqual([undefined]);
     expect(memory.latestTerminalId(runtime.selectionScope(context))).toBe("terminal-2");
     expect(set).toHaveBeenCalledWith("terminal", "terminal-2", undefined);
     expect(runtime.selectedTerminalId(context)).toBe("terminal-2");
-
     runtime.selectTerminal(context, undefined, { replace: true });
-    expect(rememberedAtPublication).toEqual([undefined, "terminal-2"]);
+    expect(remembered).toEqual([undefined, "terminal-2"]);
     expect(memory.latestTerminalId(runtime.selectionScope(context))).toBeUndefined();
     expect(set).toHaveBeenLastCalledWith("terminal", undefined, { replace: true });
   });
@@ -264,94 +140,71 @@ describe("Terminal browser runtime", () => {
   it("does not update plugin selection when the host rejects stale navigation", () => {
     const memory = new InMemoryTerminalSelectionMemory();
     const runtime = new TerminalBrowserRuntime(memory);
-    const requestRender = vi.fn();
     const context = workspaceContext("local", vi.fn(), { set: vi.fn(() => false) });
+    const requestRender = vi.fn();
     context.host.requestRender = requestRender;
     memory.rememberTerminal(runtime.selectionScope(context), "terminal-old");
-
     expect(runtime.selectTerminal(context, "terminal-stale")).toBe(false);
-
     expect(memory.latestTerminalId(runtime.selectionScope(context))).toBe("terminal-old");
     expect(requestRender).not.toHaveBeenCalled();
   });
 
-  it("separates authoritative runtime scope from legacy path-keyed selection", () => {
-    const runtime = new TerminalBrowserRuntime(new InMemoryTerminalSelectionMemory());
+  it("separates authoritative scope from legacy path-keyed selection and moved paths", () => {
+    const runtime = new TerminalBrowserRuntime();
     const first = workspaceContext("local", vi.fn());
-    const originalSecond = workspaceContext("local", vi.fn());
-    const second: WorkspacePanelContext = {
-      ...originalSecond,
-      workspace: { ...originalSecond.workspace, id: "workspace-2", projectId: "project-2" },
-    };
-
+    const second = { ...first, workspace: { ...first.workspace, id: "workspace-2", projectId: "project-2" } };
     expect(runtime.selectionScope(first)).toBe(runtime.selectionScope(second));
     expect(runtime.workspaceScope(first)).not.toBe(runtime.workspaceScope(second));
-  });
-
-  it("changes authoritative runtime scope when a workspace keeps its id but moves path", () => {
-    const runtime = new TerminalBrowserRuntime(new InMemoryTerminalSelectionMemory());
-    const first = workspaceContext("local", vi.fn());
-    const moved: WorkspacePanelContext = {
-      ...first,
-      workspace: { ...first.workspace, path: "/repo-moved" },
-    };
-
-    expect(runtime.workspaceScope(first)).not.toBe(runtime.workspaceScope(moved));
+    expect(runtime.workspaceScope(first)).not.toBe(runtime.workspaceScope({ ...first, workspace: { ...first.workspace, path: "/repo-moved" } }));
   });
 
   it("requests a render after invalidation when the badge count is unchanged", async () => {
-    const request = vi.fn((): Promise<JsonValue> => Promise.resolve([
-      { id: "active", cwd: "/repo", name: "Shell", createdAt: "now", exited: false },
-    ]));
+    const request = vi.fn((): Promise<JsonValue> => Promise.resolve([]));
     const context = workspaceContext("local", request);
+    const runtime = new TerminalBrowserRuntime();
     const requestRender = vi.fn();
     context.host.requestRender = requestRender;
-    const runtime = new TerminalBrowserRuntime(new InMemoryTerminalSelectionMemory());
-
     await runtime.refresh(context);
-    const rendersAfterRefresh = requestRender.mock.calls.length;
+    const renders = requestRender.mock.calls.length;
     await runtime.invalidate(context);
-
-    expect(requestRender).toHaveBeenCalledTimes(rendersAfterRefresh + 1);
+    expect(requestRender).toHaveBeenCalledTimes(renders + 1);
   });
 
-  it("prefers restored aliased navigation over remembered selection", () => {
-    const memory = new InMemoryTerminalSelectionMemory();
-    const runtime = new TerminalBrowserRuntime(memory);
-    const context = workspaceContext("remote-1", vi.fn(), { query: { terminal: "deep-link" } });
-    memory.rememberTerminal(runtime.selectionScope(context), "remembered");
-
+  it("prefers restored navigation over remembered selection and fails closed without a peer", async () => {
+    const runtime = new TerminalBrowserRuntime(new InMemoryTerminalSelectionMemory());
+    const context = workspaceContext("remote", vi.fn(), { query: { terminal: "deep-link" } });
+    runtime.selection.rememberTerminal(runtime.selectionScope(context), "remembered");
     expect(runtime.selectedTerminalId(context)).toBe("deep-link");
-  });
-
-  it("fails closed when the required peer is absent", async () => {
-    const runtime = new TerminalBrowserRuntime();
-    const context = workspaceContext("local", vi.fn());
     Reflect.deleteProperty(context, "peer");
-
     await expect(runtime.refresh(context)).rejects.toThrow("Required Terminal peer is unavailable");
   });
 });
 
-function workspaceContext(
-  machineId: string,
-  request: NonNullable<PluginPeer["request"]>,
-  navigation: Partial<NonNullable<WorkspacePanelContext["navigation"]>> = {},
-): WorkspacePanelContext {
+function activityPeer() {
+  const connections: { options: PluginPeerChannelOptions; channel: PluginPeerChannel; close: ReturnType<typeof vi.fn>; finish: (close: PluginPeerChannelClose) => void }[] = [];
+  const request = vi.fn<NonNullable<PluginPeer["request"]>>();
+  const openChannel = vi.fn<NonNullable<PluginPeer["openChannel"]>>((_operation, _input, options) => {
+    let finish!: (close: PluginPeerChannelClose) => void;
+    const close = vi.fn(() => { finish({ code: 1000, reason: "closed", wasClean: true }); });
+    const channel: PluginPeerChannel = {
+      closed: new Promise((resolve) => { finish = resolve; }), send: vi.fn(), close,
+    };
+    connections.push({ options, channel, close, finish });
+    options.onData({ activeCount: 0 });
+    return Promise.resolve(channel);
+  });
+  return { connections, request, openChannel, peer: { request, openChannel } };
+}
+
+function workspaceContext(machineId: string, request: NonNullable<PluginPeer["request"]>, navigation: Partial<NonNullable<WorkspacePanelContext["navigation"]>> = {}): WorkspacePanelContext {
   return {
     navigate: () => Promise.resolve(),
     machine: { id: machineId, name: machineId, kind: machineId === "local" ? "local" : "remote" },
     workspace: { id: "workspace-1", projectId: "project-1", path: "/repo", label: "main", isMain: true },
     files: { readFile: vi.fn(), listFiles: vi.fn(), writeFile: vi.fn(), deleteFile: vi.fn(), moveFile: vi.fn() },
-    peer: { request },
-    host: { requestRender: vi.fn() },
+    peer: { request }, host: { requestRender: vi.fn() },
     prompt: { insertText: vi.fn(), getText: vi.fn(() => ""), getSelection: vi.fn(() => null) },
     terminal: { open: vi.fn(), runCommand: vi.fn() },
-    navigation: {
-      version: 1,
-      contributionId: "pi-web.terminal:workspace.terminal",
-      query: navigation.query ?? {},
-      set: navigation.set ?? vi.fn(),
-    },
+    navigation: { version: 1, contributionId: "pi-web.terminal:workspace.terminal", query: navigation.query ?? {}, set: navigation.set ?? vi.fn() },
   };
 }

@@ -1,8 +1,7 @@
-import type { WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
+import type { PluginPeerChannel, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
 import { SessionStorageTerminalSelectionMemory, terminalSelectionScope, type TerminalSelectionMemory } from "./terminalSelection";
 import { TerminalPeerClient, type TerminalInfo } from "./terminalProtocol";
 
-const ACTIVE_TERMINAL_REFRESH_MS = 1_000;
 const ACTIVE_TERMINAL_FAILURE_RETRY_MS = 5_000;
 type TimerId = ReturnType<typeof globalThis.setTimeout>;
 type SetTimer = (handler: () => void, timeout: number) => TimerId;
@@ -11,11 +10,11 @@ type ClearTimer = (timer: TimerId) => void;
 interface WorkspaceRuntimeState {
   activeCount?: number;
   refreshFailed: boolean;
-  refreshedAt: number;
   retryAt: number;
   refresh: Promise<void> | undefined;
   refreshController: AbortController | undefined;
-  wakeAt: number;
+  watchController: AbortController | undefined;
+  channel: PluginPeerChannel | undefined;
   wakeTimer: TimerId | undefined;
   requestRender: () => void;
 }
@@ -24,7 +23,7 @@ interface WorkspaceRuntimeState {
 export class TerminalBrowserRuntime {
   private readonly workspaces = new Map<string, WorkspaceRuntimeState>();
   private disposed = false;
-  private badgeTarget: { state: WorkspaceRuntimeState; context: WorkspacePanelContext; url: string | undefined } | undefined;
+  private badgeTarget: { state: WorkspaceRuntimeState; context: WorkspacePanelContext } | undefined;
 
   constructor(
     readonly selection: TerminalSelectionMemory = new SessionStorageTerminalSelectionMemory(),
@@ -37,14 +36,10 @@ export class TerminalBrowserRuntime {
     if (this.disposed) return undefined;
     const state = this.workspaceState(context);
     if (this.badgeTarget?.state !== state) this.resetBadgePolling();
-    this.badgeTarget = { state, context, url: browserUrl() };
-    const now = this.now();
-    if (typeof document !== "undefined" && document.hidden) {
-      this.scheduleBadgeWake(state, now + ACTIVE_TERMINAL_REFRESH_MS);
-    } else if (now >= state.retryAt && now - state.refreshedAt >= ACTIVE_TERMINAL_REFRESH_MS) {
-      void this.refresh(context).catch(() => undefined);
-    } else {
-      this.scheduleBadgeWake(state, Math.max(state.retryAt, state.refreshedAt + ACTIVE_TERMINAL_REFRESH_MS));
+    this.badgeTarget = { state, context };
+    if (state.watchController === undefined) {
+      if (this.now() >= state.retryAt) this.watchActiveCount(context, state);
+      else this.scheduleBadgeRetry(state);
     }
     if (state.refreshFailed) return "!";
     return state.activeCount === undefined || state.activeCount === 0 ? undefined : state.activeCount;
@@ -52,14 +47,10 @@ export class TerminalBrowserRuntime {
 
   async invalidate(context: WorkspacePanelContext): Promise<void> {
     this.requireActive();
-    const state = this.workspaceState(context);
-    state.refreshedAt = 0;
     try {
       await this.refresh(context);
     } finally {
       // Route-only history restoration does not otherwise mutate app state.
-      // Always render so a mounted panel observes the restored query even when
-      // the active-terminal badge count stayed the same.
       if (!this.disposed) context.host.requestRender();
     }
   }
@@ -77,8 +68,6 @@ export class TerminalBrowserRuntime {
       if (this.disposed || controller.signal.aborted) throw error;
       const changed = !state.refreshFailed;
       state.refreshFailed = true;
-      state.retryAt = this.now() + ACTIVE_TERMINAL_FAILURE_RETRY_MS;
-      this.scheduleBadgeWake(state, state.retryAt);
       if (changed) state.requestRender();
       throw error;
     }).finally(() => {
@@ -95,14 +84,57 @@ export class TerminalBrowserRuntime {
   updateTerminals(context: WorkspacePanelContext, terminals: readonly TerminalInfo[]): void {
     if (this.disposed) return;
     const state = this.workspaceState(context);
-    const activeCount = terminals.reduce((count, terminal) => count + (terminal.exited ? 0 : 1), 0);
+    this.updateActiveCount(state, terminals.reduce((count, terminal) => count + (terminal.exited ? 0 : 1), 0));
+  }
+
+  private updateActiveCount(state: WorkspaceRuntimeState, activeCount: number): void {
     const changed = state.activeCount !== activeCount || state.refreshFailed;
     state.activeCount = activeCount;
     state.refreshFailed = false;
-    state.refreshedAt = this.now();
-    state.retryAt = 0;
-    this.scheduleBadgeWake(state, state.refreshedAt + ACTIVE_TERMINAL_REFRESH_MS);
     if (changed) state.requestRender();
+  }
+
+  private watchActiveCount(context: WorkspacePanelContext, state: WorkspaceRuntimeState): void {
+    const controller = new AbortController();
+    state.watchController = controller;
+    const failed = (): void => {
+      if (controller.signal.aborted || this.disposed || this.badgeTarget?.state !== state) return;
+      state.watchController = undefined;
+      state.channel = undefined;
+      controller.abort();
+      const changed = !state.refreshFailed;
+      state.refreshFailed = true;
+      state.retryAt = this.now() + ACTIVE_TERMINAL_FAILURE_RETRY_MS;
+      this.scheduleBadgeRetry(state);
+      if (changed) state.requestRender();
+    };
+    // One scoped channel publishes a snapshot and changes. Idle badges never
+    // issue terminal.list requests or repeat workspace/Git authority discovery.
+    void Promise.resolve().then(async () => {
+      if (context.peer === undefined) throw new Error("Required Terminal peer is unavailable");
+      return new TerminalPeerClient(context.peer).watchActiveCount((count) => {
+        if (!controller.signal.aborted && !this.disposed && this.badgeTarget?.state === state) {
+          this.updateActiveCount(state, count);
+        }
+      }, controller.signal);
+    }).then((channel) => {
+      if (controller.signal.aborted || this.disposed || this.badgeTarget?.state !== state) {
+        channel.close("Terminal badge workspace changed");
+        return;
+      }
+      state.channel = channel;
+      void channel.closed.then(failed, failed);
+    }).catch(failed);
+  }
+
+  private scheduleBadgeRetry(state: WorkspaceRuntimeState): void {
+    if (this.badgeTarget?.state !== state || state.wakeTimer !== undefined) return;
+    state.wakeTimer = this.setTimer(() => {
+      state.wakeTimer = undefined;
+      const target = this.badgeTarget;
+      if (this.disposed || target?.state !== state || state.watchController !== undefined) return;
+      this.watchActiveCount(target.context, state);
+    }, Math.max(0, state.retryAt - this.now()));
   }
 
   workspaceScope(context: WorkspacePanelContext): string {
@@ -110,8 +142,6 @@ export class TerminalBrowserRuntime {
   }
 
   selectionScope(context: WorkspacePanelContext): string {
-    // Preserve the legacy persisted-selection key while keeping live browser
-    // state and channel ownership scoped by authoritative workspace identity.
     return terminalSelectionScope(context.machine.id, context.workspace.path);
   }
 
@@ -128,9 +158,6 @@ export class TerminalBrowserRuntime {
   }
 
   selectTerminal(context: WorkspacePanelContext, terminalId: string | undefined, options?: { replace?: boolean | undefined }): boolean {
-    // WorkspacePanelNavigationV1 is void-returning for portable plugins. The
-    // PI WEB host returns false internally when a retained context is stale;
-    // legacy/third-party undefined results remain accepted.
     const navigationResult: unknown = context.navigation?.set("terminal", terminalId, options);
     if (navigationResult === false) return false;
     const scope = this.selectionScope(context);
@@ -148,20 +175,19 @@ export class TerminalBrowserRuntime {
     if (this.disposed) return;
     this.disposed = true;
     this.resetBadgePolling();
-    for (const state of this.workspaces.values()) {
-      state.refreshController?.abort(new DOMException("Terminal browser runtime disposed", "AbortError"));
-      state.refreshController = undefined;
-    }
+    for (const state of this.workspaces.values()) state.refreshController?.abort(new DOMException("Terminal browser runtime disposed", "AbortError"));
     this.workspaces.clear();
   }
 
-  // Changing the badge target stops polling, not the activation's lifetime.
   private resetBadgePolling(): void {
     this.badgeTarget = undefined;
     for (const state of this.workspaces.values()) {
       if (state.wakeTimer !== undefined) this.clearTimer(state.wakeTimer);
       state.wakeTimer = undefined;
-      state.wakeAt = 0;
+      state.watchController?.abort();
+      state.watchController = undefined;
+      state.channel?.close("Terminal badge workspace changed");
+      state.channel = undefined;
     }
   }
 
@@ -177,51 +203,13 @@ export class TerminalBrowserRuntime {
       return existing;
     }
     const state: WorkspaceRuntimeState = {
-      refreshFailed: false,
-      refreshedAt: 0,
-      retryAt: 0,
-      refresh: undefined,
-      refreshController: undefined,
-      wakeAt: 0,
-      wakeTimer: undefined,
+      refreshFailed: false, retryAt: 0, refresh: undefined, refreshController: undefined,
+      watchController: undefined, channel: undefined, wakeTimer: undefined,
       requestRender: () => { context.host.requestRender(); },
     };
     this.workspaces.set(key, state);
     return state;
   }
-
-  private scheduleBadgeWake(state: WorkspaceRuntimeState, wakeAt: number): void {
-    if (this.badgeTarget?.state !== state || !Number.isFinite(wakeAt)) return;
-    if (state.wakeTimer !== undefined && state.wakeAt === wakeAt) return;
-    if (state.wakeTimer !== undefined) this.clearTimer(state.wakeTimer);
-    state.wakeAt = wakeAt;
-    state.wakeTimer = this.setTimer(() => {
-      state.wakeTimer = undefined;
-      state.wakeAt = 0;
-      const target = this.badgeTarget;
-      if (target?.state !== state) return;
-      // Host contexts contain state snapshots, and activations can outlive a
-      // machine/workspace switch. Only a fresh badge read renews the URL scope.
-      if (target.url !== browserUrl()) {
-        this.resetBadgePolling();
-        return;
-      }
-      if (typeof document !== "undefined" && document.hidden) {
-        this.scheduleBadgeWake(state, this.now() + ACTIVE_TERMINAL_REFRESH_MS);
-        return;
-      }
-      const nextRefreshAt = Math.max(state.retryAt, state.refreshedAt + ACTIVE_TERMINAL_REFRESH_MS);
-      if (this.now() < nextRefreshAt) {
-        this.scheduleBadgeWake(state, nextRefreshAt);
-        return;
-      }
-      void this.refresh(target.context).catch(() => undefined);
-    }, Math.max(0, wakeAt - this.now()));
-  }
-}
-
-function browserUrl(): string | undefined {
-  return typeof window === "undefined" ? undefined : window.location.href;
 }
 
 function navigationValue(context: WorkspacePanelContext, key: string): string | undefined {

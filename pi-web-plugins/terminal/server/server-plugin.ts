@@ -158,6 +158,39 @@ function openTerminalChannel(
   context: ServerPluginPeerChannelOpenContext,
   activationContext?: Pick<ServerPluginActivationContext, "logger">,
 ): ServerPluginPeerChannel {
+  if (context.operation === "terminal.activity") {
+    throwIfAborted(context.signal);
+    requireNullishInput(context.input, context.operation);
+    const scope = terminalScope(context);
+    let finish = (): void => undefined;
+    const completed = new Promise<void>((resolve) => { finish = resolve; });
+    let detach = (): void => undefined;
+    let opening = true;
+    let closed = false;
+    const close = (): void => {
+      if (closed) return;
+      closed = true;
+      context.signal.removeEventListener("abort", close);
+      detach();
+      finish();
+    };
+    detach = service.subscribeActiveCount(scope, (activeCount) => {
+      try { context.send({ activeCount }); }
+      catch (error) {
+        if (opening) throw error;
+        close();
+        activationContext?.logger.error("Terminal activity output failed", { message: boundedErrorMessage(error) });
+      }
+    });
+    opening = false;
+    if (context.signal.aborted) close();
+    else context.signal.addEventListener("abort", close, { once: true });
+    return Object.freeze({
+      closed: completed,
+      receive(): void { throw new Error("Terminal activity channel is receive-only"); },
+      close,
+    });
+  }
   if (context.operation !== "terminal.attach") {
     throw new Error(`Unsupported Terminal channel operation: ${context.operation}`);
   }

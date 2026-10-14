@@ -85,6 +85,7 @@ interface TerminalRecord extends TerminalInfo, TerminalWorkspaceScope {
 export class TerminalService {
   private readonly terminals = new Map<string, TerminalRecord>();
   private readonly commandRuns = new Map<string, TerminalCommandRun>();
+  private readonly activityListeners = new Set<(scope: TerminalWorkspaceScope) => void>();
   private activitySink: TerminalActivitySink | undefined;
   private disposed = false;
 
@@ -100,6 +101,23 @@ export class TerminalService {
     return [...this.terminals.values()]
       .filter((terminal) => matchesScope(terminal, scope))
       .map(toInfo);
+  }
+
+  subscribeActiveCount(scope: TerminalWorkspaceScope, onCount: (count: number) => void): () => void {
+    this.requireAvailable();
+    validateScope(scope);
+    const ownedScope = { ...scope };
+    const changed = (changedScope: TerminalWorkspaceScope): void => {
+      if (matchesScope(changedScope, ownedScope)) onCount(this.list(ownedScope).filter((terminal) => !terminal.exited).length);
+    };
+    this.activityListeners.add(changed);
+    try { changed(ownedScope); }
+    catch (error) { this.activityListeners.delete(changed); throw error; }
+    return () => { this.activityListeners.delete(changed); };
+  }
+
+  private publishActivity(scope: TerminalWorkspaceScope): void {
+    for (const listener of this.activityListeners) listener(scope);
   }
 
   closeForCwd(cwd: string): void {
@@ -257,6 +275,7 @@ export class TerminalService {
     this.attachPtyEvents(record);
     const info = toInfo(record);
     this.activitySink?.updateTerminal(info);
+    this.publishActivity(record);
     return info;
   }
 
@@ -279,6 +298,7 @@ export class TerminalService {
     if (this.disposed) return;
     this.disposed = true;
     for (const terminal of [...this.terminals.values()]) this.closeRecord(terminal);
+    this.activityListeners.clear();
   }
 
   private createTerminal(options: CreateTerminalOptions & { id?: string; shellArgs: string[]; commandRunId?: string; failureNotice?: TerminalCommandFailureNotice }): TerminalInfo {
@@ -313,6 +333,7 @@ export class TerminalService {
     this.terminals.set(id, record);
     const info = toInfo(record);
     this.activitySink?.updateTerminal(info);
+    this.publishActivity(record);
     return info;
   }
 
@@ -328,6 +349,7 @@ export class TerminalService {
       record.events.emit("exit", exitCode);
       const info = toInfo(record);
       this.activitySink?.updateTerminal(info);
+      this.publishActivity(record);
     });
   }
 
@@ -384,6 +406,7 @@ export class TerminalService {
     terminal.events.emit("closed");
     terminal.events.removeAllListeners();
     this.activitySink?.removeTerminal(terminal.id, terminal.cwd);
+    this.publishActivity(terminal);
     if (!terminal.exited) terminal.pty.kill();
   }
 

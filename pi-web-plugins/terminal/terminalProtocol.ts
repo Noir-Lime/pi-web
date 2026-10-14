@@ -131,6 +131,20 @@ export class TerminalPeerClient {
     return parseTerminalCommandRun(await this.request("terminal.cancel-run", { runId }, signal === undefined ? undefined : { signal }));
   }
 
+  async watchActiveCount(onCount: (count: number) => void, signal: AbortSignal): Promise<PluginPeerChannel> {
+    return requirePeerChannel(this.peer)("terminal.activity", null, {
+      signal,
+      onData: (data) => {
+        const frame = requireRecord(data, "terminal.activity frame");
+        const count = frame["activeCount"];
+        if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0) {
+          throw new Error("Invalid Terminal activity count");
+        }
+        onCount(count);
+      },
+    });
+  }
+
   async attach(options: TerminalAttachOptions): Promise<PluginPeerChannel> {
     const openChannel = requirePeerChannel(this.peer);
     return openChannel("terminal.attach", {
