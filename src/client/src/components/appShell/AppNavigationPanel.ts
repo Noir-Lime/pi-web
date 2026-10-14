@@ -30,7 +30,6 @@ export class AppNavigationPanel extends LitElement {
   @property({ attribute: false }) sessions: SessionInfo[] = [];
   @property({ attribute: false }) selectedSession?: SessionInfo;
   @property({ attribute: false }) pinnedRootIds: string[] = [];
-  @property({ type: Boolean }) savingNavigationOrder = false;
   @property({ attribute: false }) sessionActivities: Record<string, SessionActivity> = {};
   @property({ attribute: false }) sessionStatuses: Record<string, SessionStatus> = {};
   @property({ attribute: false }) sendingPrompts: Record<string, true> = {};
@@ -172,7 +171,6 @@ export class AppNavigationPanel extends LitElement {
           .onCancelKeyboardNavigation=${() => { this.cancelKeyboardNavigation(); }}
         ></machine-list>
       ` : null}
-      <div class="order-status" role="status">${this.savingNavigationOrder ? "Saving navigation order…" : ""}</div>
       <project-list
         .projects=${this.projects}
         .selected=${this.selectedProject}
@@ -277,8 +275,6 @@ export class AppNavigationPanel extends LitElement {
     :host { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
     :host([compact]) { flex: 1 1 auto; }
     header { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px; border-bottom: 1px solid var(--pi-border); }
-    .order-status { flex: 0 0 auto; color: var(--pi-muted); font-size: 12px; }
-    .order-status:not(:empty) { padding: 4px 12px; }
     header strong { flex: 0 0 auto; }
     machine-switcher { flex: 1 1 auto; min-width: 0; }
     :host([compact]) header { display: none; }
