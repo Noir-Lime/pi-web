@@ -181,6 +181,23 @@ describe("plugin delivery artifacts", () => {
     expect(loader.getPrompts().prompts.map(({ name }) => name)).toEqual(["worktree"]);
   });
 
+  it("ships Code highlighting as a self-contained, enabled portable browser plugin", async () => {
+    const target = join(repoRoot, "dist/pi-web-plugins/code-highlight");
+    expect(await recursiveFiles(target)).toEqual(["browser/pi-web-plugin.js", "package.json"]);
+    const entry = await readFile(join(target, "browser/pi-web-plugin.js"), "utf8");
+    expect(moduleSpecifiers(entry)).toEqual([]);
+    expect(Buffer.byteLength(entry)).toBeLessThan(PI_WEB_PLUGIN_ARTIFACT_MAX_BYTES);
+    const catalog = new PiWebPluginCatalog({
+      roots: [{ path: join(repoRoot, "dist/pi-web-plugins"), source: "bundled", scope: "bundled" }],
+      packageProvider: { listPackages: () => [], getInstalledPath: () => undefined },
+    });
+    const snapshot = await catalog.snapshot();
+    expect(snapshot.diagnostics).toEqual([]);
+    expect(snapshot.plugins).toContainEqual(expect.objectContaining({
+      id: "code-highlight", enabled: true, machineSpecific: false,
+    }));
+  });
+
   describe("Mermaid browser package build", () => {
     it("ships a self-contained sandbox engine and browser entry within artifact limits", { timeout: 60_000 }, async () => {
       const target = join(repoRoot, "dist/pi-web-plugins/mermaid");
