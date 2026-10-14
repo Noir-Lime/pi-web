@@ -21,6 +21,8 @@ import type {
   ServerPluginPeerChannelCloseContext,
   ServerPluginPeerChannelOpenContext,
   ServerPluginPeerRequestContext,
+  ServerPluginPeerRequestContextV5,
+  ServerPluginPeerChannelOpenContextV5,
   ServerPluginPeerWorkspace,
   PiWebServerPlugin,
   ProjectInput,
@@ -93,6 +95,27 @@ type ReadonlyKeys<Value> = {
 type WritableKeys<Value> = Exclude<keyof Value, ReadonlyKeys<Value>>;
 
 describe("public server plugin API", () => {
+  it("discriminates legacy v3 and scoped v5 plugin entry points", () => {
+    const legacy: PiWebServerPlugin = {
+      apiVersion: 3,
+      name: "Legacy",
+      activate(context) {
+        expectTypeOf(context.apiVersion).toEqualTypeOf<3>();
+        return { peer: { request({ workspace }) { return workspace.id; } } };
+      },
+    };
+    const modern: PiWebServerPlugin = {
+      apiVersion: 5,
+      name: "Modern",
+      activate(context) {
+        expectTypeOf(context.apiVersion).toEqualTypeOf<5>();
+        return { peer: { request({ scope }) { return scope.kind; } } };
+      },
+    };
+    expectTypeOf<keyof ServerPluginPeerRequestContextV5>().toEqualTypeOf<"scope" | "operation" | "input" | "signal">();
+    expectTypeOf<keyof ServerPluginPeerChannelOpenContextV5>().toEqualTypeOf<"scope" | "operation" | "input" | "signal" | "send">();
+    expect([legacy.apiVersion, modern.apiVersion]).toEqual([3, 5]);
+  });
   it("supports lifecycle-owned providers, peers, and typed capability composition", async () => {
     const observedSignals: AbortSignal[] = [];
     const observedLifetimes: AbortSignal[] = [];

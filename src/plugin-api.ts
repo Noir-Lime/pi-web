@@ -36,6 +36,90 @@ export type {
   MoveWorkspaceFileResponse,
 } from "./shared/pluginApiTypes.js";
 
+export type { PluginCatalogV1, PluginCatalogProject, PluginCatalogWorkspace, PluginSessionSnapshot, PluginWorkspaceSelection, PluginSessionSelection, PluginCatalogReadOptions } from "./shared/pluginCatalogTypes.js";
+import type { PluginCatalogV1 } from "./shared/pluginCatalogTypes.js";
+
+// eslint-disable-next-line @typescript-eslint/no-deprecated -- The host intentionally accepts supported legacy entries.
+export type PiWebPlugin = LegacyPiWebPlugin | PiWebPluginV5;
+
+/** Current browser entrypoint. Existing contribution kinds and lifecycle behavior are unchanged. */
+export interface PiWebPluginV5 {
+  apiVersion: 5;
+  name: string;
+  requires?: readonly PluginCapability[];
+  activate(context: PluginActivationContextV5): MaybePromise<PluginActivationResultV5>;
+}
+
+export type PluginActivationContextV5 = Omit<PluginActivationContext, "apiVersion"> & { readonly apiVersion: 5 };
+export type PluginActivationResultV5 = Omit<PluginActivationResult, "contributions"> & { contributions: PluginContributionsV5 };
+
+/** Captured machine target; changing selection never retargets this catalog. */
+export interface PluginCatalog extends PluginCatalogV1 {
+  readonly machineId: string;
+}
+
+export type PluginBackendScope =
+  | { readonly kind: "machine" }
+  | { readonly kind: "project"; readonly projectId: string }
+  | { readonly kind: "workspace"; readonly projectId: string; readonly workspaceId: string };
+
+/** Exact package-paired backend on this callback's machine. Absent for browser-only plugins. */
+export interface PluginBackend {
+  readonly machineId: string;
+  forScope(scope: PluginBackendScope): PluginPeer;
+}
+
+export interface PluginDiscoveryContext {
+  readonly catalog: PluginCatalog;
+  readonly backend?: PluginBackend;
+}
+
+export type PluginRuntimeContextV5 = PluginRuntimeContext & PluginDiscoveryContext;
+export type ApplicationPanelContextV5 = ApplicationPanelContext & PluginDiscoveryContext;
+export type WorkspacePanelContextV5 = WorkspacePanelContext & PluginDiscoveryContext;
+export type WorkspaceLabelContextV5 = WorkspaceLabelContext & PluginDiscoveryContext;
+export type SessionLabelContextV5 = SessionLabelContext & PluginDiscoveryContext;
+export type MessageActionContextV5 = MessageActionContext & PluginDiscoveryContext;
+export type DisplayedMessageActionContextV5 = DisplayedMessageActionContext & PluginDiscoveryContext;
+
+export interface PluginContributionsV5 extends Omit<PluginContributions, "actions" | "applicationPanels" | "workspacePanels" | "workspaceLabels" | "sessionLabels" | "messageActions"> {
+  actions?: PluginActionV5[];
+  applicationPanels?: ApplicationPanelContributionV5[];
+  workspacePanels?: WorkspacePanelContributionV5[];
+  workspaceLabels?: WorkspaceLabelContributionV5[];
+  sessionLabels?: SessionLabelContributionV5[];
+  messageActions?: MessageActionContributionV5[];
+}
+
+export type PluginActionV5 = Omit<PluginAction, "enabled" | "disabledReason" | "run"> & {
+  enabled?: (context: PluginRuntimeContextV5) => boolean;
+  disabledReason?: (context: PluginRuntimeContextV5) => string | undefined;
+  run: (context: PluginRuntimeContextV5) => MaybePromise<void>;
+};
+export type ApplicationPanelContributionV5 = Omit<ApplicationPanelContribution, "visible" | "badge" | "render"> & {
+  visible?: (context: ApplicationPanelContextV5) => boolean;
+  badge?: (context: ApplicationPanelContextV5) => string | number | TemplateResult | undefined;
+  render: (context: ApplicationPanelContextV5) => TemplateResult;
+};
+export type WorkspacePanelContributionV5 = Omit<WorkspacePanelContribution, "visible" | "badge" | "render" | "fileOpenQuery" | "onInvalidate"> & {
+  visible?: (context: WorkspacePanelContextV5) => boolean;
+  badge?: (context: WorkspacePanelContextV5) => string | number | TemplateResult | undefined;
+  render: (context: WorkspacePanelContextV5) => TemplateResult;
+  fileOpenQuery?: (context: WorkspacePanelContextV5, path: string) => Readonly<Record<string, ContributionQueryValue>> | undefined;
+  onInvalidate?: (context: WorkspacePanelContextV5, invalidation?: WorkspaceInvalidation) => MaybePromise<void>;
+};
+export type WorkspaceLabelContributionV5 = Omit<WorkspaceLabelContribution, "visible" | "items"> & {
+  visible?: (context: WorkspaceLabelContextV5) => boolean;
+  items: (context: WorkspaceLabelContextV5) => WorkspaceLabelItem[];
+};
+export type SessionLabelContributionV5 = Omit<SessionLabelContribution, "visible" | "items"> & {
+  visible?: (context: SessionLabelContextV5) => boolean;
+  items: (context: SessionLabelContextV5) => SessionLabelItem[];
+};
+export type MessageActionContributionV5 =
+  | (Omit<EntryMessageActionContribution, "run"> & { run: (context: MessageActionContextV5) => MaybePromise<MessageActionResult> })
+  | (Omit<DisplayedMessageActionContribution, "run"> & { run: (context: DisplayedMessageActionContextV5) => MaybePromise<MessageActionResult> });
+
 export type PluginId = string;
 export type LocalContributionId = string;
 export type QualifiedContributionId = string;
@@ -44,7 +128,8 @@ export type SvgTemplateTag = (strings: TemplateStringsArray, ...values: unknown[
 
 type MaybePromise<T> = T | Promise<T>;
 
-export interface PiWebPlugin {
+/** @deprecated Browser API v4 remains supported; use PiWebPluginV5 for catalog and scoped backend access. */
+export interface LegacyPiWebPlugin {
   apiVersion: 4;
   name: string;
   /** Exact capability versions that must be active before this plugin starts. */

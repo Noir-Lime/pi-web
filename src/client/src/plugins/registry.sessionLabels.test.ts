@@ -322,6 +322,7 @@ it.each(["visible", "items"] as const)("isolates a throwing %s callback and retr
       { id: "broken", order: 1, visible, items },
       { id: "healthy", order: 2, items: () => [{ type: "text", text: "Healthy" }] },
     ]) });
+    warning.mockClear(); // Ignore the separately tested legacy activation diagnostic.
     expect(registry.getSessionLabelItems(context)).toEqual([{ type: "text", text: "Healthy" }]);
     expect(warning).toHaveBeenCalledExactlyOnceWith(
       `PI WEB plugin session label labels:broken ${phase} failed for session row-session on machine remote`, error,
@@ -356,6 +357,7 @@ it("omits only a throwing render item and evaluates healthy templates once per c
         { type: "text", text: "After" },
       ] },
     ]) });
+    warning.mockClear(); // Ignore the separately tested legacy activation diagnostic.
     const collected = registry.getSessionLabelItems(context);
     expect(collected).toHaveLength(3);
     expect([collected[0], collected[2]]).toEqual([

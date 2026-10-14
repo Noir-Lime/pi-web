@@ -11,15 +11,16 @@ import type {
   JsonValue,
   PiWebHostPiSessionsV1,
   PiWebHostWorkspacesV1,
-  PiWebServerPlugin,
+  PiWebServerPlugin as SupportedPiWebServerPlugin,
   PluginCapability,
   ProjectInput,
-  ServerPluginActivation,
-  ServerPluginActivationContext,
+  LegacyServerPluginActivation as ServerPluginActivation,
+  LegacyServerPluginActivationContext as ServerPluginActivationContext,
   ServerPluginNoticeInput,
   ServerPluginNoticeReporterV1,
   WorkspaceProvider,
 } from "../../server-plugin-api.js";
+type PiWebServerPlugin = Extract<SupportedPiWebServerPlugin, { apiVersion: 3 }>;
 import type { PiWebPluginScope } from "../../shared/apiTypes.js";
 import {
   SERVER_NOTICE_SCOPE_ID_MAX_LENGTH,
@@ -85,6 +86,37 @@ function createServerPluginRuntimeWithRequiredTerminal(options: Omit<CreateServe
 }
 
 describe("server plugin runtime", () => {
+  it("activates v3 and v5 with their own version and adapts only legacy workspace contexts", async () => {
+    const logger = testLogger();
+    const legacyRequest = vi.fn<(context: unknown) => null>(() => null);
+    const modernRequest = vi.fn<(context: unknown) => null>(() => null);
+    const activated: number[] = [];
+    const runtime = await createServerPluginRuntime({
+      catalog: { snapshot: () => Promise.resolve(testSnapshot([entry("legacy"), entry("modern")])) },
+      logger,
+      importer: (url) => {
+        const legacy = pluginIdFromUrl(url) === "legacy";
+        return Promise.resolve({ default: {
+          apiVersion: legacy ? 3 : 5,
+          name: legacy ? "Legacy" : "Modern",
+          activate(context: { apiVersion: number }) {
+            activated.push(context.apiVersion);
+            return { peer: { request: legacy ? legacyRequest : modernRequest } };
+          },
+        } });
+      },
+    });
+    expect(activated.sort()).toEqual([3, 5]);
+    const scope = { kind: "workspace" as const, project: { id: "p", name: "P", path: "/p" }, workspace: { id: "w", projectId: "p", path: "/p", label: "P", isMain: true } };
+    const invocation = { scope, operation: "read", input: null, signal: new AbortController().signal };
+    const contributions = runtime.pairedBackendContributions();
+    await contributions.find(({ pluginId }) => pluginId === "legacy")?.backend.request?.(invocation);
+    await contributions.find(({ pluginId }) => pluginId === "modern")?.backend.request?.({ ...invocation, scope: { kind: "machine" } });
+    expect(legacyRequest.mock.calls[0]?.[0]).toEqual({ project: scope.project, workspace: scope.workspace, operation: "read", input: null, signal: invocation.signal });
+    expect(modernRequest.mock.calls[0]?.[0]).toMatchObject({ scope: { kind: "machine" } });
+    expect(logger.warn).toHaveBeenCalledExactlyOnceWith({ pluginId: "legacy", apiVersion: 3 }, "Server plugin API v3 is deprecated; migrate to API v5");
+    await runtime.stop();
+  });
   it("creates isolated persistent directories before activation and retains plugin-owned files across runtimes", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-web-plugin-data-"));
     tempRoots.push(root);
@@ -1654,15 +1686,21 @@ describe("server plugin runtime", () => {
     expect(Object.isFrozen(runtime.pairedBackendContributions()[0]?.backend)).toBe(true);
     expect(runtime.healthRecords().find(({ pluginId }) => pluginId === "mutable")).toMatchObject({ pairedRequestVersion: 1, pairedChannelVersion: 1 });
     await expect(Promise.resolve(runtime.pairedBackendContributions()[0]?.backend.request?.({
-      project: { id: "p", name: "P", path: "/p" },
-      workspace: { id: "w", projectId: "p", path: "/p", label: "P", isMain: true },
+      scope: {
+        kind: "workspace",
+        project: { id: "p", name: "P", path: "/p" },
+        workspace: { id: "w", projectId: "p", path: "/p", label: "P", isMain: true },
+      },
       operation: "status",
       input: null,
       signal: new AbortController().signal,
     }))).resolves.toEqual({ captured: true });
     const channel = await runtime.pairedBackendContributions()[0]?.backend.openChannel?.({
-      project: { id: "p", name: "P", path: "/p" },
-      workspace: { id: "w", projectId: "p", path: "/p", label: "P", isMain: true },
+      scope: {
+        kind: "workspace",
+        project: { id: "p", name: "P", path: "/p" },
+        workspace: { id: "w", projectId: "p", path: "/p", label: "P", isMain: true },
+      },
       operation: "attach",
       input: null,
       signal: new AbortController().signal,

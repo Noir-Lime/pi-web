@@ -149,7 +149,7 @@ it("warns about unknown contribution names at registration without disabling rec
   };
   try {
     await registry.register({ id: "diagnostic", plugin: { apiVersion: 4, name: "Diagnostic", activate: () => ({ contributions }) } });
-    expect(warn).toHaveBeenCalledExactlyOnceWith("PI WEB plugin diagnostic has unknown contribution: misspelledPanels");
+    expect(warn).toHaveBeenCalledWith("PI WEB plugin diagnostic has unknown contribution: misspelledPanels");
     expect(registry.getApplicationPanels().map(({ id }) => id)).toEqual(["diagnostic:info"]);
     expect(registry.resolveWorkspacePanelRouteId("diagnostic:info", "local")).toBe("diagnostic:info");
     expect(registry.hasPlugin("diagnostic")).toBe(true);

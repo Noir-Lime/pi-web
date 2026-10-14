@@ -1,6 +1,6 @@
 import {
-  PAIRED_PLUGIN_BACKEND_CHANNEL_ROUTE_PATH,
-  PAIRED_PLUGIN_BACKEND_REQUEST_ROUTE_PATH,
+  PAIRED_PLUGIN_BACKEND_CHANNEL_ROUTE_PATHS,
+  PAIRED_PLUGIN_BACKEND_REQUEST_ROUTE_PATHS,
   PLUGIN_BACKEND_FEDERATION_TIMEOUT_MS,
   PLUGIN_BACKEND_REQUEST_BODY_MAX_BYTES,
   PLUGIN_BACKEND_RESPONSE_BODY_MAX_BYTES,
@@ -51,19 +51,25 @@ export const FEDERATED_HTTP_ROUTES = [
   { method: "POST", path: "/pi-packages/install", timeoutMs: PI_PACKAGE_MUTATION_PROXY_TIMEOUT_MS },
   { method: "POST", path: "/pi-packages/remove", timeoutMs: PI_PACKAGE_MUTATION_PROXY_TIMEOUT_MS },
   { method: "POST", path: "/pi-packages/update", timeoutMs: PI_PACKAGE_MUTATION_PROXY_TIMEOUT_MS },
+  { method: "GET", path: "/plugin-catalog/projects", propagateCancellation: true },
+  { method: "GET", path: "/plugin-catalog/projects/:projectId", propagateCancellation: true },
+  { method: "GET", path: "/plugin-catalog/projects/:projectId/workspaces", propagateCancellation: true },
+  { method: "GET", path: "/plugin-catalog/projects/:projectId/workspaces/:workspaceId", propagateCancellation: true },
+  { method: "GET", path: "/plugin-catalog/projects/:projectId/workspaces/:workspaceId/sessions", propagateCancellation: true },
+  { method: "GET", path: "/plugin-catalog/projects/:projectId/workspaces/:workspaceId/sessions/:sessionId", propagateCancellation: true },
   { method: "GET", path: "/projects" },
   { method: "POST", path: "/projects" },
   { method: "DELETE", path: "/projects/:projectId" },
   { method: "GET", path: "/project-directories" },
   { method: "GET", path: "/projects/:projectId/workspaces" },
-  {
+  ...PAIRED_PLUGIN_BACKEND_REQUEST_ROUTE_PATHS.map((path): FederatedHttpRouteSpec => ({
     method: "POST",
-    path: PAIRED_PLUGIN_BACKEND_REQUEST_ROUTE_PATH,
+    path,
     timeoutMs: PLUGIN_BACKEND_FEDERATION_TIMEOUT_MS,
     bodyLimit: PLUGIN_BACKEND_REQUEST_BODY_MAX_BYTES,
     responseBodyLimit: PLUGIN_BACKEND_RESPONSE_BODY_MAX_BYTES,
     propagateCancellation: true,
-  },
+  })),
   {
     method: "DELETE",
     path: "/projects/:projectId/workspaces/:workspaceId",
@@ -180,7 +186,7 @@ export const FEDERATED_HTTP_ROUTES = [
 ] as const satisfies readonly FederatedHttpRouteSpec[];
 
 export const FEDERATED_WEBSOCKET_ROUTES = [
-  PAIRED_PLUGIN_BACKEND_CHANNEL_ROUTE_PATH,
+  ...PAIRED_PLUGIN_BACKEND_CHANNEL_ROUTE_PATHS,
   "/events",
   "/sessions/events",
   "/sessions/:sessionId/events",

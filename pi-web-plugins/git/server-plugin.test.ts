@@ -473,7 +473,13 @@ function peerContribution(pluginId: string, peer: ServerPluginPeer): ServerPlugi
     source: "test fixture",
     scope: "local",
     moduleRevision: "1",
-    backend: peer,
+    apiVersion: 3,
+    backend: {
+      request: ({ scope, ...context }) => {
+        if (scope.kind !== "workspace" || peer.request === undefined) throw new Error("Expected legacy workspace request");
+        return peer.request({ ...context, project: scope.project, workspace: scope.workspace });
+      },
+    },
   };
 }
 

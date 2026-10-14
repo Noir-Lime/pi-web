@@ -1,5 +1,5 @@
 import type { TemplateResult } from "lit";
-import type { PluginNavigate, PluginProjects, PluginPromptEditor, PluginSelectedSession, PluginSelectionService } from "../../../plugin-api";
+import type { PluginBackend, PluginCatalog, PluginNavigate, PluginProjects, PluginPromptEditor, PluginSelectedSession, PluginSelectionService } from "../../../plugin-api";
 import type { AppAction } from "../actions";
 import type { DeleteWorkspaceFileResponse, FileContentResponse, FileTreeResponse, JsonValue, Machine, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, TerminalCommandRunHandle, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse, Workspace } from "../api";
 import type { PluginCapability, PluginCapabilityProvision } from "../../../shared/pluginApiTypes";
@@ -40,14 +40,14 @@ export interface WorkspacePluginBinding {
 type MaybePromise<T> = T | Promise<T>;
 
 export interface PiWebPlugin {
-  apiVersion: 4;
+  apiVersion: 4 | 5;
   name: string;
   requires?: readonly PluginCapability[];
-  activate: (context: PluginActivationContext) => MaybePromise<PluginActivationResult>;
+  activate(context: PluginActivationContext): MaybePromise<PluginActivationResult>;
 }
 
 export interface PluginActivationContext {
-  readonly apiVersion: 4;
+  readonly apiVersion: 4 | 5;
   /** Stable package/source identity, including on federated machines. */
   readonly pluginId: PluginId;
   /** Host-unique identity for qualified contribution references in this runtime. */
@@ -185,6 +185,8 @@ export interface WorkspaceHost {
 }
 
 export interface WorkspaceContext {
+  catalog?: PluginCatalog;
+  backend?: PluginBackend;
   machine: PluginMachine;
   workspace: Workspace;
   state: AppState;
@@ -215,6 +217,8 @@ export type { PluginPromptEditor } from "../../../plugin-api";
 export type { PluginNavigate, PluginNavigationPatchDestination, PluginNavigationOptions } from "../../../plugin-api";
 
 export interface PluginRuntimeContext {
+  catalog?: PluginCatalog;
+  backend?: PluginBackend;
   navigate: PluginNavigate;
   state: AppState;
   projects?: PluginProjects;
@@ -288,6 +292,8 @@ export interface WorkspacePanelContext extends WorkspaceContext {
 }
 
 export interface ApplicationPanelContext {
+  catalog?: PluginCatalog;
+  backend?: PluginBackend;
   machine: PluginMachine;
   state: AppState;
   projects?: PluginProjects;

@@ -218,15 +218,15 @@ function registrationDeclaration(entry: PluginManifestEntry, machineId: string |
 function parsePluginModule(module: unknown, moduleUrl: string): PiWebPlugin {
   if (!isRecord(module)) throw new Error(`Plugin module ${moduleUrl} did not export an object`);
   const plugin = module["default"];
-  if (isRecord(plugin) && plugin["apiVersion"] !== 4) {
-    throw new Error(`Unsupported browser plugin API version for ${moduleUrl}: ${String(plugin["apiVersion"])} (expected 4)`);
+  if (isRecord(plugin) && plugin["apiVersion"] !== 4 && plugin["apiVersion"] !== 5) {
+    throw new Error(`Unsupported browser plugin API version for ${moduleUrl}: ${String(plugin["apiVersion"])} (expected 4 or 5)`);
   }
   if (!isPiWebPlugin(plugin)) throw new Error(`Plugin module ${moduleUrl} default export is not a PiWebPlugin`);
   return adaptPublicPlugin(plugin);
 }
 
 function isPiWebPlugin(value: unknown): value is PiWebPlugin {
-  return isRecord(value) && value["apiVersion"] === 4 && typeof value["name"] === "string" && typeof value["activate"] === "function";
+  return isRecord(value) && (value["apiVersion"] === 4 || value["apiVersion"] === 5) && typeof value["name"] === "string" && typeof value["activate"] === "function";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -126,7 +126,7 @@ it("supplies an external plugin live selection while its panel is closed, with e
   const early = vi.fn();
   let unsubscribe: () => void = () => undefined;
   const render = vi.fn(() => html`<p>Selection observer</p>`);
-  const activate = vi.fn<PiWebPlugin["activate"]>((context) => {
+  const activate = vi.fn<Extract<PiWebPlugin, { apiVersion: 4 }>["activate"]>((context) => {
     expect(context.apiVersion).toBe(4);
     selection = context.selection;
     if (selection === undefined) throw new Error("Missing public selection service");
@@ -204,7 +204,7 @@ it("discovers registered projects and directories through a portable public pane
   const workspaceContexts: WorkspacePanelContext[] = [];
   let actionProjects: PluginProjects | undefined;
   let discovery = "";
-  const activate = vi.fn<PiWebPlugin["activate"]>(() => ({ contributions: {
+  const activate = vi.fn<Extract<PiWebPlugin, { apiVersion: 4 }>["activate"]>(() => ({ contributions: {
     applicationPanels: [{
       id: "workspace.discovery", title: "Discovery",
       render: (context) => {

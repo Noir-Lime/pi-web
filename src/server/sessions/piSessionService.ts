@@ -51,6 +51,7 @@ import { messageHistoryTargetId } from "./messageHistoryTarget.js";
 import { SessionArchiveStore, type ArchivedSessionRecord, type ArchiveSessionInput } from "./sessionArchiveStore.js";
 import { findArchiveCandidateByExactId, planSessionArchiveTree, type SessionArchiveTreeCandidate } from "./sessionArchiveTree.js";
 import type { ActiveSession } from "./sessionRuntimeStore.js";
+import type { PluginSessionSnapshot } from "../../shared/pluginCatalogTypes.js";
 import type { PiWebHostPiSessionConnection } from "../../server-plugin-api.js";
 import { PiSessionEventConnections } from "./piSessionEventConnections.js";
 import { fallbackSessionName, generateShortSessionName, requireInitialSessionName } from "./sessionNameGenerator.js";
@@ -1538,6 +1539,42 @@ export class PiSessionService implements SessionRouteService {
       .filter(isDefined)
       .sort((a, b) => Date.parse(b.modified) - Date.parse(a.modified));
     return [...unarchivedSessions, ...archivedSessions];
+  }
+
+  /** Read-only plugin catalog: do not open runtimes or reconcile unread/activity state. */
+  async listCatalogSessions(cwd: string, signal?: AbortSignal): Promise<readonly PluginSessionSnapshot[]> {
+    signal?.throwIfAborted();
+    const [entries, archives] = await Promise.all([this.sessionManager.list(cwd), this.archiveStore.list()]);
+    signal?.throwIfAborted();
+    const archived = archives.filter((record) => cwdPathsEqual(record.cwd, cwd));
+    const archivedIds = new Set(archived.map((record) => record.sessionId));
+    const rows = new Map(entries.filter((entry) => !archivedIds.has(entry.id)).map((entry) => [entry.id, clientSessionFromListEntry(entry)]));
+    const runtimes = new Map<string, PiAgentSession>();
+    for (const active of new Set(this.active.values())) {
+      const session = active.runtime.session;
+      if (!cwdPathsEqual(session.sessionManager.getCwd(), cwd) || archivedIds.has(session.sessionId)) continue;
+      const row = rows.get(session.sessionId);
+      // A disk clone with the same id must not inherit another file's runtime.
+      if (row !== undefined && (session.sessionFile === undefined || !sessionPathsEqual(row.path, session.sessionFile))) continue;
+      runtimes.set(session.sessionId, session);
+      rows.set(session.sessionId, clientSessionFromActiveSession(session));
+    }
+    const entriesById = new Map(entries.map((entry) => [entry.id, entry]));
+    for (const record of archived) {
+      const row = clientSessionFromArchivedRecord(record, entriesById.get(record.sessionId));
+      if (row !== undefined) rows.set(row.id, row);
+    }
+    return [...rows.values()].sort((a, b) => Date.parse(b.modified) - Date.parse(a.modified)).map((row) => {
+      const runtime = runtimes.get(row.id);
+      return Object.freeze({
+        id: row.id,
+        cwd: row.cwd,
+        ...(row.name === undefined ? {} : { name: row.name }),
+        ...(row.metadata === undefined ? {} : { metadata: structuredClone(row.metadata) }),
+        archived: row.archived === true,
+        runtime: runtime === undefined ? "not-hosted" : this.hasActiveWork(runtime) ? "busy" : "idle",
+      } satisfies PluginSessionSnapshot);
+    });
   }
 
   async start(cwd: string, options: StartSessionOptions = {}): Promise<ClientSession> {

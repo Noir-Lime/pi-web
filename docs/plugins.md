@@ -311,7 +311,42 @@ Use the smallest example that fits. Source links below track development on `mai
 | A simpler initial-prompt workflow | [Workspace Reviews example](https://github.com/jmfederico/pi-web/tree/main/examples/session-bridge-plugin) |
 | Package discovery rules and diagnostics | [Plugin catalog](https://github.com/jmfederico/pi-web/blob/main/src/server/piWebPluginCatalog.ts) |
 
-The current browser contract is **API v4** and the server contract is **API v3**. Older entries need migration; there is no compatibility shim. The public source contracts and their tests are the reference for signatures, validation, limits, and lifecycle details.
+The current browser and server contracts are both **API v5**. Browser v4 and server v3 remain supported with a once-per-plugin deprecation diagnostic; no removal date is set. Other versions are unsupported. The public source contracts and their tests are the reference for signatures, validation, limits, and lifecycle details.
+
+### Read-only catalogs and scoped backends (v5)
+
+Browser v5 action, panel, label, and invoked message-action contexts include `catalog`. It lists and resolves registered projects, their workspaces, and saved sessions without requiring a plugin backend. Each catalog captures `machineId`; changing selection creates a new callback context, never retargets an existing catalog. Activation still provides plugin identity, template helpers, selection observation, and lifecycle signals—not a selection-bound catalog.
+
+```ts
+export default {
+  apiVersion: 5,
+  name: "Project dashboard",
+  activate({ html }) {
+    return {
+      contributions: {
+        applicationPanels: [{
+          id: "dashboard",
+          title: "Projects",
+          render(context) {
+            return html`<my-dashboard .catalog=${context.catalog}
+              .backend=${context.backend}></my-dashboard>`;
+          },
+        }],
+      },
+    };
+  },
+};
+```
+
+Components and event handlers can call `catalog.projects.list()` / `get(projectId)`, `catalog.workspaces.list(projectId)` / `get({ projectId, workspaceId })`, and `catalog.sessions.list({ projectId, workspaceId })` / `get({ projectId, workspaceId, sessionId })`. Reads accept an optional abort signal. Session snapshots include public metadata and `runtime` (`not-hosted`, `idle`, or `busy`); discovery does not open a saved session or expose its transcript/private file path.
+
+Paired plugins also receive `backend` in these browser contexts. `backend.forScope({ kind: "machine" })`, `{ kind: "project", projectId }`, or `{ kind: "workspace", projectId, workspaceId }` returns the package's paired request/channel interface on that context's machine. Portable browser-only plugins have no paired backend. Existing workspace `peer` helpers remain available.
+
+Server v5 peer callbacks receive `scope` instead of always requiring `project` and `workspace`. Machine scope carries no project; project scope contains host-resolved `project`; workspace scope contains host-resolved `project` and `workspace`. Browser/server package revisions, cancellation, and host authority checks still apply. Server v3 retains its workspace-only callback shape and cannot accept machine/project-scoped calls.
+
+Backend plugins declare `PI_WEB_HOST_CATALOG_CAPABILITY` in `requires`, then resolve it in `start({ capabilities })`. This provides the same read-only discovery locally to that daemon. Workspace providers must not depend on the catalog: it becomes available only after provider topology settles. No project, workspace, or session mutation methods are added.
+
+Machine-specific contributions are visible only on their owning machine; portable browser contributions follow selection. Switching machines does not stop backend work. Plugins must discard obsolete asynchronous UI results and clean up component-owned connections when their context changes.
 
 A few design boundaries matter before implementation:
 
