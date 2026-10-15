@@ -576,7 +576,7 @@ export const promptEditorStyles = css`
   .actions > button + button, .compact-status + button, .compact-status button + button { border-inline-start: 1px solid var(--pi-border-muted); }
   .actions button:hover:not(:disabled), .actions button:focus-visible { background: var(--pi-selection-bg); }
   .actions button:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: -2px; }
-  .actions .select-model { flex: 1 1 0; text-align: left; }
+  .actions .select-model { flex: 0 1 auto; text-align: left; }
   .actions .icon-button { flex: 0 0 44px; width: 44px; height: auto; }
   .icon-button { flex: 0 0 auto; display: inline-grid; place-items: center; width: 36px; height: 36px; padding: 0; }
   .icon-button .prompt-action-icon, .icon-button .prompt-thinking-gauge { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
