@@ -47,6 +47,10 @@ A popup item uses both `ui-button` and `ui-menu-item` on its native button. A ch
 
 `ui-menu` describes the surface, not an ARIA role. Do not add `role="menu"` unless the owner implements the corresponding keyboard behavior.
 
+## Sidebar list surfaces
+
+`sidebarListStyles` is the shared treatment for navigation lists. Grey section headers provide hierarchy above dark, continuous rows. Keep rows full-width and gapless; do not introduce inset card surfaces or visual gutters. Selected, hover, and keyboard-focus states remain on the entire row.
+
 ## Dialog patterns
 
 Use the existing `ModalSurface` component for focus trapping, Escape, backdrop dismissal, and dialog naming. The content patterns in `ui/dialogStyles.ts` compose with that surface; they do not add another modal controller or wrapper.

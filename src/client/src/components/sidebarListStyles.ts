@@ -2,6 +2,7 @@ import { css } from "lit";
 
 /** Sidebar rows own their spacing so the space between labels remains clickable. */
 export const sidebarListStyles = css`
+  section > h2.ui-toolbar { background: var(--pi-surface); border-bottom-color: var(--pi-border); box-shadow: none; }
   .list-body > .subheading:not(.ui-toolbar) { padding-inline: 10px; }
   .action-row {
     margin: 0;
