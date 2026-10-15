@@ -1,5 +1,6 @@
 import { html, svg } from "lit";
 import { createPluginCatalog } from "./catalog";
+import { uiStylesCapability, uiStylesCapabilityToken } from "./uiStyles";
 import { createPluginBackend } from "./pluginPeer";
 import type { ContentRenderRequest, DisplayedMessageActionAvailabilityContext, DisplayedMessageActionContext, MessageActionAvailabilityContext, MessageActionContext, MessageActionResult, PluginSelectionSnapshot } from "../../../plugin-api";
 import { availableDisplayedMessageActions, availableMessageActions, type RegisteredMessageAction } from "./messageActions";
@@ -237,7 +238,11 @@ export class PluginRegistry {
     this.promptChips = new PromptChipStore(options.onPromptChipsChanged);
     this.selection = new PluginSelectionHost(options.getSelection ?? (() => ({})));
     this.lifecycleTimeoutMs = positiveInteger(options.lifecycleTimeoutMs, DEFAULT_LIFECYCLE_TIMEOUT_MS, "lifecycleTimeoutMs");
-    for (const provision of snapshotCapabilityProvisions([{ capability: contentRenderingCapabilityToken, value: this.contentRendering }, ...(options.hostCapabilities ?? [])], undefined, "Browser host capability provisions")) {
+    for (const provision of snapshotCapabilityProvisions([
+      { capability: contentRenderingCapabilityToken, value: this.contentRendering },
+      { capability: uiStylesCapabilityToken, value: uiStylesCapability },
+      ...(options.hostCapabilities ?? []),
+    ], undefined, "Browser host capability provisions")) {
       const internal = internalCapabilityProvision(provision);
       if (this.hostCapabilitiesByKey.has(internal.key)) {
         throw new BrowserPluginIncompatibleError(`Browser capability ${formatCapability(internal.capability)} is provided more than once by the host`);

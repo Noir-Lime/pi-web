@@ -2,7 +2,7 @@ import { css, svg, type TemplateResult } from "lit";
 import type { AskUserOutcome, AskUserRequest } from "../../../shared/apiTypes";
 import type { ImageDimensions, SessionMediaReference } from "../../../shared/sessionMedia";
 import type { SessionWarningSeverity } from "../api";
-import { uiButtonStyles, uiMenuStyles, uiToolbarStyles } from "./ui/controlStyles";
+import { uiButtonStyles, uiMenuStyles, uiToolbarStyles, uiTabStyles } from "./ui/controlStyles";
 
 /** Shared downstream shadow for content passing beneath sticky scroll controls. */
 export const scrollHideShadow = css`0 8px 18px var(--pi-shadow-soft)`;
@@ -207,6 +207,9 @@ export const appStyles = css`
 `;
 
 export const workspacePanelStyles = css`
+  ${uiButtonStyles}
+  ${uiToolbarStyles}
+  ${uiTabStyles}
   :host { display: flex; flex-direction: column; min-height: 0; color: var(--pi-text); background: var(--pi-bg); font: 13px system-ui, sans-serif; container-type: inline-size; }
   header { display: flex; align-items: stretch; flex: 0 0 auto; min-width: 0; border-bottom: 1px solid var(--pi-border); }
   .navigation-menu-button { flex: 0 0 auto; justify-content: center; min-width: 44px; margin: 0; }
@@ -216,15 +219,7 @@ export const workspacePanelStyles = css`
   .workspace-header-scroll-frame::after { right: 0; background: linear-gradient(270deg, color-mix(in srgb, var(--pi-shadow-strong) 55%, transparent) 0%, transparent 100%); }
   .workspace-header-scroll-frame.can-scroll-left::before, .workspace-header-scroll-frame.can-scroll-right::after { opacity: 1; }
   .workspace-header-strip { flex: 1 1 auto; display: flex; justify-content: space-between; align-items: stretch; gap: 0; min-width: 0; padding: 0; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: thin; }
-  .tabs { flex: 0 0 auto; display: flex; gap: 0; align-items: stretch; }
-  .tabs button { flex: 0 0 auto; white-space: nowrap; }
-  .tabs button + button { border-inline-start: 1px solid var(--pi-border-muted); }
   .tabs button.icon-tab { min-width: 44px; }
-  button { box-sizing: border-box; display: inline-flex; align-items: center; gap: 5px; min-height: 44px; border: 0; border-radius: 0; background: transparent; color: var(--pi-text); padding: 12px 10px; cursor: pointer; }
-  button.selected { box-shadow: inset 0 -2px var(--pi-accent); background: var(--pi-selection-bg); }
-  button:hover { background: var(--pi-surface-hover); }
-  button.selected:hover { background: var(--pi-selection-bg); }
-  button:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: -2px; }
   .tab-icon { flex: 0 0 auto; width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
   .tab-custom-icon { flex: 0 0 auto; width: 16px; height: 16px; display: inline-grid; place-items: center; color: currentColor; pointer-events: none; }
   .tab-custom-icon svg { width: 16px; height: 16px; pointer-events: none; }

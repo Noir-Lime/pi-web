@@ -77,7 +77,7 @@ export class WorkspacePanel extends LitElement {
         <header>
           <div class=${this.workspaceHeaderFrameClass()}>
             <div class="workspace-header-strip" @scroll=${this.onWorkspaceHeaderScroll}>
-              <div class="tabs">
+              <div class="tabs ui-tabs ui-tabs--primary">
                 ${pinnedPanels.map((panel) => {
                   const selected = selectedPanel?.id === panel.id;
                   const badge = panel.badge?.();
@@ -106,6 +106,7 @@ export class WorkspacePanel extends LitElement {
 
   private panelTabClass(panel: WorkspaceToolPanel, selected: boolean): string {
     return [
+      "ui-button", "ui-tab",
       ...(panel.icon === undefined ? [] : ["icon-tab"]),
       ...(selected ? ["selected"] : []),
     ].join(" ");
@@ -130,7 +131,7 @@ export class WorkspacePanel extends LitElement {
   }
 
   private renderNavigationButton(hiddenActiveDestination = false) {
-    return this.onShowNavigation === undefined ? null : html`<button type="button" class=${`navigation-menu-button${hiddenActiveDestination ? " selected" : ""}`} title="Navigation" aria-label="Navigation" aria-haspopup="dialog" @click=${this.onShowNavigation}>${renderNavigationMenuIcon()}</button>`;
+    return this.onShowNavigation === undefined ? null : html`<button type="button" class=${`ui-button ui-button--icon navigation-menu-button${hiddenActiveDestination ? " selected" : ""}`} title="Navigation" aria-label="Navigation" aria-haspopup="dialog" @click=${this.onShowNavigation}>${renderNavigationMenuIcon()}</button>`;
   }
 
   private renderEmptyState(state: WorkspacePanelEmptyState, showNavigation = false): TemplateResult {

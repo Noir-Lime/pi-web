@@ -2,7 +2,7 @@
 
 import { html, render, svg } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { PluginActivationContext, SessionLabelContext, SessionUiMetadata } from "@jmfederico/pi-web/plugin-api";
+import type { PluginActivationContext, PluginCapability, SessionLabelContext, SessionUiMetadata, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
 import plugin from "./pi-web-plugin";
 import { RELAY_METADATA_NAMESPACE } from "./relayIdentity";
 
@@ -15,6 +15,43 @@ afterEach(() => {
   document.body.replaceChildren();
   localStorage.clear();
   vi.restoreAllMocks();
+});
+
+describe("host UI styles capability", () => {
+  it("requires host v1 and passes start-resolved CSS to the panel", () => {
+    expect(plugin.apiVersion).toBe(4);
+    const capability = plugin.requires[0];
+    if (capability === undefined) throw new Error("Relay UI styles requirement missing");
+    expect(capability).toMatchObject({ pluginId: "pi-web", id: "ui-styles", version: 1 });
+    const cssText = ".ui-button { color: rebeccapurple; }";
+    const result = plugin.activate(activationContext());
+    const requests: PluginCapability[] = [];
+    const resolve = <Value,>(requested: PluginCapability<Value>): Value => {
+      requests.push(requested);
+      return requested.parse({ cssText });
+    };
+    result.start({ capabilities: { resolve }, signal: new AbortController().signal });
+    expect(requests).toEqual([capability]);
+
+    const context: WorkspacePanelContext = {
+      ...rowContext(undefined),
+      prompt: { insertText: () => undefined, getText: () => "", getSelection: () => null },
+      terminal: { open: () => undefined, runCommand: () => Promise.reject(new Error("not used")) },
+    };
+    const host = document.createElement("div");
+    document.body.append(host);
+    const contribution = result.contributions.workspacePanels[0];
+    if (contribution === undefined) throw new Error("Relay panel contribution missing");
+    render(contribution.render(context), host);
+    const panel = host.querySelector("pi-web-relays-panel");
+    expect(panel?.shadowRoot?.querySelector("style[data-ui-styles]")?.textContent).toBe(cssText);
+  });
+
+  it.each([undefined, null, {}, { cssText: 42 }])("rejects an invalid host style value: %j", (value) => {
+    const capability = plugin.requires[0];
+    if (capability === undefined) throw new Error("Relay UI styles requirement missing");
+    expect(() => capability.parse(value)).toThrow("UI styles capability v1 requires cssText");
+  });
 });
 
 describe("Relay session-row contribution", () => {
@@ -55,12 +92,15 @@ describe("Relay session-row contribution", () => {
   });
 });
 
-function sessionContribution() {
-  const activation: PluginActivationContext = {
+function activationContext(): PluginActivationContext {
+  return {
     apiVersion: 4, pluginId: "@jmfederico/pi-relay", runtimePluginId, html, svg,
     signal: new AbortController().signal, lifetimeSignal: new AbortController().signal,
   };
-  const result = plugin.activate(activation);
+}
+
+function sessionContribution() {
+  const result = plugin.activate(activationContext());
   const contribution = result.contributions.sessionLabels[0];
   if (contribution === undefined) throw new Error("Relay session contribution missing");
   return contribution;

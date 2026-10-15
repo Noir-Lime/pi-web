@@ -12,6 +12,8 @@ The current primitives live in `src/client/src/components/ui/controlStyles.ts`. 
 | Compact button | Add `ui-button--compact` | `uiButtonStyles` |
 | Icon button | Add `ui-button--icon` and an accessible name | `uiButtonStyles` |
 | Primary action | Add `ui-button--primary` | `uiButtonStyles` |
+| Native select | `select.ui-select` | `uiButtonStyles` |
+| Tabs | `.ui-tabs` with `button.ui-button.ui-tab`; optionally `ui-tabs--primary` | `uiTabStyles`, `uiToolbarStyles`, and `uiButtonStyles` |
 | Secondary toolbar | `.ui-toolbar`, with optional `.ui-toolbar-title` and `.ui-toolbar-group` | `uiToolbarStyles` plus `uiButtonStyles` |
 | Primary-size toolbar | Add `ui-toolbar--primary` for 44px controls | `uiToolbarStyles` plus `uiButtonStyles` |
 | Bounded control group | Add `ui-toolbar-group--bounded` where a group meets empty bar space | `uiToolbarStyles` |
@@ -78,6 +80,8 @@ Keep only content-specific rules in each dialog. Existing dimension differences 
 
 ## Migration boundary
 
-The current consumers are navigation headings, session selection controls, navigation dropdowns, the chat composer's model/thinking/send/stop toolbar, and the common selection/form dialogs. More specialized surfaces, such as Settings and session cleanup, are not yet migrated.
+The current consumers are navigation headings, session selection controls, navigation dropdowns, the chat composer's model/thinking/send/stop toolbar, main navigation tabs, and the common selection/form dialogs. More specialized surfaces, such as Settings and session cleanup, are not yet migrated.
 
-These are internal client primitives, not a public plugin API. Independently bundled plugins must not deep-import client implementation files. Shared plugin styling needs an explicit supported package/API boundary; until then, keep equivalent controls consistent with the interaction guidelines in `AGENTS.md` and consolidate them within their package when touched.
+The internal style exports also supply the host-owned [UI styles v1 capability](plugins.md#host-provided-ui-styles). External plugins request that capability and apply its CSS inside their shadow root; they must not deep-import these client modules or bundle a copy of their styling. Relay is the first consumer. The public contract currently covers buttons, selects, toolbars, and tabs, not menus, forms, or dialogs.
+
+Keep the documented v1 classes, markup patterns, and supported states compatible when improving their appearance. Breaking contract changes need a new capability version rather than silently changing existing plugins. Extra selectors in the generated stylesheet do not become supported APIs just because they are present.

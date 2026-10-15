@@ -15,6 +15,7 @@ import type {
   ContentRendererInput,
   JsonValue,
   PluginCapability,
+  UiStylesCapabilityV1,
   PluginPeer,
   PiWebPlugin,
   Workspace,
@@ -136,15 +137,33 @@ const publishedCapability: PluginCapability<FixtureIdentityCapabilityV1, 1> = Ob
   parse: identityCapability.parse,
 });
 
+const uiStylesV1: PluginCapability<UiStylesCapabilityV1, 1> = {
+  pluginId: "pi-web", id: "ui-styles", version: 1,
+  parse(value): UiStylesCapabilityV1 {
+    if (typeof value !== "object" || value === null || !("cssText" in value) || typeof value.cssText !== "string") {
+      throw new Error("UI styles v1 unavailable");
+    }
+    return { cssText: value.cssText };
+  },
+};
+
+export function applyUiStyles(styles: UiStylesCapabilityV1, root: ShadowRoot): void {
+  const element = document.createElement("style");
+  element.textContent = styles.cssText;
+  root.prepend(element);
+}
+
 const plugin: PiWebPlugin = {
   apiVersion: 4,
   name: "Browser declaration fixture",
-  requires: [identityCapability],
+  requires: [identityCapability, uiStylesV1],
   activate: async (context) => ({
     provides: [{ capability: publishedCapability, value: { version: 1, label: context.pluginId } }],
     start: ({ capabilities, signal }) => {
       if (signal.aborted || context.lifetimeSignal.aborted) return;
       capabilities.resolve(identityCapability);
+      const styles: UiStylesCapabilityV1 = capabilities.resolve(uiStylesV1);
+      void styles.cssText;
     },
     dispose: (signal) => {
       if (signal.aborted) return;

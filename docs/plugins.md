@@ -313,6 +313,70 @@ Use the smallest example that fits. Source links below track development on `mai
 
 The current browser and server contracts are both **API v5**. Browser v4 and server v3 remain supported with a once-per-plugin deprecation diagnostic; no removal date is set. Other versions are unsupported. The public source contracts and their tests are the reference for signatures, validation, limits, and lifecycle details.
 
+### Host-provided UI styles
+
+Browser plugins can reuse PI WEB's button, toolbar, and tab styles without bundling a stylesheet or a UI framework. Request the host capability `{ pluginId: "pi-web", id: "ui-styles", version: 1 }` in `requires`, then resolve it in `start`. The value is `UiStylesCapabilityV1`, containing a read-only `cssText` string.
+
+```ts
+import type { PiWebPlugin, PluginCapability, UiStylesCapabilityV1 } from "@jmfederico/pi-web/plugin-api";
+
+const uiStylesV1: PluginCapability<UiStylesCapabilityV1> = {
+  pluginId: "pi-web", id: "ui-styles", version: 1,
+  parse(value) {
+    if (typeof value !== "object" || value === null || !("cssText" in value)
+        || typeof value.cssText !== "string") throw new Error("UI styles v1 unavailable");
+    return { cssText: value.cssText };
+  },
+};
+
+export default {
+  apiVersion: 5,
+  name: "Example panel",
+  requires: [uiStylesV1],
+  activate({ html }) {
+    let uiCssText = "";
+    return {
+      start({ capabilities }) {
+        uiCssText = capabilities.resolve(uiStylesV1).cssText;
+      },
+      contributions: {
+        workspacePanels: [{
+          id: "example", title: "Example",
+          render: () => html`<my-panel .uiCssText=${uiCssText}></my-panel>`,
+        }],
+      },
+    };
+  },
+} satisfies PiWebPlugin;
+```
+
+Your panel applies the string inside its own shadow root:
+
+```ts
+const style = document.createElement("style");
+style.textContent = uiCssText;
+shadowRoot.prepend(style);
+```
+
+Set `textContent`, rather than interpolating CSS into HTML. Reuse or update that style element when the property changes; do not recreate the panel's content just to apply styles. No runtime package import is needed; the public import above supplies build-time types only. The shipped [Relay panel](https://github.com/jmfederico/pi-web/tree/main/pi-packages/relays) is a plain-DOM example.
+
+Version 1 supports these native HTML patterns:
+
+| Pattern | Classes and states |
+| --- | --- |
+| Button | `button.ui-button`; optional `ui-button--compact`, `ui-button--icon`, `ui-button--primary`, or `danger`; native `disabled` |
+| Select | `select.ui-select`; preserve its native label and change handling |
+| Toolbar | `.ui-toolbar`, optionally `ui-toolbar--primary`; group controls with `.ui-toolbar-group` and label areas with `.ui-toolbar-title` |
+| Trailing group boundary | Add `ui-toolbar-group--bounded` when a group meets empty bar space, not the bar's edge |
+| Tabs | `.ui-tabs` containing `button.ui-button.ui-tab`; optionally `ui-tabs--primary` for main navigation; nested groups can use `.ui-toolbar-group` |
+| Active tab | `.selected`, `aria-current="page"`, or `aria-pressed="true"` on the tab button |
+
+Toolbars and tabs use compact 32px desktop controls by default. Primary variants use 44px controls; coarse-pointer targets grow to at least 44px. Icon-only buttons need an accessible name. Keep grouped controls gapless and let the shared styles provide separators and hover/focus states. Use existing `--pi-*` colour tokens in plugin-specific content styles so theme changes continue to propagate through shadow roots.
+
+These are appearance patterns: the plugin still owns events, selection, keyboard navigation, and ARIA semantics. Styling a row as tabs does not implement an ARIA tab widget. Do not deep-import client source files or depend on undocumented selectors, even if they appear in the stylesheet. Menu, form, and dialog styles are not part of this first public capability.
+
+The capability works with supported browser APIs v4 and v5. A host without `ui-styles` v1 rejects a plugin that requires it, rather than silently rendering an unstyled fallback. Compatible visual improvements arrive with the running PI WEB frontend after reload; the plugin does not need rebuilding. Breaking class, markup, or state changes require a new capability version. This does not add custom theme CSS loading.
+
 ### Read-only catalogs and scoped backends (v5)
 
 Browser v5 action, panel, label, and invoked message-action contexts include `catalog`. It lists and resolves registered projects, their workspaces, and saved sessions without requiring a plugin backend. Each catalog captures `machineId`; changing selection creates a new callback context, never retargets an existing catalog. Activation still provides plugin identity, template helpers, selection observation, and lifecycle signals—not a selection-bound catalog.
