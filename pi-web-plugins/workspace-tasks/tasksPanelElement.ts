@@ -282,8 +282,16 @@ function taskStyles(): string {
   return `
     <style>
       :host { display: contents; }
-      .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--pi-border-muted); }
-      .toolbar-tasks { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+      .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; padding: 0 0 0 10px; border-bottom: 1px solid var(--pi-border-muted); font-size: 12px; color: var(--pi-muted); }
+      .toolbar > strong { font-weight: 500; }
+      .toolbar-tasks { align-self: stretch; display: inline-flex; align-items: stretch; flex-wrap: wrap; justify-content: flex-end; gap: 0; }
+      .toolbar button.secondary { box-sizing: border-box; min-height: 32px; border: 0; border-radius: 0; background: transparent; color: var(--pi-muted); padding: 6px 10px; font: 12px/20px system-ui, sans-serif; }
+      .toolbar button + button { border-inline-start: 1px solid var(--pi-border-muted); }
+      .toolbar button:hover:not(:disabled) { background: var(--pi-surface-hover); color: var(--pi-text); }
+      .toolbar button:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: -2px; }
+      @media (pointer: coarse) {
+        .toolbar button.secondary { min-width: 44px; min-height: 44px; }
+      }
       .viewer { box-sizing: border-box; min-height: 0; overflow: auto; padding: 12px; }
       .tasks-viewer { display: grid; align-content: start; gap: 12px; }
       .tasks { display: grid; gap: 14px; }

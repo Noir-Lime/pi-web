@@ -439,8 +439,16 @@ export class WorkspaceFilesPanel extends LitElement {
   static override styles = css`
     :host { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; color: var(--pi-text); background: var(--pi-bg); font: 13px system-ui, sans-serif; container-type: inline-size; }
     .files-panel { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
-    .toolbar { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 8px; border-bottom: 1px solid var(--pi-border-muted); }
-    .toolbar-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+    .toolbar { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 0 0 10px; border-bottom: 1px solid var(--pi-border-muted); font-size: 12px; color: var(--pi-muted); }
+    .toolbar > strong { font-weight: 500; }
+    .toolbar-actions { align-self: stretch; display: flex; align-items: stretch; gap: 0; margin-left: auto; }
+    .toolbar-actions button { box-sizing: border-box; min-height: 32px; border: 0; border-radius: 0; background: transparent; color: var(--pi-muted); padding: 6px 10px; font: 12px/20px system-ui, sans-serif; }
+    .toolbar-actions button + button { border-inline-start: 1px solid var(--pi-border-muted); }
+    .toolbar-actions button:hover { background: var(--pi-surface-hover); color: var(--pi-text); }
+    .toolbar-actions button:focus-visible { outline-offset: -2px; }
+    @media (pointer: coarse) {
+      .toolbar-actions button { min-width: 44px; min-height: 44px; }
+    }
     button { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--pi-border); border-radius: 7px; background: var(--pi-surface); color: var(--pi-text); padding: 5px 7px; cursor: pointer; }
     button:focus-visible, input:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 1px; }
     .muted { color: var(--pi-muted); }

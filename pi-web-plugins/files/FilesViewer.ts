@@ -338,21 +338,27 @@ export class WorkspaceFileViewer extends LitElement {
     formattedTextStyles(),
     css`
       :host { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: auto; color: var(--pi-text); font: 14px system-ui, sans-serif; }
-      .viewer-header { position: sticky; top: 0; z-index: 1; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px; border-bottom: 1px solid var(--pi-border-muted); background: var(--pi-bg); }
-      .viewer-header strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .viewer-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+      .viewer-header { position: sticky; top: 0; z-index: 1; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; padding: 0 0 0 10px; border-bottom: 1px solid var(--pi-border-muted); background: var(--pi-bg); }
+      .viewer-header strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; }
+      .viewer-actions { align-self: stretch; display: flex; align-items: center; gap: 0; flex: 0 0 auto; }
+      .viewer-actions > small { padding-inline: 8px; }
       select { max-width: 100%; border: 1px solid var(--pi-border); border-radius: 6px; background: var(--pi-surface); color: var(--pi-text); padding: 3px 8px; font: 12px system-ui, sans-serif; }
       select:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 1px; }
       small { color: var(--pi-muted); }
       .viewer-action, .download-link { flex: 0 0 auto; border: 1px solid var(--pi-border-muted); border-radius: 6px; background: var(--pi-surface); color: var(--pi-text); text-decoration: none; white-space: nowrap; }
       .viewer-action { padding: 3px 8px; font-size: 12px; }
       .viewer-action:hover, .download-link:hover { border-color: var(--pi-border); background: var(--pi-bg); }
-      .viewer-mode { flex: 0 0 auto; display: flex; justify-content: flex-end; gap: 4px; }
+      .viewer-mode { align-self: stretch; flex: 0 0 auto; display: flex; justify-content: flex-end; gap: 0; }
       .viewer-mode button, .preview-state button { border: 1px solid var(--pi-border); border-radius: 6px; background: var(--pi-surface); color: var(--pi-text); padding: 4px 9px; cursor: pointer; font: inherit; }
-      .viewer-mode button { font-size: 12px; padding: 3px 8px; }
-      .viewer-mode button:hover { background: var(--pi-bg); }
-      .viewer-mode button[aria-pressed="true"] { border-color: var(--pi-accent); background: var(--pi-selection-bg); }
-      .viewer-mode button:focus-visible, .preview-state button:focus-visible, a:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 1px; }
+      .viewer-mode button, .viewer-actions select, .viewer-actions .viewer-action { box-sizing: border-box; align-self: stretch; display: inline-flex; align-items: center; min-height: 32px; border: 0; border-radius: 0; background: transparent; color: var(--pi-muted); font: 12px/20px system-ui, sans-serif; padding: 6px 8px; }
+      .viewer-actions > :not(small) + *, .viewer-mode button + button { border-inline-start: 1px solid var(--pi-border-muted); }
+      .viewer-mode button:hover, .viewer-actions .viewer-action:hover, .viewer-actions select:hover { background: var(--pi-surface-hover); color: var(--pi-text); }
+      .viewer-mode button[aria-pressed="true"] { background: var(--pi-surface-hover); color: var(--pi-text); }
+      .viewer-actions button:focus-visible, .viewer-actions select:focus-visible, .viewer-actions a:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: -2px; }
+      @media (pointer: coarse) {
+        .viewer-mode button, .viewer-actions select, .viewer-actions .viewer-action { min-width: 44px; min-height: 44px; }
+      }
+      .preview-state button:focus-visible, a:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 1px; }
       pi-web-files-code-viewer { flex: 1 1 auto; min-height: 0; }
       .markdown-preview { flex: 1 1 auto; min-height: 0; box-sizing: border-box; overflow: auto; padding: 16px; }
       .preview-note { flex: 0 0 auto; margin: 0; border-bottom: 1px solid var(--pi-border-muted); background: var(--pi-surface); color: var(--pi-muted); padding: 7px 10px; font-size: 12px; }
@@ -365,7 +371,8 @@ export class WorkspaceFileViewer extends LitElement {
       .preview-state p { margin: 0; }
       .download-link { display: inline-block; padding: 8px 16px; font-size: 13px; }
       @media (max-width: 640px) {
-        .viewer-header { align-items: flex-start; flex-direction: column; }
+        .viewer-header { align-items: flex-start; flex-direction: column; gap: 0; padding-inline: 0; }
+        .viewer-header strong { box-sizing: border-box; max-width: 100%; padding: 6px 10px; }
         .viewer-actions { width: 100%; flex-wrap: wrap; }
       }
     `,

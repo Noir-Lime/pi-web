@@ -530,9 +530,18 @@ function relaysStyles(): string {
          (the app container is a fixed-height flex column; with shrink enabled
          the viewer's huge content basis starves them down to a sliver once a
          tall document renders). The viewer absorbs all shrinking instead. */
-      .toolbar { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--pi-border-muted); }
+      .toolbar { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; padding: 0 0 0 10px; border-bottom: 1px solid var(--pi-border-muted); font-size: 12px; color: var(--pi-muted); }
       .toolbar[hidden], .document-tabs[hidden] { display: none; }
-      .toolbar-actions { display: inline-flex; align-items: center; flex-wrap: nowrap; justify-content: flex-end; gap: 8px; min-width: 0; }
+      .toolbar-actions { align-self: stretch; display: inline-flex; align-items: stretch; flex-wrap: nowrap; justify-content: flex-end; gap: 0; min-width: 0; }
+      .toolbar button, .toolbar select { box-sizing: border-box; min-height: 32px; border: 0; border-radius: 0; background: transparent; color: var(--pi-muted); font: 12px/20px system-ui, sans-serif; }
+      .toolbar-actions > * + * { border-inline-start: 1px solid var(--pi-border-muted); }
+      .toolbar button.icon-button { width: 32px; height: auto; }
+      .toolbar button:hover, .toolbar select:hover { background: var(--pi-surface-hover); color: var(--pi-text); }
+      .toolbar button:focus-visible, .toolbar select:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: -2px; }
+      @media (pointer: coarse) {
+        .toolbar button, .toolbar select { min-width: 44px; min-height: 44px; }
+        .toolbar button.icon-button { width: 44px; }
+      }
       .relay-name { min-width: 0; color: var(--pi-text-secondary); overflow-wrap: anywhere; }
       /* Bottom padding (not viewer margin) so the gap below the tabs persists
          when the viewer's content scrolls up against its top edge. */
@@ -547,7 +556,7 @@ function relaysStyles(): string {
       button.icon-button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
       select { min-width: 0; max-width: 240px; padding: 5px 6px; }
       .document-tab { flex: 0 0 auto; white-space: nowrap; font-size: 12px; padding: 4px 10px; }
-      .document-tab.active { border-color: var(--pi-accent-border); background: var(--pi-accent); color: var(--pi-bg); }
+      .document-tab.active { border-color: var(--pi-border); background: var(--pi-surface-hover); color: var(--pi-text); }
       /* An expanded folder wraps its chip and children in one rounded group so
          nested tabs read as contained by their folder; nested groups stack.
          No inner padding: the wrapper's border lines sit flush on the button

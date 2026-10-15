@@ -152,7 +152,8 @@ describe("bundled Git browser plugin", () => {
     const styleRules = (container.querySelector("style")?.textContent ?? "")
       .split("\n")
       .map((line) => line.trim())
-      .filter((line) => line.includes("{"));
+      // Media queries group rules; their inner selectors must still be panel-scoped.
+      .filter((line) => line.includes("{") && !line.startsWith("@media "));
     expect(styleRules).toContainEqual(expect.stringContaining(".git-panel .git-row"));
     expect(styleRules.every((rule) => rule.startsWith(".git-panel"))).toBe(true);
     expect(container.querySelector('[role="table"][aria-label="Unified diff"]')).not.toBeNull();
