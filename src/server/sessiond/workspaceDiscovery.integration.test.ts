@@ -65,7 +65,10 @@ it.skipIf(process.platform === "win32" || namedHooks.status !== 0 || !namedHooks
       registerWorkspaceNotificationRoutes(app, { projects, workspaces: registry, changes });
       await app.listen({ path: socket });
       await registry.reconcileProject(project);
-      expect(logger.warn).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
+        { pluginId: "git", apiVersion: 3 },
+        "Server plugin API v3 is deprecated; migrate to API v5",
+      );
 
       const feature = join(root, "feature with spaces");
       await run("git", ["-C", repository, "worktree", "add", "-q", "-b", "feature", feature], { env });
