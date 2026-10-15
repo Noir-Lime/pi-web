@@ -315,7 +315,7 @@ The current browser and server contracts are both **API v5**. Browser v4 and ser
 
 ### Host-provided UI styles
 
-Browser plugins can reuse PI WEB's button, toolbar, and tab styles without bundling a stylesheet or a UI framework. Request the host capability `{ pluginId: "pi-web", id: "ui-styles", version: 1 }` in `requires`, then resolve it in `start`. The value is `UiStylesCapabilityV1`, containing a read-only `cssText` string.
+Browser plugins can reuse PI WEB's button, toolbar, tab, and file/tree-row styles without bundling a stylesheet or a UI framework. Request the host capability `{ pluginId: "pi-web", id: "ui-styles", version: 1 }` in `requires`, then resolve it in `start`. The value is `UiStylesCapabilityV1`, containing a read-only `cssText` string.
 
 ```ts
 import type { PiWebPlugin, PluginCapability, UiStylesCapabilityV1 } from "@jmfederico/pi-web/plugin-api";
@@ -358,7 +358,7 @@ style.textContent = uiCssText;
 shadowRoot.prepend(style);
 ```
 
-Set `textContent`, rather than interpolating CSS into HTML. Reuse or update that style element when the property changes; do not recreate the panel's content just to apply styles. No runtime package import is needed; the public import above supplies build-time types only. The shipped [Relay panel](https://github.com/jmfederico/pi-web/tree/main/pi-packages/relays) is a plain-DOM example.
+Set `textContent` (or use an escaped text binding in a template library), rather than building HTML strings containing CSS. Reuse or update that style element when the property changes; do not recreate the panel's content just to apply styles. No runtime package import is needed; the public import above supplies build-time types only. The shipped [Relay panel](https://github.com/jmfederico/pi-web/tree/main/pi-packages/relays) is a plain-DOM example.
 
 Version 1 supports these native HTML patterns:
 
@@ -373,9 +373,23 @@ Version 1 supports these native HTML patterns:
 
 Toolbars and tabs use compact 32px desktop controls by default. Primary variants use 44px controls; coarse-pointer targets grow to at least 44px. Icon-only buttons need an accessible name. Keep grouped controls gapless and let the shared styles provide separators and hover/focus states. Use existing `--pi-*` colour tokens in plugin-specific content styles so theme changes continue to propagate through shadow roots.
 
-These are appearance patterns: the plugin still owns events, selection, keyboard navigation, and ARIA semantics. Styling a row as tabs does not implement an ARIA tab widget. Do not deep-import client source files or depend on undocumented selectors, even if they appear in the stylesheet. Menu, form, and dialog styles are not part of this first public capability.
+Version 1 also provides compact file/tree lists:
 
-The capability works with supported browser APIs v4 and v5. A host without `ui-styles` v1 rejects a plugin that requires it, rather than silently rendering an unstyled fallback. Compatible visual improvements arrive with the running PI WEB frontend after reload; the plugin does not need rebuilding. Breaking class, markup, or state changes require a new capability version. This does not add custom theme CSS loading.
+```html
+<div class="ui-file-list">
+  <button type="button" class="ui-button ui-file-row selected" style="--depth: 1" aria-current="page" title="src/main.ts">
+    <span class="ui-file-leading" aria-hidden="true"><!-- file icon or disclosure chevron --></span>
+    <span class="ui-file-label">main.ts</span>
+    <span class="ui-file-meta">M</span>
+  </button>
+</div>
+```
+
+File rows are gapless and **32px high for every pointer type**, intentionally remaining compact on touch devices too. The leading slot is 16px wide; integer `--depth` adds 16px indentation per level. `.ui-file-label` truncates long names; provide the full path through `title`. `.ui-file-meta` is optional trailing metadata. Use `.selected` or `aria-current="page"` for the active file, and `aria-expanded` on folder buttons. The Files and Git plugins use this pattern without sharing their controllers or viewer layout.
+
+These are appearance patterns: the plugin still owns events, selection, keyboard navigation, and ARIA semantics. Styling a row as tabs does not implement an ARIA tab widget. Do not deep-import client source files or depend on undocumented selectors, even if they appear in the stylesheet. Menu, form, and dialog styles are not part of the public UI style contract.
+
+The capability works with supported browser APIs v4 and v5. A host without the requested `ui-styles` version rejects the plugin, rather than silently rendering an unstyled fallback. Compatible visual improvements arrive with the running PI WEB frontend after reload; the plugin does not need rebuilding. Breaking class, markup, or state changes require a new capability version. This does not add custom theme CSS loading.
 
 ### Read-only catalogs and scoped backends (v5)
 

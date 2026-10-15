@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import type { PluginActivationContext, PluginRuntimeContext, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
+import type { PluginActivationContext, PluginCapability, PluginRuntimeContext, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
 import { html, svg, type TemplateResult } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FilesRuntime } from "./FilesRuntime";
@@ -13,6 +13,26 @@ afterEach(() => {
 });
 
 describe("Files plugin activation", () => {
+  it("requires UI styles v1 and passes start-resolved CSS across the panel boundary", async () => {
+    expect(plugin.requires.map(({ id, version }) => ({ id, version }))).toContainEqual({ id: "ui-styles", version: 1 });
+    const result = activateFilesPlugin(activationContext(), new FilesRuntime());
+    const cssText = ".ui-file-row { height: 32px; }";
+    const requests: string[] = [];
+    await result.start?.({ signal: new AbortController().signal, capabilities: {
+      resolve<Value>(token: PluginCapability<Value>): Value {
+        requests.push(token.id);
+        return token.parse({ cssText, listRenderers: vi.fn(), renderText: vi.fn(), renderMarkdown: vi.fn() });
+      },
+    } });
+    expect(requests).toEqual(["content-rendering", "ui-styles"]);
+    const panel = result.contributions.workspacePanels?.[0]?.render(createWorkspaceContext());
+    expect(panel?.values).toContain(cssText);
+    const requirement = plugin.requires.find(({ id }) => id === "ui-styles");
+    for (const value of [null, {}, { cssText: 32 }]) {
+      expect(() => requirement?.parse(value)).toThrow("Files requires UI styles capability v1");
+    }
+  });
+
   it("registers the canonical panel, actions, and custom elements synchronously", () => {
     const runtime = new FilesRuntime();
     const result = activateFilesPlugin(activationContext(), runtime);

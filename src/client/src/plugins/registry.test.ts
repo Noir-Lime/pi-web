@@ -13,6 +13,7 @@ import { adaptPublicPlugin, publicPluginState } from "./publicContext";
 import type { PluginBackendRequestTarget } from "../api/pluginBackends";
 import type { PluginCapability as PublicPluginCapability, UiStylesCapabilityV1 } from "../../../plugin-api";
 import { uiButtonStyles, uiTabStyles, uiToolbarStyles } from "../components/ui/controlStyles";
+import { uiFileListStyles } from "../components/ui/fileListStyles";
 import { uiStylesCapability, uiStylesCapabilityToken } from "./uiStyles";
 
 it("resolves file-opening panels by availability, applicability, order and scoped context", async () => {
@@ -157,9 +158,9 @@ describe("PluginRegistry UI styles capability", () => {
     const start = vi.fn((context: import("../../../plugin-api").PluginStartContext) => {
       const styles = context.capabilities.resolve(request);
       expect(styles.cssText).toBe(uiStylesCapability.cssText);
-      expect(styles.cssText).toBe([uiButtonStyles, uiToolbarStyles, uiTabStyles].map((styles) => styles.cssText).join("\n"));
+      expect(styles.cssText).toBe([uiButtonStyles, uiToolbarStyles, uiTabStyles, uiFileListStyles].map((styles) => styles.cssText).join("\n"));
       // Public class hooks are a versioned contract; appearance declarations may evolve freely.
-      for (const name of ["ui-button", "ui-button--compact", "ui-button--icon", "ui-button--primary", "ui-select", "ui-toolbar", "ui-toolbar--primary", "ui-toolbar-title", "ui-toolbar-group", "ui-toolbar-group--bounded", "ui-tabs", "ui-tabs--primary", "ui-tab"]) {
+      for (const name of ["ui-button", "ui-button--compact", "ui-button--icon", "ui-button--primary", "ui-select", "ui-toolbar", "ui-toolbar--primary", "ui-toolbar-title", "ui-toolbar-group", "ui-toolbar-group--bounded", "ui-tabs", "ui-tabs--primary", "ui-tab", "ui-file-list", "ui-file-row", "ui-file-leading", "ui-file-label", "ui-file-meta"]) {
         expect(styles.cssText).toMatch(new RegExp(`\\.${name}(?![\\w-])`));
       }
       expect(Object.isFrozen(uiStylesCapability)).toBe(true);

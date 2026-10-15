@@ -14,6 +14,7 @@ The current primitives live in `src/client/src/components/ui/controlStyles.ts`. 
 | Primary action | Add `ui-button--primary` | `uiButtonStyles` |
 | Native select | `select.ui-select` | `uiButtonStyles` |
 | Tabs | `.ui-tabs` with `button.ui-button.ui-tab`; optionally `ui-tabs--primary` | `uiTabStyles`, `uiToolbarStyles`, and `uiButtonStyles` |
+| File/tree rows | `.ui-file-list`, `button.ui-button.ui-file-row`, `.ui-file-leading`, `.ui-file-label`, optional `.ui-file-meta`; integer `--depth` | `uiFileListStyles` and `uiButtonStyles` |
 | Secondary toolbar | `.ui-toolbar`, with optional `.ui-toolbar-title` and `.ui-toolbar-group` | `uiToolbarStyles` plus `uiButtonStyles` |
 | Primary-size toolbar | Add `ui-toolbar--primary` for 44px controls | `uiToolbarStyles` plus `uiButtonStyles` |
 | Bounded control group | Add `ui-toolbar-group--bounded` where a group meets empty bar space | `uiToolbarStyles` |
@@ -73,7 +74,7 @@ Keep only content-specific rules in each dialog. Existing dimension differences 
 
 - Primitives own control sizing, padding, borders, hover, focus, selected, disabled, and danger treatments. Change those centrally rather than copying them into each screen.
 - Consumers own layout and domain content: labels, counts, tree indentation, popup placement, and callbacks. Preserve semantic classes used by controllers and tests alongside primitive classes.
-- Standalone buttons default to 44px targets. Secondary toolbars, popup items, and compact buttons use 32px desktop targets. Coarse pointers get at least 44px height, and icon targets also get at least 44px width.
+- Standalone buttons default to 44px targets. Secondary toolbars, popup items, and compact buttons use 32px desktop targets. Coarse pointers get at least 44px height, and icon targets also get at least 44px width. Compact file/tree rows are an explicit exception: they remain 32px for every pointer type, with matching 16px indentation in Files and Git.
 - Use shared separators, not repeated outlines or exterior gaps between related controls. A group followed by empty bar space needs a trailing boundary; use `ui-toolbar-group--bounded` rather than a one-off button border. Its separator shares the next group's leading border when the gap collapses. Do not add a trailing separator where the bar edge already bounds the group. Keep meaningful separation between unrelated groups.
 - Keep the existing compact 28px desktop subsession disclosure as a specialized tree control; it is not a toolbar button.
 - Check geometry in a real browser. Native-control interaction tests still belong at the consuming component boundary.
@@ -82,6 +83,6 @@ Keep only content-specific rules in each dialog. Existing dimension differences 
 
 The current consumers are navigation headings, session selection controls, navigation dropdowns, the chat composer's model/thinking/send/stop toolbar, main navigation tabs, and the common selection/form dialogs. More specialized surfaces, such as Settings and session cleanup, are not yet migrated.
 
-The internal style exports also supply the host-owned [UI styles v1 capability](plugins.md#host-provided-ui-styles). External plugins request that capability and apply its CSS inside their shadow root; they must not deep-import these client modules or bundle a copy of their styling. Relay is the first consumer. The public contract currently covers buttons, selects, toolbars, and tabs, not menus, forms, or dialogs.
+The internal style exports also supply the host-owned [UI styles capabilities](plugins.md#host-provided-ui-styles). External plugins request v1 and apply its CSS inside their shadow root; they must not deep-import these client modules or bundle a copy of their styling. Relay, Files, and Git use v1 for buttons, selects, toolbars, tabs, and compact file/tree rows. Menus, forms, and dialogs are not part of the public contract.
 
 Keep the documented v1 classes, markup patterns, and supported states compatible when improving their appearance. Breaking contract changes need a new capability version rather than silently changing existing plugins. Extra selectors in the generated stylesheet do not become supported APIs just because they are present.

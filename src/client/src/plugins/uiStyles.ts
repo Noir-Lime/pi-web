@@ -1,9 +1,10 @@
 import type { UiStylesCapabilityV1 } from "../../../plugin-api";
 import { uiButtonStyles, uiTabStyles, uiToolbarStyles } from "../components/ui/controlStyles";
+import { uiFileListStyles } from "../components/ui/fileListStyles";
 import type { PluginCapability } from "./types";
 
 export const uiStylesCapability: UiStylesCapabilityV1 = Object.freeze({
-  cssText: [uiButtonStyles, uiToolbarStyles, uiTabStyles].map((styles) => styles.cssText).join("\n"),
+  cssText: [uiButtonStyles, uiToolbarStyles, uiTabStyles, uiFileListStyles].map((styles) => styles.cssText).join("\n"),
 });
 
 export const uiStylesCapabilityToken: PluginCapability<UiStylesCapabilityV1> = {

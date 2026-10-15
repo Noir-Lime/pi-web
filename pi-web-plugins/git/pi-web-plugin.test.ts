@@ -2,12 +2,13 @@
 
 import { html, render, svg } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { JsonValue, PluginPeer, PluginRuntimeContext, Workspace, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
+import type { JsonValue, PluginCapability, PluginPeer, PluginRuntimeContext, Workspace, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
 import { GIT_FILE_VIEW_STORAGE_KEY } from "./browser/gitFileViewPreference.js";
 import plugin from "./browser/pi-web-plugin.js";
 
 const projectId = "project-1";
 const workspaceId = "workspace-1";
+const hostCssText = ".ui-file-row { height: 32px; }";
 
 const gitWorkspace: Workspace = {
   id: workspaceId,
@@ -26,6 +27,16 @@ afterEach(() => {
 });
 
 describe("bundled Git browser plugin", () => {
+  it("requires host UI styles v1 and rejects invalid CSS payloads", () => {
+    const capability = plugin.requires[0];
+    if (capability === undefined) throw new Error("Expected host UI styles requirement");
+    expect(capability).toMatchObject({ pluginId: "pi-web", id: "ui-styles", version: 1 });
+    expect(capability.parse({ cssText: hostCssText })).toEqual({ cssText: hostCssText });
+    for (const value of [null, {}, { cssText: 1 }]) {
+      expect(() => capability.parse(value)).toThrow("requires cssText");
+    }
+  });
+
   it("contributes provider-owned actions and a panel that replacements suppress", async () => {
     const contributions = activate("git");
     const panel = contributions.workspacePanels?.[0];
@@ -149,12 +160,20 @@ describe("bundled Git browser plugin", () => {
     expect(container.textContent).toContain("unstaged");
     expect(container.querySelector(".git-panel")).not.toBeNull();
     expect(container.querySelector(".split")).toBeNull();
-    const styleRules = (container.querySelector("style")?.textContent ?? "")
+    expect(container.querySelector("style[data-ui-styles]")?.textContent).toBe(hostCssText);
+    expect(container.querySelector(".git-toolbar.ui-toolbar .ui-button")).not.toBeNull();
+    expect(container.querySelector(".git-file-list.ui-file-list")).not.toBeNull();
+    const selectedRow = button(container, "src/main.ts");
+    expect(selectedRow.classList.contains("selected")).toBe(true);
+    expect(selectedRow.querySelector(".ui-file-label")?.textContent).toBe("src/main.ts");
+    expect(selectedRow.querySelector(".ui-file-leading svg")?.getAttribute("viewBox")).toBe("0 0 24 24");
+    expect(selectedRow.querySelector(".ui-file-meta")?.textContent).toBe("M");
+    const styleRules = (container.querySelector("style[data-git-styles]")?.textContent ?? "")
       .split("\n")
       .map((line) => line.trim())
       // Media queries group rules; their inner selectors must still be panel-scoped.
       .filter((line) => line.includes("{") && !line.startsWith("@media "));
-    expect(styleRules).toContainEqual(expect.stringContaining(".git-panel .git-row"));
+    expect(styleRules).not.toContainEqual(expect.stringContaining(".git-panel .git-row"));
     expect(styleRules.every((rule) => rule.startsWith(".git-panel"))).toBe(true);
     expect(container.querySelector('[role="table"][aria-label="Unified diff"]')).not.toBeNull();
     expect([...container.querySelectorAll(".inline-change")].map((entry) => entry.textContent)).toContain("new");
@@ -449,7 +468,7 @@ describe("bundled Git browser plugin", () => {
 });
 
 function activate(pluginId: string, runtimePluginId = pluginId) {
-  return plugin.activate({
+  const result = plugin.activate({
     apiVersion: 4,
     pluginId,
     runtimePluginId,
@@ -457,7 +476,12 @@ function activate(pluginId: string, runtimePluginId = pluginId) {
     svg,
     signal: new AbortController().signal,
     lifetimeSignal: new AbortController().signal,
-  }).contributions;
+  });
+  result.start({
+    capabilities: { resolve: <Value,>(capability: PluginCapability<Value>): Value => capability.parse({ cssText: hostCssText }) },
+    signal: new AbortController().signal,
+  });
+  return result.contributions;
 }
 
 function requiredPanel(contributions: ReturnType<typeof activate>) {

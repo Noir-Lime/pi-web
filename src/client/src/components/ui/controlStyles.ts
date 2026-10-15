@@ -70,7 +70,7 @@ export const uiToolbarStyles = css`
   .ui-toolbar-group--bounded { position: relative; }
   /* Share the next control's leading separator if the gap collapses, without overlapping targets. */
   .ui-toolbar-group--bounded::after { content: ""; position: absolute; inset-block: 0; inset-inline-end: -1px; width: 1px; background: var(--pi-border-muted); pointer-events: none; }
-  .ui-toolbar-group > :is(.ui-button, .ui-select) + :is(.ui-button, .ui-select), .ui-toolbar > :is(.ui-button, .ui-select) + :is(.ui-button, .ui-select) { border-inline-start: 1px solid var(--pi-border-muted); }
+  .ui-toolbar-group > :is(.ui-button, .ui-select, .ui-toolbar-group) + :is(.ui-button, .ui-select, .ui-toolbar-group), .ui-toolbar > :is(.ui-button, .ui-select, .ui-toolbar-group) + :is(.ui-button, .ui-select, .ui-toolbar-group) { border-inline-start: 1px solid var(--pi-border-muted); }
   .ui-toolbar > .ui-toolbar-group { border-inline-start: 1px solid var(--pi-border-muted); }
 `;
 
