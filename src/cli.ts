@@ -1369,7 +1369,7 @@ Usage:
   pi-web plugins safe-start show|clear|set <bundled-only|none> [--config <path>] [--restart]
   pi-web workspaces notify --project <projectId> --plugin <pluginId>
   pi-web doctor
-  pi-web update [--yes]
+  pi-web update [--yes] [--force]
   pi-web version [--check]
 
 Recommended install:
