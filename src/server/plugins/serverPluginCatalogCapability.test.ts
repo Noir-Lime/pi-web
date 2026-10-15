@@ -1,10 +1,13 @@
+import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { PI_WEB_HOST_CATALOG_CAPABILITY, type PluginSessionSnapshot } from "../../shared/pluginCatalogTypes.js";
 import type { WorkspaceListing } from "../../shared/apiTypes.js";
 import { createServerPluginCatalogCapabilityFactory } from "./serverPluginCatalogCapability.js";
 
+const repositoryPath = resolve("/repo");
+
 function fixture() {
-  const project = { id: "project", name: "Project", path: "/repo", createdAt: "private" };
+  const project = { id: "project", name: "Project", path: repositoryPath, createdAt: "private" };
   const metadata = { owner: { nested: [true] } };
   const workspace: WorkspaceListing = {
     id: "workspace", projectId: project.id, path: project.path, label: "Main", isMain: true,
@@ -21,8 +24,8 @@ function fixture() {
     signal?.throwIfAborted();
     return Promise.resolve([
     { id: "cold", cwd, archived: true, runtime: "not-hosted", metadata },
-    { id: "idle", cwd: "/repo", archived: false, runtime: "idle" },
-    { id: "busy", cwd: "/repo", archived: false, runtime: "busy", name: "Working" },
+    { id: "idle", cwd: repositoryPath, archived: false, runtime: "idle" },
+    { id: "busy", cwd: repositoryPath, archived: false, runtime: "busy", name: "Working" },
   ]);
   }) };
   const lifetime = new AbortController();
@@ -39,7 +42,7 @@ const selection = { projectId: "project", workspaceId: "workspace" };
 describe("server plugin catalog capability", () => {
   it("lists and resolves detached public projections without exposing mutation methods", async () => {
     const f = fixture();
-    expect(await f.catalog.projects.list()).toEqual([{ id: "project", name: "Project", path: "/repo" }]);
+    expect(await f.catalog.projects.list()).toEqual([{ id: "project", name: "Project", path: repositoryPath }]);
     expect(await f.catalog.projects.get("project")).not.toHaveProperty("createdAt");
     const workspaces = await f.catalog.workspaces.list("project");
     const publicWorkspace = { ...f.workspace, removal: { actionLabel: "Remove", confirmation: "Remove workspace?" } };
@@ -54,7 +57,7 @@ describe("server plugin catalog capability", () => {
     expect(Object.isFrozen(sessions[0]?.metadata?.["owner"])).toBe(true);
     expect(Object.isFrozen(workspaces[0]?.provider?.metadata)).toBe(true);
     expect(Object.keys(f.catalog.sessions)).toEqual(["list", "get"]);
-    expect(f.sessions.listCatalogSessions).toHaveBeenCalledWith("/repo", expect.any(AbortSignal));
+    expect(f.sessions.listCatalogSessions).toHaveBeenCalledWith(repositoryPath, expect.any(AbortSignal));
   });
 
   it("re-resolves authority and rejects stale workspaces, missing projects and sessions", async () => {
