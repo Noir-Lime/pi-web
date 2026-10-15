@@ -20,7 +20,7 @@ export type NavigationFocusTarget = NavigationSection | "chat";
 export class AppNavigationPanel extends LitElement {
   @property({ attribute: false }) machines: Machine[] = [];
   @property({ attribute: false }) selectedMachine?: Machine;
-  /** PWA display mode: surfaces the single-machine identity bubble in the header. */
+  /** PWA display mode: surfaces the single-machine identity in the header. */
   @property({ type: Boolean }) locationIndicator = false;
   @property({ attribute: false }) machineStatuses: Record<string, MachineHealth> = {};
   @property({ attribute: false }) machineStatusSnapshots: Record<string, MachineStatusSnapshot> = {};
@@ -280,11 +280,15 @@ export class AppNavigationPanel extends LitElement {
   static override styles = css`
     :host { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
     :host([compact]) { flex: 1 1 auto; }
-    header { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px; border-bottom: 1px solid var(--pi-border); }
-    header strong { flex: 0 0 auto; }
-    machine-switcher { flex: 1 1 auto; min-width: 0; }
+    header { flex: 0 0 auto; display: flex; align-items: stretch; min-height: 44px; gap: 0; padding: 0; border-bottom: 1px solid var(--pi-border); }
+    header strong { flex: 0 0 auto; display: flex; align-items: center; padding-inline: 12px; }
+    machine-switcher { flex: 1 1 auto; min-width: 0; border-inline-start: 1px solid var(--pi-border-muted); }
     :host([compact]) header { display: none; }
-    .header-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
+    .header-actions { flex: 0 0 auto; display: flex; align-items: stretch; gap: 0; border-inline-start: 1px solid var(--pi-border-muted); }
+    .header-actions > * + * { border-inline-start: 1px solid var(--pi-border-muted); }
+    .header-actions > button { box-sizing: border-box; min-width: 44px; min-height: 44px; border: 0; border-radius: 0; background: transparent; color: var(--pi-muted); padding: 10px 12px; font: 12px/20px system-ui, sans-serif; }
+    .header-actions > button:hover, .header-actions > button:focus-visible { background: var(--pi-surface-hover); color: var(--pi-text); }
+    .header-actions > button:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: -2px; }
     /* Expanded sections share the panel height equally, so collapsing one
        section distributes its space to every remaining section, not just the
        session list. Collapsed sections keep only their heading height. */
@@ -312,7 +316,7 @@ function nextVisibleNavigationTarget(section: NavigationSection, machines: reado
 }
 
 // Only a machine choice makes the machines section navigable: with a single
-// machine the switcher is a static bubble, and compact mode has no list.
+// machine the switcher is a static identity, and compact mode has no list.
 function visibleNavigationSections(machines: readonly Machine[]): NavigationSection[] {
   return NAVIGATION_SECTION_ORDER.filter((section) => section !== "machines" || shouldShowMachinesSection(machines));
 }

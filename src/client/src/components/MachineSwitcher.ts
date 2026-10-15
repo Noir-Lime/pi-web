@@ -7,6 +7,7 @@ import { actionMenuPanelStyle } from "./actionMenu";
 import { hasStatusUnread, renderActivityIndicator, statusActivityKind } from "./activityBadge";
 import { canRemoveMachine } from "./MachineList";
 import type { KeyboardNavigableSection } from "./navigationFocus";
+import { uiButtonStyles, uiMenuStyles } from "./ui/controlStyles";
 
 @customElement("machine-switcher")
 export class MachineSwitcher extends LitElement implements KeyboardNavigableSection {
@@ -58,7 +59,7 @@ export class MachineSwitcher extends LitElement implements KeyboardNavigableSect
     const selected = this.selectedMachine();
     if (selected === undefined) return null;
     // A single machine offers nothing to select: in PWA mode it becomes a
-    // static identity bubble with the machine's icon and URL; in browser mode
+    // static identity with the machine's icon and URL; in browser mode
     // the browser chrome already identifies the instance, so nothing renders.
     if (this.machines.length <= 1) return this.locationIndicator ? this.renderMachineInfo(selected) : null;
     const status = machineStatus(selected, this.statuses);
@@ -84,7 +85,7 @@ export class MachineSwitcher extends LitElement implements KeyboardNavigableSect
           <span class="machine-chevron" aria-hidden="true">▾</span>
         </button>
         ${this.open ? html`
-          <div class="machine-switcher-menu" style=${this.menuStyle} @click=${(event: MouseEvent) => { event.stopPropagation(); }}>
+          <div class="machine-switcher-menu ui-menu" style=${this.menuStyle} @click=${(event: MouseEvent) => { event.stopPropagation(); }}>
             ${this.machines.map((machine) => this.renderMachineOption(machine))}
           </div>
         ` : null}
@@ -101,7 +102,7 @@ export class MachineSwitcher extends LitElement implements KeyboardNavigableSect
       <div class=${`machine-option ${selected ? "selected" : ""} ${hasActions ? "" : "no-actions"}`}>
         <button
           type="button"
-          class="machine-option-main"
+          class="ui-button ui-menu-item machine-option-main"
           title=${machineTitle(machine)}
           data-machine-id=${machine.id}
           @click=${() => { this.select(machine); }}
@@ -114,15 +115,15 @@ export class MachineSwitcher extends LitElement implements KeyboardNavigableSect
           <div class="machine-option-actions">
             <button
               type="button"
-              class="machine-option-actions-toggle"
+              class="ui-button ui-button--icon machine-option-actions-toggle"
               title="Machine actions"
               aria-label=${`Actions for ${machine.name}`}
               aria-expanded=${String(actionsOpen)}
               @click=${(event: MouseEvent) => { event.stopPropagation(); this.toggleActionsMenu(machine.id, event.currentTarget); }}
             >⋯</button>
             ${actionsOpen ? html`
-              <div class="machine-option-actions-panel" style=${this.actionMenuStyle} @click=${(event: MouseEvent) => { event.stopPropagation(); }}>
-                <button class="danger" title=${`Remove ${machine.name}`} @click=${() => { this.removeMachine(machine); }}>Remove</button>
+              <div class="machine-option-actions-panel ui-menu" style=${this.actionMenuStyle} @click=${(event: MouseEvent) => { event.stopPropagation(); }}>
+                <button class="danger ui-button ui-menu-item" title=${`Remove ${machine.name}`} @click=${() => { this.removeMachine(machine); }}>Remove</button>
               </div>
             ` : null}
           </div>
@@ -306,11 +307,12 @@ export class MachineSwitcher extends LitElement implements KeyboardNavigableSect
     void this.onRemove?.(machine);
   }
 
-  static override styles = css`
-    :host { min-width: 0; display: block; }
-    .machine-switcher { min-width: 0; }
-    .machine-switcher-button { box-sizing: border-box; width: 100%; min-width: 0; display: flex; align-items: center; gap: 6px; border: 1px solid var(--pi-border); border-radius: 999px; background: var(--pi-surface); color: var(--pi-text); padding: 5px 8px; cursor: pointer; text-align: left; }
-    .machine-switcher-button:hover, .machine-switcher-button:focus-visible { border-color: var(--pi-accent); background: var(--pi-selection-bg); }
+  static override styles = [uiButtonStyles, uiMenuStyles, css`
+    :host { min-width: 0; display: flex; }
+    .machine-switcher { flex: 1 1 auto; min-width: 0; display: flex; }
+    .machine-switcher-button { box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; display: flex; align-items: center; gap: 6px; border: 0; border-radius: 0; background: transparent; color: var(--pi-text); padding: 6px 10px; cursor: pointer; text-align: left; }
+    .machine-switcher-button:hover, .machine-switcher-button:focus-visible { background: var(--pi-surface-hover); }
+    .machine-switcher-button:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: -2px; }
     .machine-switcher-text { flex: 1 1 auto; min-width: 0; display: grid; gap: 1px; }
     .machine-switcher-kicker { color: var(--pi-muted); font-size: 10px; line-height: 1; text-transform: uppercase; letter-spacing: .02em; }
     .machine-switcher-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; line-height: 1.2; }
@@ -328,26 +330,22 @@ export class MachineSwitcher extends LitElement implements KeyboardNavigableSect
     .machine-icon { flex: 0 0 auto; width: 16px; height: 16px; }
     .machine-icon.dimmed { filter: grayscale(1); opacity: .45; }
     .machine-option-main .machine-icon { width: 14px; height: 14px; }
-    .machine-info { box-sizing: border-box; width: 100%; min-width: 0; display: flex; align-items: center; gap: 6px; border: 1px solid var(--pi-border); border-radius: 999px; background: var(--pi-surface); color: var(--pi-text); padding: 5px 8px; }
+    .machine-info { box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; display: flex; align-items: center; gap: 6px; border: 0; border-radius: 0; background: transparent; color: var(--pi-text); padding: 6px 10px; }
     .machine-info-url { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
-    .machine-switcher-menu { position: fixed; z-index: 10000; box-sizing: border-box; min-width: min(280px, calc(100vw - 16px)); overflow: auto; padding: 4px; border: 1px solid var(--pi-border); border-radius: 10px; background: var(--pi-surface); box-shadow: 0 8px 24px var(--pi-shadow); }
-    .machine-option { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px; align-items: stretch; margin: 2px 0; }
+    .machine-switcher-menu { position: fixed; z-index: 10000; min-width: min(280px, calc(100vw - 16px)); }
+    .machine-option { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: stretch; }
+    .machine-option + .machine-option { border-top: 1px solid var(--pi-border-muted); }
     .machine-option.no-actions { grid-template-columns: minmax(0, 1fr); }
-    .machine-option-main, .machine-option-actions-toggle, .machine-option-actions-panel button { border: 0; border-radius: 7px; background: transparent; color: var(--pi-text); cursor: pointer; }
-    .machine-option-main { min-width: 0; display: grid; gap: 2px; padding: 7px 8px; text-align: left; }
+    .machine-option-main { min-width: 0; display: grid; gap: 2px; }
     .machine-option-name { min-width: 0; display: flex; align-items: center; gap: 6px; }
     .machine-option-name span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .machine-option-main small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--pi-muted); }
     .machine-option-actions { position: relative; align-self: stretch; }
-    .machine-option-actions-toggle { display: grid; place-items: center; height: 100%; min-width: 32px; padding: 0; color: var(--pi-muted); }
-    .machine-option-actions-panel { position: fixed; z-index: 10001; box-sizing: border-box; min-width: min(120px, calc(100vw - 16px)); overflow: auto; padding: 4px; border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); box-shadow: 0 8px 24px var(--pi-shadow); }
-    .machine-option-actions-panel button { display: block; width: 100%; padding: 7px 9px; text-align: left; white-space: nowrap; }
-    .machine-option-actions-panel button.danger { color: var(--pi-danger); }
-    .machine-option-main:hover, .machine-option-main:focus-visible, .machine-option-actions-toggle:hover, .machine-option-actions-toggle:focus-visible, .machine-option.selected .machine-option-main { background: var(--pi-selection-bg); }
-    .machine-option-actions-panel button:hover, .machine-option-actions-panel button:focus-visible { background: var(--pi-selection-bg); }
-    .machine-option-actions-panel button.danger:hover, .machine-option-actions-panel button.danger:focus-visible { background: color-mix(in srgb, var(--pi-danger) 14%, transparent); }
+    .machine-option-actions-toggle { height: 100%; }
+    .machine-option-actions-panel { position: fixed; z-index: 10001; min-width: min(120px, calc(100vw - 16px)); }
+    .machine-option.selected .machine-option-main { background: var(--pi-selection-bg); }
     @keyframes pulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
-  `;
+  `];
 }
 
 function machineStatus(machine: Machine, statuses: Record<string, MachineHealth>): MachineStatus {
