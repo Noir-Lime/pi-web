@@ -59,8 +59,13 @@ export const uiToolbarStyles = css`
     min-height: 32px;
     padding: 0;
   }
+  .ui-toolbar--primary { --ui-control-size: 44px; --ui-control-padding: 10px 12px; min-height: 44px; }
+  .ui-toolbar .ui-button--icon { width: var(--ui-control-size, 32px); height: auto; }
   .ui-toolbar-title { flex: 1 1 auto; min-width: 0; justify-content: space-between; text-align: left; font: inherit; color: inherit; text-transform: inherit; }
-  .ui-toolbar-group { flex: 0 0 auto; display: flex; align-items: stretch; gap: 0; }
+  .ui-toolbar-group { flex: 0 0 auto; display: flex; align-items: stretch; gap: 0; min-width: 0; }
+  .ui-toolbar-group--bounded { position: relative; }
+  /* Share the next control's leading separator if the gap collapses, without overlapping targets. */
+  .ui-toolbar-group--bounded::after { content: ""; position: absolute; inset-block: 0; inset-inline-end: -1px; width: 1px; background: var(--pi-border-muted); pointer-events: none; }
   .ui-toolbar-group > .ui-button + .ui-button, .ui-toolbar > .ui-button + .ui-button { border-inline-start: 1px solid var(--pi-border-muted); }
   .ui-toolbar > .ui-toolbar-group { border-inline-start: 1px solid var(--pi-border-muted); }
 `;

@@ -565,24 +565,21 @@ export const autocompleteStyles = css`
 `;
 
 export const promptEditorStyles = css`
+  ${uiButtonStyles}
+  ${uiToolbarStyles}
   :host { position: relative; z-index: 5; display: block; color: var(--pi-text); font: 14px system-ui, sans-serif; }
   footer { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; padding: 0; border-top: 1px solid var(--pi-border); }
   footer.shell-mode { border-top-color: var(--pi-success); background: var(--pi-success-bg); }
   .editor-wrap { position: relative; min-width: 0; }
-  .actions { display: flex; gap: 0; align-items: stretch; justify-content: flex-end; flex-wrap: nowrap; white-space: nowrap; border-top: 1px solid var(--pi-border-muted); }
-  .compact-status { display: flex; min-width: 0; align-items: stretch; gap: 0; color: var(--pi-muted); font-size: 12px; flex: 1 1 0; }
-  .compact-status > button { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .actions button { box-sizing: border-box; min-height: 44px; border: 0; border-radius: 0; background: transparent; padding: 10px 12px; }
-  .actions > button + button, .compact-status + button, .compact-status button + button { border-inline-start: 1px solid var(--pi-border-muted); }
-  .actions button:hover:not(:disabled), .actions button:focus-visible { background: var(--pi-selection-bg); }
-  .actions button:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: -2px; }
-  .actions .select-model { flex: 0 1 auto; text-align: left; }
-  .actions .icon-button { flex: 0 0 44px; width: 44px; height: auto; }
+  .actions { justify-content: flex-end; flex-wrap: nowrap; white-space: nowrap; border-top: 1px solid var(--pi-border-muted); }
+  .compact-status { display: flex; min-width: 0; align-items: stretch; flex: 1 1 0; }
+  .compact-status > .ui-toolbar-group { flex: 0 1 auto; }
+  .select-model { display: block; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: left; }
   .icon-button { flex: 0 0 auto; display: inline-grid; place-items: center; width: 36px; height: 36px; padding: 0; }
   .icon-button .prompt-action-icon, .icon-button .prompt-thinking-gauge { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
   .icon-button .prompt-action-icon-filled { fill: currentColor; stroke: none; }
-  .default-send-action:not(:disabled) { color: var(--pi-accent, var(--pi-text)); }
-  .stop-button:not(:disabled) { color: var(--pi-danger); }
+  .default-send-action:not(:disabled), .default-send-action:hover:not(:disabled) { color: var(--pi-accent, var(--pi-text)); }
+  .stop-button:not(:disabled), .stop-button:hover:not(:disabled) { color: var(--pi-danger); }
   .select-thinking .prompt-thinking-gauge .gauge-bar { fill: currentColor; stroke: none; opacity: .28; }
   .select-thinking .prompt-thinking-gauge .gauge-bar-active { opacity: 1; }
   .editor-attach { position: absolute; right: 8px; bottom: 8px; z-index: 2; width: 30px; height: 30px; }
@@ -627,7 +624,6 @@ export const promptEditorStyles = css`
     button { padding: 6px 8px; }
   }
   @media (max-width: 430px) {
-    .compact-status { font-size: 11px; }
     button { padding: 5px 7px; }
     .icon-button { width: 34px; height: 34px; }
   }

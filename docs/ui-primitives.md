@@ -13,6 +13,8 @@ The current primitives live in `src/client/src/components/ui/controlStyles.ts`. 
 | Icon button | Add `ui-button--icon` and an accessible name | `uiButtonStyles` |
 | Primary action | Add `ui-button--primary` | `uiButtonStyles` |
 | Secondary toolbar | `.ui-toolbar`, with optional `.ui-toolbar-title` and `.ui-toolbar-group` | `uiToolbarStyles` plus `uiButtonStyles` |
+| Primary-size toolbar | Add `ui-toolbar--primary` for 44px controls | `uiToolbarStyles` plus `uiButtonStyles` |
+| Bounded control group | Add `ui-toolbar-group--bounded` where a group meets empty bar space | `uiToolbarStyles` |
 | Popup surface | `.ui-menu` containing native `.ui-menu-item` controls | `uiMenuStyles` plus `uiButtonStyles` |
 
 Include the required style exports in the Lit element that owns the shadow root. `listStyles` already includes all three exports for navigation lists. Styles do not cross shadow boundaries automatically.
@@ -66,12 +68,12 @@ Keep only content-specific rules in each dialog. Existing dimension differences 
 - Primitives own control sizing, padding, borders, hover, focus, selected, disabled, and danger treatments. Change those centrally rather than copying them into each screen.
 - Consumers own layout and domain content: labels, counts, tree indentation, popup placement, and callbacks. Preserve semantic classes used by controllers and tests alongside primitive classes.
 - Standalone buttons default to 44px targets. Secondary toolbars, popup items, and compact buttons use 32px desktop targets. Coarse pointers get at least 44px height, and icon targets also get at least 44px width.
-- Use shared separators, not repeated outlines or exterior gaps between related controls. Keep meaningful separation between unrelated groups.
+- Use shared separators, not repeated outlines or exterior gaps between related controls. A group followed by empty bar space needs a trailing boundary; use `ui-toolbar-group--bounded` rather than a one-off button border. Its separator shares the next group's leading border when the gap collapses. Do not add a trailing separator where the bar edge already bounds the group. Keep meaningful separation between unrelated groups.
 - Keep the existing compact 28px desktop subsession disclosure as a specialized tree control; it is not a toolbar button.
 - Check geometry in a real browser. Native-control interaction tests still belong at the consuming component boundary.
 
 ## Migration boundary
 
-The current consumers are navigation headings, session selection controls, navigation dropdowns, and the common selection/form dialogs. More specialized surfaces, such as Settings and session cleanup, are not yet migrated.
+The current consumers are navigation headings, session selection controls, navigation dropdowns, the chat composer's model/thinking/send/stop toolbar, and the common selection/form dialogs. More specialized surfaces, such as Settings and session cleanup, are not yet migrated.
 
 These are internal client primitives, not a public plugin API. Independently bundled plugins must not deep-import client implementation files. Shared plugin styling needs an explicit supported package/API boundary; until then, keep equivalent controls consistent with the interaction guidelines in `AGENTS.md` and consolidate them within their package when touched.
