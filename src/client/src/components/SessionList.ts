@@ -795,14 +795,14 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     .pending-session-row.starting-session .action-main { border-radius: 0; border-style: dashed; border-color: var(--pi-border); color: var(--pi-muted); }
     .pending-session-row.starting-session .action-name { display: flex; align-items: center; gap: 6px; max-height: none; -webkit-line-clamp: 1; }
     .pending-session-row.starting-session .activity-indicator { flex: 0 0 auto; margin: 0; }
-    .action-main.selecting { padding-left: calc(32px + var(--depth, 0) * 16px); }
+    .action-main.selecting, .action-row.linked-agent-child .action-main.selecting { padding-left: calc(48px + var(--depth, 0) * 16px + var(--agent-offset, 0px)); }
     .action-row.has-agent-subsessions { margin-bottom: 0; border-bottom: 0; }
     .action-row.has-agent-subsessions .action-main { padding-bottom: 6px; }
     /* Secondary desktop disclosures stay compact; indentation remains inside the click target. */
     .agent-subsession-toggle { position: relative; display: flex; align-items: center; gap: 6px; box-sizing: border-box; width: 100%; min-height: 28px; margin: 0; padding: 4px 16px 4px calc(35px + var(--agent-offset, 0px) + var(--depth, 0) * 16px); border: 0; border-radius: 0; background: transparent; font: 12px/20px system-ui, sans-serif; text-align: left; color: var(--pi-muted); overflow: hidden; }
     .agent-subsession-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .agent-subsession-toggle::before { content: ""; position: absolute; top: 0; bottom: 50%; left: calc(19px + var(--agent-offset, 0px) + var(--depth, 0) * 16px); width: 10px; border-left: 1px solid var(--pi-border-muted); border-bottom: 1px solid var(--pi-border-muted); pointer-events: none; }
-    .agent-subsession-toggle .action-activity { position: static; flex: 0 0 10px; transform: none; pointer-events: none; }
+    .agent-subsession-toggle .action-activity { pointer-events: none; }
     /* The disclosure closes a collapsed group; an expanded group's final row owns its separator. */
     .agent-subsession-toggle[aria-expanded="false"]:not(:last-child) { box-shadow: inset 0 -1px var(--pi-border-muted); }
     .agent-subsession-toggle[aria-expanded="true"] { color: var(--pi-accent); }
@@ -812,7 +812,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     }
     .agent-subsession-toggle:hover, .agent-subsession-toggle:focus-visible { color: var(--pi-text); background: var(--pi-surface-hover); }
     .agent-subsession-toggle:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: -2px; }
-    .session-checkbox { position: absolute; top: 9px; left: calc(8px + var(--depth, 0) * 16px); z-index: 2; margin: 0; }
+    .session-checkbox { position: absolute; top: 9px; left: calc(24px + var(--depth, 0) * 16px + var(--agent-offset, 0px)); z-index: 2; margin: 0; }
   `];
 }
 

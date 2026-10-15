@@ -10,7 +10,7 @@ export const sidebarListStyles = css`
     border-bottom: 1px solid var(--pi-border-muted);
   }
   .action-row:last-child { border-bottom: 0; }
-  .action-main { padding: 10px 22px 10px calc(19px + var(--depth, 0) * 16px); }
+  .action-main { padding: 10px 10px 10px calc(19px + var(--depth, 0) * 16px); }
   .action-main, .workspace-row .action-main {
     border-color: transparent;
     border-radius: 0;
