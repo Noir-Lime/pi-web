@@ -76,6 +76,8 @@ export type ChatPart =
   | { type: "empty" };
 
 export interface ChatLine {
+  /** Identity of one live assistant message, retained through finalization. */
+  streamId?: string;
   /** Durable session-tree entry; absent for optimistic or in-flight messages. */
   entryId?: string;
   role: "user" | "assistant" | "tool" | "system" | "bash" | "skill";

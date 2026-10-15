@@ -199,6 +199,9 @@ describe("socket stream validation", () => {
   it("accepts the full session stream vocabulary with valid payloads", () => {
     const validFrames = [
       { type: "message.append", message: { role: "user", content: [] } },
+      { type: "assistant.start", message: { role: "assistant", streamId: "stream-1", content: [] } },
+      { type: "assistant.delta", text: "hello", streamId: "stream-1" },
+      { type: "assistant.thinking.delta", text: "plan", streamId: "stream-1" },
       { type: "assistant.delta", text: "hello" },
       { type: "assistant.thinking.delta", text: "thinking" },
       { type: "tool.start", toolName: "read", toolCallId: "call-1", summary: "read file", args: { path: "/a" } },
@@ -234,6 +237,8 @@ describe("socket stream validation", () => {
 
   it("drops malformed session stream frames instead of accepting them on type alone", () => {
     expect(parseSessionSocketEvent({ type: "message.append" })).toBeUndefined();
+    expect(parseSessionSocketEvent({ type: "assistant.start" })).toBeUndefined();
+    expect(parseSessionSocketEvent({ type: "assistant.delta", text: "hello", streamId: 7 })).toBeUndefined();
     expect(parseSessionSocketEvent({ type: "assistant.delta" })).toBeUndefined();
     expect(parseSessionSocketEvent({ type: "assistant.delta", text: 7 })).toBeUndefined();
     expect(parseSessionSocketEvent({ type: "assistant.thinking.delta", text: true })).toBeUndefined();

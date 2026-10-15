@@ -1201,6 +1201,7 @@ export class PiSessionService implements SessionRouteService {
   private readonly extensionCommandExecution = new AsyncLocalStorage<ExtensionCommandExecution>();
   private readonly pendingPromptEchoes = new WeakMap<PiAgentSession, { userIndex: number; message: ReturnType<typeof userMessage> }[]>();
   private readonly publishedAssistantPartials = new WeakMap<PiAgentSession, unknown>();
+  private readonly assistantStreamIds = new WeakMap<PiAgentSession, string>();
   /** Settings-wide queue preventing enabled-model read/modify/write races across sessions. */
   private modelScopeMutationQueue: Promise<void> = Promise.resolve();
   /** Global and workspace-owned enabled-model states; live session scopes project one entry lazily. */
@@ -2656,7 +2657,10 @@ export class PiSessionService implements SessionRouteService {
     const streamingMessage = session.state.streamingMessage;
     const partial = streamingMessage === undefined || streamingMessage === null
       ? null
-      : annotateAssistantThinkingLevel(projectBrowserMessage(streamingMessage), session.thinkingLevel);
+      : annotateAssistantStreamId(
+        annotateAssistantThinkingLevel(projectBrowserMessage(streamingMessage), session.thinkingLevel),
+        this.assistantStreamIds.get(session),
+      );
     return { seq, partial };
   }
 
@@ -4554,20 +4558,27 @@ export class PiSessionService implements SessionRouteService {
       // boundaries can safely reconcile committed messages and failed intents.
       if (eventType === "turn_end" || eventType === "agent_settled") this.restoreSubsessionReceipts(session);
       if (eventType === "agent_settled") this.scheduleSubsessionDelivery(session);
+      if (eventType === "message_start" && getString(message, "role") === "assistant") {
+        this.assistantStreamIds.set(session, randomUUID());
+      }
+      const streamId = this.assistantStreamIds.get(session);
       if ((eventType === "message_start" || eventType === "message_update") && getString(message, "role") === "assistant") {
         // SDK state advances before async extension hooks finish. Capture only
         // published messages, detaching even blocks left intact by projection.
         this.publishedAssistantPartials.set(session, structuredClone(
-          annotateAssistantThinkingLevel(projectBrowserMessage(message), session.thinkingLevel),
+          annotateAssistantStreamId(annotateAssistantThinkingLevel(projectBrowserMessage(message), session.thinkingLevel), streamId),
         ));
-      } else if (eventType === "message_start" || eventType === "message_end" || eventType === "agent_end") {
+      } else if ((eventType === "message_end" && getString(message, "role") === "assistant") || eventType === "agent_end") {
         this.publishedAssistantPartials.delete(session);
       }
-      const clientEvent = toClientEvent(event, session.thinkingLevel);
+      const clientEvent = toClientEvent(event, session.thinkingLevel, streamId);
       if ((clientEvent.type === "message.end" || clientEvent.type === "message.append") && clientEvent.message !== undefined) {
         clientEvent.message = this.browserTranscriptMessage(session, clientEvent.message);
       }
       this.events.publish(session.sessionId, clientEvent, { id: session.sessionId, cwd: session.sessionManager.getCwd() });
+      if ((eventType === "message_end" && getString(message, "role") === "assistant") || eventType === "agent_end") {
+        this.assistantStreamIds.delete(session);
+      }
       this.publishActivityForEvent(session, event);
       if (eventType === "message_start" && getString(message, "role") === "user") this.suggestedInputs.delete(session.sessionId);
       if (eventType === "agent_end") this.abortRunScopedExtensionDialogs(session.sessionId);
@@ -4581,6 +4592,7 @@ export class PiSessionService implements SessionRouteService {
       this.sessionEvents.close(session);
       unsubscribe();
       this.publishedAssistantPartials.delete(session);
+      this.assistantStreamIds.delete(session);
     };
     this.active.set(session.sessionId, active);
   }
@@ -5650,19 +5662,34 @@ function finalAssistantText(messages: readonly unknown[]): string {
   return "";
 }
 
-function toClientEvent(event: unknown, thinkingLevel?: string): SessionUiEvent {
+function annotateAssistantStreamId(message: unknown, streamId?: string): unknown {
+  return streamId !== undefined && getString(message, "role") === "assistant" && isRecord(message)
+    ? { ...message, streamId }
+    : message;
+}
+
+function toClientEvent(event: unknown, thinkingLevel?: string, streamId?: string): SessionUiEvent {
   const eventType = getString(event, "type");
   // Nested execution belongs to the parent tool result, not a durable message.
   // Do not create standalone transcript rows that disappear on reconnect.
   if (getString(event, "parentToolCallId") !== undefined && eventType?.startsWith("tool_execution_") === true) {
     return { type: "pi.event", eventType };
   }
+  if (eventType === "message_start" && getString(getProperty(event, "message"), "role") === "assistant") {
+    return {
+      type: "assistant.start",
+      message: annotateAssistantStreamId(
+        annotateAssistantThinkingLevel(projectBrowserMessage(getProperty(event, "message")), thinkingLevel), streamId,
+      ),
+    };
+  }
+  const streamIdentity = streamId === undefined ? {} : { streamId };
   const assistantMessageEvent = getProperty(event, "assistantMessageEvent");
   if (eventType === "message_update" && getString(assistantMessageEvent, "type") === "text_delta") {
-    return { type: "assistant.delta", text: getString(assistantMessageEvent, "delta") ?? "" };
+    return { type: "assistant.delta", text: getString(assistantMessageEvent, "delta") ?? "", ...streamIdentity };
   }
   if (eventType === "message_update" && getString(assistantMessageEvent, "type") === "thinking_delta") {
-    return { type: "assistant.thinking.delta", text: getString(assistantMessageEvent, "delta") ?? "" };
+    return { type: "assistant.thinking.delta", text: getString(assistantMessageEvent, "delta") ?? "", ...streamIdentity };
   }
   if (eventType === "tool_execution_start") {
     const args = getProperty(event, "args");
@@ -5687,7 +5714,7 @@ function toClientEvent(event: unknown, thinkingLevel?: string): SessionUiEvent {
   if (eventType === "message_end") {
     const message = getProperty(event, "message");
     if (message === undefined) return { type: "message.end" };
-    return { type: "message.end", message: annotateAssistantThinkingLevel(message, thinkingLevel) };
+    return { type: "message.end", message: annotateAssistantStreamId(annotateAssistantThinkingLevel(message, thinkingLevel), streamId) };
   }
   return { type: "pi.event", eventType: eventType ?? "unknown" };
 }

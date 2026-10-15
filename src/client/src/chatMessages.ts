@@ -26,9 +26,11 @@ export function textMessage(role: ChatLine["role"], text: string): ChatLine {
 export function withMessageMeta(line: ChatLine, rawMessage: unknown): ChatLine {
   const meta = normalizeMeta(rawMessage);
   const entryId = getString(rawMessage, "entryId");
-  if (meta === undefined && (entryId === undefined || entryId === "")) return line;
+  const streamId = getString(rawMessage, "streamId");
+  if (meta === undefined && entryId === undefined && streamId === undefined) return line;
   return {
     ...line,
+    ...(streamId === undefined ? {} : { streamId }),
     ...(meta === undefined ? {} : { meta }),
     ...(entryId === undefined || entryId === "" ? {} : { entryId }),
   };
@@ -304,6 +306,7 @@ function coalesceToolExecutions(lines: ChatLine[]): ChatLine[] {
   for (const line of lines) {
     let passthroughParts: ChatPart[] = [];
     const metadata = {
+      ...(line.streamId === undefined ? {} : { streamId: line.streamId }),
       ...(line.entryId === undefined ? {} : { entryId: line.entryId }),
       ...(line.source === undefined ? {} : { source: line.source }),
       ...(line.meta === undefined ? {} : { meta: line.meta }),

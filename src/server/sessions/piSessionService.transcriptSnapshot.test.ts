@@ -23,6 +23,7 @@ function fixture(readBranch?: () => Promise<unknown[]>) {
   });
   return { branch, fake, events, service, state };
 }
+const streamIdMatcher: unknown = expect.any(String);
 const ref = sessionRef("session-1");
 const user = { role: "user", content: "hello" };
 
@@ -44,7 +45,7 @@ describe("PiSessionService.transcriptSnapshot", () => {
         { role: "assistant", content: [{ type: "text", text: "answer", displayText: "[answer]" }] },
         { role: "user", content: "hello", displayText: "[hello]" },
       ] });
-      expect(snapshot.partial).toEqual(partial);
+      expect(snapshot.partial).toEqual({ ...partial, streamId: streamIdMatcher });
       expect(snapshot.seq).toBe(events.currentSeq(ref.id));
       expect(assistant.content[0]).toEqual({ type: "text", text: "answer" });
       // Pending echoes remain original internally, so repeated reads do not re-transform display text.
@@ -93,7 +94,7 @@ describe("PiSessionService.transcriptSnapshot", () => {
       fake.emit({ type: "message_start", message: state.streamingMessage });
       const snapshot = await service.transcriptSnapshot(ref, { limit: 1 });
       expect(snapshot.page).toEqual({ start: 0, total: 1, messages: [user] });
-      expect(snapshot.partial).toEqual({ role: "assistant", content: [{ type: "thinking", thinking: "working" }], thinkingLevel: "high" });
+      expect(snapshot.partial).toEqual({ role: "assistant", content: [{ type: "thinking", thinking: "working" }], thinkingLevel: "high", streamId: streamIdMatcher });
       expect(snapshot.status).toMatchObject({ messageCount: 1, isStreaming: true });
       expect(snapshot.seq).toBe(events.currentSeq(ref.id));
     } finally { await service.dispose(); }
@@ -115,7 +116,7 @@ describe("PiSessionService.transcriptSnapshot", () => {
       const started = await service.transcriptSnapshot(ref);
       expect(started.seq).toBe(events.currentSeq(ref.id));
       expect(started.seq).toBeGreaterThan(initial.seq);
-      expect(started.partial).toEqual(assistant);
+      expect(started.partial).toEqual({ ...assistant, streamId: streamIdMatcher });
 
       // Agent-core mutates the same message before the SDK awaits extensions.
       text.text += " next";
@@ -133,7 +134,7 @@ describe("PiSessionService.transcriptSnapshot", () => {
       const updated = await service.transcriptSnapshot(ref);
       expect(updated.seq).toBe(events.currentSeq(ref.id));
       expect(updated.seq).toBeGreaterThan(started.seq);
-      expect(updated.partial).toEqual(assistant);
+      expect(updated.partial).toEqual({ ...assistant, streamId: streamIdMatcher });
 
       // The SDK clears its live partial before message_end is public/persisted.
       state.streamingMessage = undefined;
@@ -165,7 +166,7 @@ describe("PiSessionService.transcriptSnapshot", () => {
       await service.transcriptSnapshot(ref);
       const assistant = { role: "assistant", content: [{ type: "text", text: "working" }] };
       fake.emit({ type: "message_start", message: assistant });
-      expect((await service.transcriptSnapshot(ref)).partial).toEqual(assistant);
+      expect((await service.transcriptSnapshot(ref)).partial).toEqual({ ...assistant, streamId: streamIdMatcher });
       fake.emit({ type: "agent_end", messages: [] });
       expect((await service.transcriptSnapshot(ref)).partial).toBeNull();
       state.streamingMessage = user;
@@ -173,7 +174,7 @@ describe("PiSessionService.transcriptSnapshot", () => {
       expect((await service.transcriptSnapshot(ref)).partial).toBeNull();
       fake.emit({ type: "message_end", message: user });
       fake.emit({ type: "message_start", message: assistant });
-      expect((await service.transcriptSnapshot(ref)).partial).toEqual(assistant);
+      expect((await service.transcriptSnapshot(ref)).partial).toEqual({ ...assistant, streamId: streamIdMatcher });
     } finally { await service.dispose(); }
   });
 
