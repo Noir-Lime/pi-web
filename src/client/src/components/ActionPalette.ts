@@ -5,7 +5,7 @@ import { formatShortcut } from "../keyboardShortcuts";
 import { keyboardEventOriginatesFromNativeActivationControl } from "./keyboardEventTarget";
 import "./ModalSurface";
 import { scrollWhenSelected } from "./scrollWhenSelected";
-import { paletteStyles } from "./paletteStyles";
+import { uiDialogStyles, uiSelectionStyles } from "./ui/dialogStyles";
 
 @customElement("action-palette")
 export class ActionPalette extends LitElement {
@@ -24,8 +24,8 @@ export class ActionPalette extends LitElement {
         .label=${"Action palette"}
         @keydown=${(event: KeyboardEvent) => { this.handleKeyDown(event); }}
       >
-        <header>
-          <input
+        <header class="ui-dialog-header">
+          <input class="ui-dialog-search" aria-label="Search actions"
             .value=${this.queryText}
             placeholder="Search actions..."
             @input=${(event: Event) => {
@@ -35,12 +35,12 @@ export class ActionPalette extends LitElement {
               }
             }}
           >
-          <button title="Close" aria-label="Close" @click=${() => this.onCancel?.()}>×</button>
+          <button class="ui-button ui-button--icon" title="Close" aria-label="Close" @click=${() => this.onCancel?.()}>×</button>
         </header>
-        <div class="options">
-          ${actions.length === 0 ? html`<div class="empty">No actions found.</div>` : actions.map((action, index) => html`
+        <div class="options ui-selection-list">
+          ${actions.length === 0 ? html`<div class="empty ui-dialog-empty">No actions found.</div>` : actions.map((action, index) => html`
             <button
-              class=${`${index === this.selectedIndex ? "selected" : ""} ${action.enabled === false ? "disabled" : ""}`}
+              class=${`ui-button ui-selection-option ${index === this.selectedIndex ? "selected" : ""} ${action.enabled === false ? "disabled" : ""}`}
               ?disabled=${action.enabled === false}
               title=${action.disabledReason ?? action.title}
               aria-current=${index === this.selectedIndex ? "true" : nothing}
@@ -50,11 +50,11 @@ export class ActionPalette extends LitElement {
             >
               <span class="main">
                 <strong>${action.title}</strong>
-                ${action.description !== undefined && action.description !== "" ? html`<small>${action.description}</small>` : null}
-                ${action.enabled === false && action.disabledReason !== undefined ? html`<small class="disabled-reason">${action.disabledReason}</small>` : null}
+                ${action.description !== undefined && action.description !== "" ? html`<small class="ui-selection-detail">${action.description}</small>` : null}
+                ${action.enabled === false && action.disabledReason !== undefined ? html`<small class="disabled-reason ui-selection-detail">${action.disabledReason}</small>` : null}
               </span>
               ${action.shortcut !== undefined ? html`<kbd>${formatShortcut(action.shortcut)}</kbd>` : null}
-              ${action.group !== undefined && action.group !== "" ? html`<small class="group">${action.group}</small>` : null}
+              ${action.group !== undefined && action.group !== "" ? html`<small class="group ui-selection-detail">${action.group}</small>` : null}
             </button>
           `)}
         </div>
@@ -96,14 +96,11 @@ export class ActionPalette extends LitElement {
     this.onRun?.(action);
   }
 
-  static override styles = [paletteStyles, css`
-    .options button { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 12px; width: 100%; padding: 10px 12px; border-bottom: 1px solid var(--pi-border-muted); text-align: left; }
-    .options button.selected, .options button:hover:not(:disabled) { background: var(--pi-selection-bg); }
-    .options button:disabled { cursor: not-allowed; opacity: .68; }
-    .options button.disabled.selected { background: color-mix(in srgb, var(--pi-selection-bg) 55%, transparent); }
+  static override styles = [uiDialogStyles, uiSelectionStyles, css`
+    .ui-selection-option { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 12px; }
     .main { min-width: 0; }
     strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    small { display: block; color: var(--pi-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .disabled-reason { color: var(--pi-warning); }
     .group { grid-column: 1 / -1; font-size: 12px; }
     kbd { align-self: center; border: 1px solid var(--pi-border); border-radius: 6px; background: var(--pi-surface); color: var(--pi-muted); padding: 2px 6px; font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; }

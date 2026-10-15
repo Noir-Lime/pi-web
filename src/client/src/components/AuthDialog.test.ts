@@ -397,6 +397,24 @@ describe("auth-dialog provider search", () => {
 });
 
 describe("auth-dialog OAuth prompt keys", () => {
+  it("associates the OAuth prompt label with its input and forwards edits", async () => {
+    const onOAuthInput = vi.fn<(value: string) => void>();
+    const dialog = await mountDialog(
+      oauthState({ prompt: { requestId: "req-1", message: "Enter the code", promptType: "text" } }),
+      { onOAuthInput },
+    );
+    const input = promptInput(dialog);
+    const label = requiredElement(dialog.shadowRoot?.querySelector("label"), "OAuth prompt label");
+
+    expect(label.htmlFor).toBe(input.id);
+    expect(label.control).toBe(input);
+    expect(label.textContent.trim()).toBe("Enter the code");
+    input.value = "authorization-code";
+    input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+
+    expect(onOAuthInput).toHaveBeenCalledWith("authorization-code");
+  });
+
   it("submits the OAuth prompt with Enter", async () => {
     const onOAuthRespond = vi.fn<(value?: string) => void>();
     const dialog = await mountDialog(oauthState({ prompt: { requestId: "req-1", message: "Enter the code", promptType: "text" } }), { onOAuthRespond });
