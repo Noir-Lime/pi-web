@@ -1,4 +1,5 @@
 import type {
+  PluginBackend,
   JsonObject,
   JsonPrimitive,
   JsonValue,
@@ -28,6 +29,27 @@ export {
   type PluginCatalogReadOptions,
   type PluginCatalogV1,
 } from "./shared/pluginCatalogTypes.js";
+
+/** Discover this package's local v5 backend on a hosted pi.events bus.
+ * Throws synchronously outside PI WEB or when the paired backend is unavailable.
+ * Extensions are trusted in-process code, not a sandbox.
+ */
+export function createCompanionBackend(
+  events: { emit(channel: string, data: unknown): void },
+  pluginId: string,
+): PluginBackend {
+  let backend: PluginBackend | undefined;
+  let failure: Error | undefined;
+  events.emit("pi-web:companion-backend:discover", {
+    pluginId,
+    accept: (discover: () => PluginBackend) => {
+      try { backend = discover(); } catch (error) { failure = error instanceof Error ? error : new Error(String(error)); }
+    },
+  });
+  if (failure !== undefined) throw failure;
+  if (backend === undefined) throw new Error("Companion backend discovery requires a hosted PI WEB event bus");
+  return backend;
+}
 
 type MaybePromise<T> = T | Promise<T>;
 

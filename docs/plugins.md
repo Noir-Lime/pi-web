@@ -129,6 +129,38 @@ A server plugin can create a normal, visible Pi conversation, with or without an
 
 A messaging connection targets a session already hosted on that machine; it does not open saved sessions automatically. Sending a message is not proof that a companion is installed or that its work succeeded. Integrations must report their own progress and results. Connections have no startup-message replay, and closing a connection does not stop agent work.
 
+### Companion tools calling a v5 backend
+
+Companion Pi extensions can call the same v5 `peer` handlers as a plugin's browser entry. Import `createCompanionBackend` from `@jmfederico/pi-web/server-plugin-api`; no additional server handler, HTTP listener, or browser panel is needed.
+
+```ts
+import { Type } from "@earendil-works/pi-ai";
+import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { createCompanionBackend } from "@jmfederico/pi-web/server-plugin-api";
+
+export default function (pi: ExtensionAPI) {
+  pi.registerTool(defineTool({
+    name: "save_bookmark",
+    label: "Save bookmark",
+    description: "Save a bookmark through the bookmarks plugin",
+    parameters: Type.Object({ url: Type.String(), title: Type.String() }),
+    async execute(_id, input, signal) {
+      const backend = createCompanionBackend(pi.events, "bookmarks");
+      const machine = backend.forScope({ kind: "machine" });
+      if (machine.request === undefined) throw new Error("Bookmarks backend does not support requests");
+      const result = await machine.request("save", input, signal === undefined ? {} : { signal });
+      return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+    },
+  }));
+}
+```
+
+Use the package manifest's stable PI WEB plugin ID and obtain the backend during tool execution or `session_start`, not while the extension factory loads. The helper returns the existing v5 backend interface, with `machineId: "local"` meaning the hosted session's machine, regardless of browser selection. `forScope` accepts machine scope, `{ kind: "project", projectId }`, or `{ kind: "workspace", projectId, workspaceId }`; the host resolves IDs rather than trusting extension-supplied paths. Available request/channel methods follow the active v5 peer's capabilities. Normal JSON bounds, deadlines, cancellation, and revision checks apply; this helper does not add remote transport or retry failed operations.
+
+The matching v5 server entry must be enabled and healthy enough to serve requests. Discovery before daemon backend initialization finishes rejects explicitly. Retained facades stay bound to that backend revision and concrete hosted session; closing or replacing it revokes access and cancels pending work. Native extension reload needs no host reconnect; extensions should still close their own channels during `session_shutdown`.
+
+Outside a supporting PI WEB host, discovery throws rather than falling back to HTTP. Plugin authors decide whether to offer CLI behavior, handle that error, or expose the tool only in PI WEB. Extensions are trusted in-process code; the helper is not a new permission boundary. Update PI WEB and manually restart its session daemon before using the helper in existing deployments.
+
 ### Storage and background work
 
 Server plugins receive a persistent `dataDirectory`, separate from installed package code. The directory is shared across that plugin's projects on the machine. Plugins own their data format, migrations, and cleanup; there is no host storage API to learn.
