@@ -24,6 +24,9 @@ export const uiButtonStyles = css`
     text-transform: none;
     cursor: pointer;
   }
+  /* Standalone actions need a silhouette distinct from flat navigation/selection rows. */
+  .ui-button--action { border: 1px solid var(--pi-border); border-radius: 6px; background: var(--pi-surface); color: var(--pi-text); }
+  .ui-button--action.ui-button--primary { border-color: var(--pi-accent-border); }
   .ui-button--compact { --ui-control-size: 32px; --ui-control-padding: 6px 10px; }
   .ui-button--icon { flex: 0 0 auto; min-width: var(--ui-control-size, 44px); padding-inline: 0; font-size: 16px; }
   .ui-button:hover:not(:disabled), .ui-select:hover:not(:disabled), .ui-menu-item:hover:not(:disabled):not(:has(input:disabled)) {

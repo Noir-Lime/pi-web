@@ -6,6 +6,7 @@ import type { AppAction } from "../actions";
 import { configApi, piPackagesApi, pluginsApi, type Machine, type MachineHealth, type MachineRuntime, type PiPackageMutationResponse, type PiPackageScope, type PiPackagesResponse, type PiWebConfigResponse, type PiWebConfigValues, type PiWebPluginsResponse } from "../api";
 import type { SettingsSection } from "../settingsRoute";
 import "./ModalSurface";
+import { uiDialogStyles, uiSelectionStyles } from "./ui/dialogStyles";
 import "./settings/SettingsGeneralPanel";
 import type { SettingsGeneralPanel } from "./settings/SettingsGeneralPanel";
 import "./settings/SettingsThemePanel";
@@ -124,12 +125,9 @@ export class SettingsDialog extends LitElement {
   override render(): TemplateResult {
     return html`
       <modal-surface .onClose=${() => this.onClose?.()} .label=${"PI WEB settings"}>
-        <header class="settings-header">
-          <div>
-            <span class="eyebrow">Settings</span>
-            <h1>PI WEB</h1>
-          </div>
-          <button class="close-button" title="Close settings" aria-label="Close settings" @click=${() => this.onClose?.()}>×</button>
+        <header class="settings-header ui-dialog-header">
+          <h1 class="ui-dialog-title">Settings</h1>
+          <button class="close-button ui-button ui-button--icon" title="Close settings" aria-label="Close settings" @click=${() => this.onClose?.()}>×</button>
         </header>
         <div class="settings-body">
           <nav class="settings-nav" aria-label="Settings sections">
@@ -162,7 +160,7 @@ export class SettingsDialog extends LitElement {
     return html`
       <div class="settings-machine">
         <label for="settings-machine">Configure machine</label>
-        <select id="settings-machine" aria-describedby=${unavailable ? "settings-machine-help settings-machine-status settings-machine-error" : "settings-machine-help settings-machine-status"} .value=${live(target.id)} ?disabled=${this.saving} @change=${(event: Event) => {
+        <select class="ui-select" id="settings-machine" aria-describedby=${unavailable ? "settings-machine-help settings-machine-status settings-machine-error" : "settings-machine-help settings-machine-status"} .value=${live(target.id)} ?disabled=${this.saving} @change=${(event: Event) => {
           if (event.target instanceof HTMLSelectElement) this.requestMachineSwitch(event.target.value);
         }}>
           ${this.machines.map((candidate) => html`<option value=${candidate.id}>${candidate.name}${candidate.kind === "local" ? " (this gateway)" : ""}</option>`)}
@@ -214,8 +212,8 @@ export class SettingsDialog extends LitElement {
     return html`
       <section class="machine-switch-confirmation" role="alert" aria-label="Unsaved machine settings">
         <p>You have unsaved file access or upload settings for ${this.settingsTarget().name}. Discard them and configure ${pending.name}?</p>
-        <button ?disabled=${this.saving} @click=${() => { this.generalPanel?.discardMachineChanges(); this.switchSettingsMachine(pending.id); }}>Discard edits and switch</button>
-        <button @click=${() => { this.pendingMachineId = undefined; }}>Keep editing</button>
+        <button class="ui-button ui-button--action danger" ?disabled=${this.saving} @click=${() => { this.generalPanel?.discardMachineChanges(); this.switchSettingsMachine(pending.id); }}>Discard edits and switch</button>
+        <button class="ui-button ui-button--action" @click=${() => { this.pendingMachineId = undefined; }}>Keep editing</button>
       </section>
     `;
   }
@@ -321,7 +319,7 @@ export class SettingsDialog extends LitElement {
   private renderNavButton(section: SettingsSection, label: string, detail: string): TemplateResult {
     const selected = this.section === section;
     return html`
-      <button class=${selected ? "selected" : ""} aria-current=${selected ? "page" : "false"} @click=${() => { this.navigate(section); }}>
+      <button class=${`ui-button ui-selection-option${selected ? " selected" : ""}`} aria-current=${selected ? "page" : "false"} @click=${() => { this.navigate(section); }}>
         <strong>${label}</strong>
         <small>${detail}</small>
       </button>
@@ -742,13 +740,12 @@ export class SettingsDialog extends LitElement {
     }, 3000);
   }
 
-  static override styles = css`
+  static override styles = [uiDialogStyles, uiSelectionStyles, css`
     :host { position: fixed; inset: 0; z-index: 30; color: var(--pi-text); font: 14px system-ui, sans-serif; }
     modal-surface { --modal-surface-backdrop-padding: max(20px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left)); --modal-surface-width: min(980px, 100%); --modal-surface-max-height: min(760px, 100%); --modal-surface-min-height: min(620px, 100%); --modal-surface-radius: 14px; }
-    .settings-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--pi-border); }
     .settings-machine { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 18px; border-bottom: 1px solid var(--pi-border); }
     .settings-machine label { font-size: 12px; font-weight: 700; }
-    .settings-machine select { flex: 1 1 160px; max-width: 280px; min-width: 0; border: 1px solid var(--pi-border); border-radius: 8px; padding: 7px 9px; color: var(--pi-text); background: var(--pi-surface); font: inherit; }
+    .settings-machine select { flex: 1 1 160px; max-width: 280px; background: var(--pi-bg); }
     .machine-status { color: var(--pi-muted); line-height: 1.35; }
     .machine-status.unavailable { color: var(--pi-warning); }
     .machine-scope { color: var(--pi-muted); font-size: 12px; }
@@ -756,38 +753,31 @@ export class SettingsDialog extends LitElement {
     .machine-scope[open] { flex-basis: 100%; }
     .machine-scope p { margin: 8px 0 0; line-height: 1.45; }
     .machine-connection-error { flex-basis: 100%; margin: 0; font-size: 12px; line-height: 1.45; color: var(--pi-warning); overflow-wrap: anywhere; }
-    .settings-machine select:focus-visible, .machine-scope summary:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 2px; }
+    .machine-scope summary:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 2px; }
     .machine-switch-confirmation { flex: 0 0 auto; padding: 12px 16px; border-bottom: 1px solid var(--pi-warning-border); background: var(--pi-warning-surface); }
     .machine-switch-confirmation p { margin: 0 0 8px; }
-    .machine-switch-confirmation button + button { margin-left: 8px; }
-    .eyebrow { display: block; color: var(--pi-muted); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-    h1 { margin: 0; font-size: 20px; line-height: 1.2; }
-    button { border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); color: var(--pi-text); padding: 7px 9px; font: inherit; cursor: pointer; }
-    .close-button { width: 34px; height: 34px; display: grid; place-items: center; border: 0; background: transparent; color: var(--pi-muted); padding: 0; font-size: 24px; }
-    .close-button:hover, .close-button:focus { color: var(--pi-text); background: var(--pi-surface-hover); }
+    .machine-switch-confirmation button + button { margin-inline-start: 8px; }
     .settings-body { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 220px minmax(0, 1fr); }
-    .settings-nav { min-height: 0; padding: 10px; border-right: 1px solid var(--pi-border); background: var(--pi-surface); overflow: auto; }
-    .settings-nav button { display: grid; gap: 2px; width: 100%; margin: 0 0 6px; text-align: left; border-color: transparent; background: transparent; }
-    .settings-nav button:hover, .settings-nav button:focus { background: var(--pi-surface-hover); }
-    .settings-nav button.selected { border-color: var(--pi-accent); background: var(--pi-selection-bg); }
+    .settings-nav { min-height: 0; border-right: 1px solid var(--pi-border); background: var(--pi-surface); overflow: auto; }
+    .settings-nav button { display: grid; justify-content: stretch; gap: 2px; }
     .settings-nav small { color: var(--pi-muted); }
     .settings-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-    .settings-content { flex: 1 1 auto; min-width: 0; min-height: 0; overflow: auto; padding: 18px; }
+    .settings-content { flex: 1 1 auto; min-width: 0; min-height: 0; overflow: auto; padding: 0; }
 
     @media (max-width: 760px) {
       modal-surface { --modal-surface-backdrop-padding: 0; --modal-surface-place-items: stretch; --modal-surface-width: 100%; --modal-surface-max-height: none; --modal-surface-min-height: 0; --modal-surface-border: 0; --modal-surface-radius: 0; }
-      .settings-header { padding: max(12px, env(safe-area-inset-top)) 12px 12px; }
+      .settings-header { padding-top: env(safe-area-inset-top); }
       .settings-machine { padding: 10px 12px; }
       .settings-machine label { flex-basis: 100%; }
       .settings-machine select { max-width: none; }
       .machine-scope { flex-basis: 100%; }
       .settings-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
-      .settings-nav { display: flex; gap: 8px; padding: 8px; border-right: 0; border-bottom: 1px solid var(--pi-border); overflow-x: auto; overflow-y: hidden; }
-      .settings-nav button { flex: 0 0 auto; width: auto; min-width: 0; margin: 0; white-space: nowrap; }
+      .settings-nav { display: flex; gap: 0; padding: 0; border-right: 0; border-bottom: 1px solid var(--pi-border); overflow-x: auto; overflow-y: hidden; }
+      .settings-nav button { flex: 0 0 auto; width: auto; white-space: nowrap; border-inline-end: 1px solid var(--pi-border-muted); }
       .settings-nav small { display: none; }
-      .settings-content { padding: 14px 12px calc(18px + env(safe-area-inset-bottom)); }
+      .settings-content { padding-bottom: env(safe-area-inset-bottom); }
     }
-  `;
+  `];
 }
 
 function errorMessage(error: unknown): string {

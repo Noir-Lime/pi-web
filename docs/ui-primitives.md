@@ -9,6 +9,7 @@ Control primitives live in `src/client/src/components/ui/controlStyles.ts`; rela
 | Primitive | Markup | Style export |
 | --- | --- | --- |
 | Button | `button.ui-button` | `uiButtonStyles` |
+| Standalone action | Add `ui-button--action` for a bordered silhouette without elevation; combine with `ui-button--primary` for emphasis | `uiButtonStyles` |
 | Compact button | Add `ui-button--compact` | `uiButtonStyles` |
 | Icon button | Add `ui-button--icon` and an accessible name | `uiButtonStyles` |
 | Primary action | Add `ui-button--primary` | `uiButtonStyles` |
@@ -72,6 +73,16 @@ Form content uses `ui-dialog-body ui-form-body`. Labels use `ui-form-field`, tex
 
 Keep only content-specific rules in each dialog. Existing dimension differences can use the internal composition properties `--ui-dialog-width`, `--ui-dialog-max-height`, `--ui-dialog-top`, and `--ui-dialog-z`; do not copy the common backdrop or header styles. These primitives do not introduce custom stylesheet loading or a new theming API.
 
+## Settings and configuration groups
+
+`uiSettingsStyles` from `ui/settingsStyles.ts` provides flat configuration sections (`ui-settings-section`), headings (`ui-settings-heading`), field stacks (`ui-settings-fields`), action groups (`ui-settings-actions`), config paths (`ui-settings-path`), effective-value summaries (`ui-settings-summary`), and gapless lists/rows (`ui-settings-list`, `ui-settings-row`). Compose these with `uiButtonStyles` and `uiFormStyles`; they do not introduce new controls or state ownership.
+
+Settings actions use `ui-button--action` to distinguish them from flat navigation and selection rows, including primary actions. Action groups leave an 8px gap between individually bounded controls and stack on narrow screens. This internal modifier is not part of the public plugin v1 contract.
+
+Sections own their internal padding and a bottom separator. Do not surround them with inset cards or exterior gaps. Paths and effective values can use a neutral background without another outline. Labels stay sentence case. Keep domain-specific layouts, validation, draft state, and save callbacks in the consumer.
+
+`SettingsPanelFrame` composes the section heading, refresh action, notices, and slotted content for settings panels. `uiNoticeStyles` in the same style module provides `ui-notice` with error, success, warning, and info tones. Consumers retain the appropriate live-region role and message content; styling does not announce a message by itself. These internal patterns are not yet part of the public plugin UI styles capability.
+
 ## Transcript hierarchy
 
 Chat uses flat transcript sections rather than nested card outlines. Put breathing room inside the section; use restrained role/state tones and labels to distinguish hierarchy. Successful tools stay neutral, while running and error states remain explicit. Nested sections do not need another enclosing border. Code/diff content may retain one useful boundary, and editable inputs retain their input affordance.
@@ -112,7 +123,7 @@ The chat consumer owns these layout classes and message separators; `uiTranscrip
 
 ## Migration boundary
 
-The current consumers are navigation headings, session selection controls, navigation dropdowns, the chat composer's model/thinking/send/stop toolbar, main navigation tabs, the common selection/form dialogs, and chat transcript sections and controls. More specialized surfaces, such as Settings and session cleanup, are not yet migrated.
+The current consumers are navigation headings, session selection controls, navigation dropdowns, the chat composer's model/thinking/send/stop toolbar, main navigation tabs, the common selection/form dialogs, Settings, and chat transcript sections and controls. More specialized surfaces, such as session cleanup, are not yet migrated.
 
 The internal style exports also supply the host-owned [UI styles capabilities](plugins.md#host-provided-ui-styles). External plugins request v1 and apply its CSS inside their shadow root; they must not deep-import these client modules or bundle a copy of their styling. Relay, Files, and Git use v1 for buttons, selects, toolbars, tabs, and compact file/tree rows. Menus, forms, dialogs, and transcript patterns are not part of the public contract.
 

@@ -2,6 +2,8 @@ import { css, html, LitElement, type TemplateResult } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { live } from "lit/directives/live.js";
 import type { PiWebConfigResponse, PiWebConfigValues } from "../../api";
+import { uiFormStyles } from "../ui/formStyles";
+import { uiSettingsStyles } from "../ui/settingsStyles";
 import "./SettingsPanelFrame";
 import type { SettingsNotice } from "./SettingsPanelFrame";
 import { askUserConfigPatch, spawnSessionsConfigPatch, subsessionsConfigPatch } from "./settingsSessiondConfig";
@@ -37,13 +39,14 @@ export class SettingsSessiondPanel extends LitElement {
         .notices=${this.panelNotices()}
         .onAction=${this.onReload}
       >
+        <section class="ui-settings-section">
         ${config === undefined ? this.renderUnavailableConfigState() : html`
-          <div class="config-path-card">
+          <div class="config-path-card ui-settings-path">
             <span>Config file</span>
             <code>${config.path}</code>
           </div>
-          <div class="field">
-            <label class="toggle">
+          <div class="field ui-form-field">
+            <label class="toggle ui-checkbox-field">
               <input
                 type="checkbox"
                 id="spawn-sessions"
@@ -59,8 +62,8 @@ export class SettingsSessiondPanel extends LitElement {
               ${spawnOverridden ? html`Read-only because <code>PI_WEB_SPAWN_SESSIONS</code> overrides this setting. Change or remove it in the daemon environment to edit here.` : null}
             </small>
           </div>
-          <div class="field">
-            <label class="toggle">
+          <div class="field ui-form-field">
+            <label class="toggle ui-checkbox-field">
               <input
                 type="checkbox"
                 id="subsessions"
@@ -77,8 +80,8 @@ export class SettingsSessiondPanel extends LitElement {
               ${subsessionsOverridden ? html`Read-only because <code>PI_WEB_SUBSESSIONS</code> overrides this setting. Change or remove it in the daemon environment to edit here.` : null}
             </small>
           </div>
-          <div class="field">
-            <label class="toggle">
+          <div class="field ui-form-field">
+            <label class="toggle ui-checkbox-field">
               <input
                 type="checkbox"
                 id="ask-user"
@@ -94,7 +97,7 @@ export class SettingsSessiondPanel extends LitElement {
               ${askUserOverridden ? html`Read-only because <code>PI_WEB_ASK_USER</code> overrides this setting. Change or remove it in the daemon environment to edit here.` : null}
             </small>
           </div>
-          <section class="effective-card" aria-labelledby="restart-summary-heading" aria-describedby="restart-summary-help">
+          <section class="effective-card ui-settings-summary" aria-labelledby="restart-summary-heading" aria-describedby="restart-summary-help">
             <h3 id="restart-summary-heading">After the next daemon restart</h3>
             <small id="restart-summary-help">Saved settings with environment overrides applied. This does not show the running daemon’s active settings.</small>
             <dl>
@@ -104,6 +107,7 @@ export class SettingsSessiondPanel extends LitElement {
             </dl>
           </section>
         `}
+        </section>
       </settings-panel-frame>
     `;
   }
@@ -134,20 +138,13 @@ export class SettingsSessiondPanel extends LitElement {
     await this.onSave?.(askUserConfigPatch(enabled));
   }
 
-  static override styles = css`
+  static override styles = [uiFormStyles, uiSettingsStyles, css`
     :host { display: block; }
     h3 { margin: 0; font-size: 13px; line-height: 1.3; }
-    .loading-card, .config-path-card, .effective-card { border: 1px solid var(--pi-border); border-radius: 10px; background: var(--pi-surface); padding: 12px; }
     .loading-card { color: var(--pi-muted); }
-    .config-path-card { display: grid; gap: 5px; }
-    .config-path-card span, dt { color: var(--pi-muted); font-size: 12px; font-weight: 700; text-transform: uppercase; }
+    .config-path-card span, dt { color: var(--pi-muted); font-size: 12px; font-weight: 600; }
     code { border: 1px solid var(--pi-border-muted); border-radius: 5px; background: var(--pi-bg); padding: 1px 4px; color: var(--pi-text); font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
-    .field { display: grid; gap: 7px; }
     .field small, .effective-card small { color: var(--pi-muted); line-height: 1.45; }
-    .toggle { display: flex; align-items: center; gap: 9px; cursor: pointer; }
-    .toggle input { width: 16px; height: 16px; }
-    .toggle input:disabled { cursor: not-allowed; }
-    .effective-card { display: grid; gap: 10px; }
     .effective-card dl { display: grid; gap: 8px; margin: 0; }
     .effective-card dl > div { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 12px; align-items: baseline; }
     dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
@@ -156,7 +153,7 @@ export class SettingsSessiondPanel extends LitElement {
     @media (max-width: 760px) {
       .effective-card dl > div { grid-template-columns: minmax(0, 1fr); gap: 3px; }
     }
-  `;
+  `];
 }
 
 export function sessiondDescription(targetLabel: string): string {
