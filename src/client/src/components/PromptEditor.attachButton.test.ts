@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { html } from "lit";
 import { PromptEditor } from "./PromptEditor";
 import { clearStagedAttachments, saveStagedAttachments } from "../promptAttachmentStaging";
 
@@ -15,6 +16,21 @@ afterEach(() => {
   clearStagedAttachments("local:appearance-controls");
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+it("renders supplied chat navigation inside the input alongside the attachment control", async () => {
+  const editor = new PromptEditor();
+  const jump = vi.fn();
+  editor.chatNavigation = html`<nav aria-label="Chat navigation"><button @click=${jump}>Jump to end</button></nav>`;
+  document.body.append(editor);
+  await editor.updateComplete;
+  const navigation = editor.renderRoot.querySelector(".editor-chat-navigation");
+  const attachment = editor.renderRoot.querySelector(".editor-attach");
+  expect(navigation?.parentElement).toBe(attachment?.parentElement);
+  const button = navigation?.querySelector("button");
+  if (!button) throw new Error("Expected supplied chat navigation");
+  button.click();
+  expect(jump).toHaveBeenCalledOnce();
 });
 
 it("keeps attachment delivery and removal wired through native shared controls", async () => {

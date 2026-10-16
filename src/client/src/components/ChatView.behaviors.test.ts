@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { render } from "lit";
 import { DEFAULT_CHAT_BEHAVIORS, type ChatBehaviors } from "../chatBehaviors";
 import { PLAIN_CODE_BLOCK_POLICY } from "../formatting/codeBlockPolicy";
 import { MANUAL_CHAT_BEHAVIORS } from "../chatBehaviors.testSupport";
@@ -71,6 +72,27 @@ describe("composable normal chat", () => {
     expect(view.renderRoot.querySelector("conversation-meter, .scroll-marker")).toBeNull();
     expect(required(view.renderRoot, '.chat-jumps [aria-label="Jump to top"]').textContent).toBe("↑");
     expect(required(view.renderRoot, '.chat-jumps [aria-label="Jump to end"]').textContent).toBe("↓");
+  });
+
+  it("can render navigation in another surface while retaining scroll behavior and follow state", async () => {
+    const view = await mount();
+    const viewport = scrollingViewport(view);
+    const controls = document.createElement("div");
+    document.body.append(controls);
+    view.onNavigationChange = (navigation) => { render(navigation, controls); };
+    await view.updateComplete;
+    expect(view.renderRoot.querySelector(".chat-jumps")).toBeNull();
+    required(controls, '[aria-label="Jump to top"]').click();
+    flushFrames();
+    expect(viewport.write).toHaveBeenLastCalledWith(0);
+    required(controls, '[aria-label="Jump to end"]').click();
+    flushFrames();
+    expect(viewport.write).toHaveBeenLastCalledWith(6000);
+    await view.updateComplete;
+    expect(required(controls, '[aria-label="Jump to end"]').classList.contains("following")).toBe(true);
+    view.behaviors = { ...view.behaviors, followTail: false };
+    await view.updateComplete;
+    expect(required(controls, '[aria-label="Jump to end"]').title).toBe("Jump to end");
   });
 
   it("keeps closed disclosure bodies mounted and records toggles without rerendering", async () => {

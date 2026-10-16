@@ -2,6 +2,7 @@ import { css, svg, type TemplateResult } from "lit";
 export type { ChatLine } from "../chatTypes";
 import type { SessionWarningSeverity } from "../api";
 import { uiButtonStyles, uiMenuStyles, uiToolbarStyles, uiTabStyles } from "./ui/controlStyles";
+import { chatNavigationStyles } from "./chat/chatNavigationStyles";
 
 /** Directional navigation shadow that avoids a halo above the fixed heading edge. */
 export const scrollBoundaryShadow = css`0 8px 18px -8px var(--pi-shadow-soft)`;
@@ -276,6 +277,7 @@ export const autocompleteStyles = css`
 export const promptEditorStyles = css`
   ${uiButtonStyles}
   ${uiToolbarStyles}
+  ${chatNavigationStyles}
   :host { position: relative; z-index: 5; display: block; color: var(--pi-text); font: 14px system-ui, sans-serif; }
   footer { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; padding: 0; border-top: 1px solid var(--pi-border); }
   footer.shell-mode { border-top-color: var(--pi-success); background: var(--pi-success-bg); }
@@ -291,15 +293,22 @@ export const promptEditorStyles = css`
   .stop-button:not(:disabled), .stop-button:hover:not(:disabled) { color: var(--pi-danger); }
   .select-thinking .prompt-thinking-gauge .gauge-bar { fill: currentColor; stroke: none; opacity: .28; }
   .select-thinking .prompt-thinking-gauge .gauge-bar-active { opacity: 1; }
+  .editor-chat-navigation { position: absolute; right: 0; top: 0; z-index: 2; box-sizing: border-box; width: 58px; border: 1px solid var(--pi-border-muted); }
+  .editor-chat-navigation .chat-jumps button + button { border-inline-start: 1px solid var(--pi-border-muted); }
+  .editor-input:has(.editor-chat-navigation) .cm-content { min-height: max(50px, 2.8em); padding-right: 66px; }
+  .editor-input:has(.editor-chat-navigation) .editor-attach { box-sizing: border-box; width: 28px; height: 28px; min-width: 28px; min-height: 28px; padding: 0; border: 1px solid var(--pi-border-muted); }
+  .editor-input:has(.editor-chat-navigation) .editor-attach .prompt-action-icon { width: 14px; height: 14px; }
   .editor-attach { position: absolute; right: 0; bottom: 0; z-index: 2; border-inline-start: 1px solid var(--pi-border-muted); }
   textarea, .markdown-editor .cm-editor { box-sizing: border-box; width: 100%; min-height: 54px; max-height: 220px; resize: none; overflow: hidden; border-radius: 0; border: 0; background: var(--pi-bg); color: var(--pi-text); font: var(--pi-control-font-size, 16px)/1.4 var(--pi-control-font-family, system-ui, sans-serif); }
   textarea { overflow-y: auto; padding: 12px 16px; }
   textarea:focus-visible, .markdown-editor:focus-within { outline: 2px solid var(--pi-accent); outline-offset: -2px; }
-  .markdown-editor .cm-scroller { max-height: 220px; overflow-y: auto; font-family: var(--pi-control-font-family, system-ui, sans-serif); line-height: 1.4; }
-  .markdown-editor .cm-content { min-height: 38px; padding: 12px 52px 12px 16px; caret-color: var(--pi-text); text-align: start; unicode-bidi: plaintext; }
+  /* Keep vertical breathing room outside the scrolling text, including at the height cap. */
+  .markdown-editor .cm-editor { padding-block: 12px; }
+  .markdown-editor .cm-scroller { max-height: 196px; overflow-y: auto; font-family: var(--pi-control-font-family, system-ui, sans-serif); line-height: 1.4; }
+  .markdown-editor .cm-content { min-height: 2.8em; padding: 0 52px 0 16px; caret-color: var(--pi-text); text-align: start; unicode-bidi: plaintext; }
   .markdown-editor .cm-line { padding: 0; unicode-bidi: plaintext; }
   .markdown-editor .cm-placeholder { color: var(--pi-dim); }
-  .markdown-editor .prompt-placeholder::before { content: attr(data-placeholder); }
+  .markdown-editor .prompt-placeholder::before { content: attr(data-placeholder); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
   .markdown-editor .cm-argument-hint { color: var(--pi-dim); pointer-events: none; }
   .markdown-editor .cm-focused { outline: none; }
   /* drawSelection() renders the caret and selection itself, and CodeMirror's

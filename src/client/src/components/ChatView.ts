@@ -1,4 +1,4 @@
-import { LitElement, html, nothing } from "lit";
+import { LitElement, html, nothing, type TemplateResult } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import { keyed } from "lit/directives/keyed.js";
@@ -105,6 +105,7 @@ function chatMessageModelLabel(message: ChatLine): string | undefined {
 export class ChatView extends LitElement {
   @property({ attribute: false }) messages: ChatLine[] = [];
   @property() sessionId = "";
+  @property({ attribute: false }) onNavigationChange?: (controls: TemplateResult) => void;
   @property() sessionCwd = "";
   @property({ attribute: false }) workspaceContext: MarkdownWorkspaceContext | undefined;
   @property({ attribute: false }) contentRendering: import("../formatting/contentRendering").ChatContentRendering | undefined;
@@ -301,6 +302,9 @@ export class ChatView extends LitElement {
         : openQuestionId !== undefined && openQuestionId !== this.lastOpenQuestionId ? "ask" : false,
     });
     this.lastOpenQuestionId = openQuestionId;
+    if (changed.has("followingLive") || changed.has("behaviors") || changed.has("onNavigationChange")) {
+      this.onNavigationChange?.(this.renderNavigation());
+    }
   }
 
   private readonly renderKeys = new ChatRenderKeys();
@@ -324,7 +328,6 @@ export class ChatView extends LitElement {
         ...(identity === undefined ? {} : { identity: JSON.stringify([group.kind, identity]) }),
       };
     }));
-    const following = this.behaviors.followTail && this.followingLive;
     return html`
       ${this.renderTopNotices()}
       <div class=${this.behaviors.visualEffects ? "chat-wrap" : "chat-wrap plain"}>
@@ -352,16 +355,21 @@ export class ChatView extends LitElement {
           ${this.renderExtensionDialogs()}
         </div>
         ${this.renderActivityDock()}
-        <nav class="chat-jumps" aria-label="Chat navigation">
-          <button type="button" title="Jump to top" aria-label="Jump to top" @click=${this.handleJumpTop}>↑</button>
-          <button type="button" class=${following ? "following" : ""}
-            title=${!this.behaviors.followTail ? "Jump to end" : following ? "Following live — jump to end" : "Jump to end and follow live"}
-            aria-label="Jump to end" aria-describedby="chat-follow-state" @click=${this.handleJumpEnd}>↓</button>
-          <span id="chat-follow-state" class="visually-hidden">${!this.behaviors.followTail ? "Automatic following disabled" : following ? "Following live" : "Live following paused"}</span>
-        </nav>
+        ${this.onNavigationChange === undefined ? this.renderNavigation() : nothing}
       </div>
       <pi-web-image-gallery-dialog></pi-web-image-gallery-dialog>
     `;
+  }
+
+  private renderNavigation() {
+    const following = this.behaviors.followTail && this.followingLive;
+    return html`<nav class="chat-jumps" aria-label="Chat navigation">
+      <button type="button" title="Jump to top" aria-label="Jump to top" @click=${this.handleJumpTop}>↑</button>
+      <button type="button" class=${following ? "following" : ""}
+        title=${!this.behaviors.followTail ? "Jump to end" : following ? "Following live — jump to end" : "Jump to end and follow live"}
+        aria-label="Jump to end" aria-describedby="chat-follow-state" @click=${this.handleJumpEnd}>↓</button>
+      <span id="chat-follow-state" class="chat-follow-state">${!this.behaviors.followTail ? "Automatic following disabled" : following ? "Following live" : "Live following paused"}</span>
+    </nav>`;
   }
 
   private renderTopNotices() {

@@ -1,11 +1,13 @@
 import { css } from "lit";
 import { uiButtonStyles, uiToolbarStyles } from "../ui/controlStyles";
 import { uiTranscriptStyles } from "../ui/transcriptStyles";
+import { chatNavigationStyles } from "./chatNavigationStyles";
 
 export const chatStyles = css`
   ${uiButtonStyles}
   ${uiToolbarStyles}
   ${uiTranscriptStyles}
+  ${chatNavigationStyles}
   :host { position: relative; z-index: 0; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; color: var(--pi-text); font: 14px system-ui, sans-serif; }
   .chat-wrap { --pi-chat-jump-size: 28px; position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
   .top-notices { box-sizing: border-box; flex: 0 0 auto; max-height: 40%; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border-bottom: 1px solid var(--pi-border); background: var(--pi-bg-overlay); }
@@ -32,18 +34,12 @@ export const chatStyles = css`
   .visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0 0 0 0) !important; clip-path: inset(50%) !important; white-space: nowrap !important; border: 0 !important; }
   /* Contain sticky headers in the scroller's paint context, below its overlay scrollbar. */
   .chat { isolation: isolate; --pi-chat-conversation-bg: color-mix(in srgb, var(--pi-muted) 6%, var(--pi-bg)); --pi-chat-sticky-top: 0px; flex: 1 1 auto; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 0; box-sizing: border-box; }
-  .chat-jumps { position: absolute; right: 0; bottom: 0; z-index: 21; display: flex; gap: 0; background: var(--pi-bg-overlay); }
-  .chat-jumps button { display: inline-grid; place-items: center; box-sizing: border-box; width: var(--pi-chat-jump-size); height: var(--pi-chat-jump-size); padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--pi-muted); font: 14px/1 system-ui, sans-serif; cursor: pointer; }
-  .chat-jumps::before, .activity-dock::before { content: ""; position: absolute; inset: 0; border: 1px solid var(--pi-border-muted); border-bottom: 0; pointer-events: none; }
-  .activity-dock::before { border-inline-end: 0; }
-  .activity-dock + .chat-jumps::before { border-inline-start: 0; }
-  .chat-jumps button.following { color: var(--pi-accent); }
-  .chat-jumps button:hover, .chat-jumps button:focus-visible { color: var(--pi-text-bright); background: var(--pi-selection-bg); }
-  .chat-jumps button:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: -2px; }
+  .chat-wrap > .chat-jumps { position: absolute; right: 0; bottom: 0; }
   .chat-wrap.plain .msg-header, .chat-wrap.plain .event-group > summary { position: static; top: auto; }
   .chat-wrap.plain *, .chat-wrap.plain *::before, .chat-wrap.plain *::after { transition: none !important; animation: none !important; box-shadow: none !important; text-shadow: none !important; filter: none !important; backdrop-filter: none !important; transform: none !important; border-radius: 0 !important; }
   .chat-wrap.plain .chat-image { --pi-image-radius: 0; }
-  .activity-dock { position: absolute; right: calc(var(--pi-chat-jump-size) * 2); bottom: 0; z-index: 20; display: flex; align-items: center; gap: 4px; width: max-content; max-width: calc(100% - var(--pi-chat-jump-size) * 2); height: var(--pi-chat-jump-size); min-width: 0; box-sizing: border-box; border: 0; border-radius: 0; background: var(--pi-bg-overlay); color: var(--pi-muted); padding: 3px 6px; font-size: 11px; line-height: 16px; pointer-events: none; backdrop-filter: blur(6px); }
+  .activity-dock { position: absolute; bottom: 0; left: 50%; transform: translateX(-50%); z-index: 20; display: flex; align-items: center; gap: 4px; max-width: calc(100% - 16px); height: var(--pi-chat-jump-size); min-width: 0; box-sizing: border-box; background: var(--pi-bg-overlay); color: var(--pi-muted); padding: 3px 6px; font-size: 11px; line-height: 16px; pointer-events: none; }
+  .chat-wrap.plain .activity-dock { left: 8px; right: 8px; width: max-content; margin-inline: auto; }
   .activity-dock.active .dot { color: var(--pi-success); }
   .activity-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; opacity: .45; flex: 0 0 auto; }

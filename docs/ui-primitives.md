@@ -90,6 +90,8 @@ Chat uses flat transcript sections rather than nested card outlines. Put breathi
 
 `uiTranscriptStyles` owns the frameless surface and full-width disclosure treatment (32px desktop, at least 44px for coarse pointers). Consumers own grouping, indentation, native disclosure state, and layout. Give sticky headings an opaque tone matching their section so scrolled text cannot show through them. Transcript patterns are internal and are not part of the browser-plugin UI styles capability.
 
+Chat navigation arrows render as one bordered group anchored to the message input's top-right, with a divider between the arrows. The bottom-right attachment button matches an individual arrow's 28px size for every pointer type (a deliberate exception to the usual 44px coarse-pointer minimum), and stays anchored as the input grows, without a separate row between transcript and composer. `ChatView` retains scroll ownership and supplies its controls through `onNavigationChange`; `PromptEditor.chatNavigation` renders them with shared `chatNavigationStyles`. The activity indicator floats at the bottom centre of the chat viewport and disappears when idle. The editor keeps a two-line text minimum even when empty or containing one line. Vertical padding belongs to the editor frame, outside the scroller, so long drafts retain top and bottom clearance at the 220px height cap.
+
 ### Activity-group layout contract
 
 Activity groups and their `.group-msg` wrappers have no padding. In `chatTranscriptTemplates.ts`, `renderGroupedParts` assigns each visible part one of two explicit layouts:
