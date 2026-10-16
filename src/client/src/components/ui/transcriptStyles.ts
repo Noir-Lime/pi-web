@@ -9,6 +9,7 @@ export const uiTranscriptStyles = css`
     --ui-transcript-bg: color-mix(in srgb, var(--ui-activity-tone) 6%, var(--pi-bg));
     --ui-transcript-heading-bg: color-mix(in srgb, var(--ui-activity-tone) 18%, var(--pi-bg));
     border-inline-start: var(--ui-activity-edge-width, 3px) solid var(--ui-activity-tone);
+    border-block-start: var(--ui-activity-separator-width, 0px) solid color-mix(in srgb, var(--ui-activity-tone) 35%, var(--ui-transcript-heading-bg));
   }
   .ui-transcript-tool { --ui-activity-tone: color-mix(in srgb, #238c86 70%, var(--pi-text) 30%); }
   .ui-transcript-activity > .ui-transcript-heading { box-sizing: border-box; min-height: 32px; padding: 6px 12px; background: var(--ui-transcript-heading-bg); color: var(--pi-text); line-height: 20px; }

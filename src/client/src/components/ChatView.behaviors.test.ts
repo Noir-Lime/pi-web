@@ -117,9 +117,53 @@ describe("composable normal chat", () => {
     expect(group).toBeInstanceOf(HTMLDetailsElement);
     expect(group.hasAttribute("open")).toBe(false);
     expect(required(thinking, "summary").textContent).toContain("Thinking");
-    expect(thinking.hasAttribute("open")).toBe(false);
+    expect(thinking.hasAttribute("open")).toBe(true);
     expect(required(result, "summary").textContent).toContain("read result · Failed");
     expect(result.hasAttribute("open")).toBe(true);
+  });
+
+  it.each([false, true])("expands thinking by default while only opening the live outer group (live: %s)", async (live) => {
+    const view = await mount();
+    view.messages = [{ role: "assistant", entryId: "default-thinking", parts: [{ type: "thinking", text: "Plan the work." }] }];
+    view.isSendingPrompt = live;
+    await view.updateComplete;
+    expect(required(view.renderRoot, ".event-group").hasAttribute("open")).toBe(live);
+    expect(required(view.renderRoot, ".thinking").hasAttribute("open")).toBe(true);
+  });
+
+  it.each([true, false])("keeps thinking individually collapsible and remembers its choice only when enabled (%s)", async (rememberDisclosures) => {
+    const behaviors = { ...DEFAULT_CHAT_BEHAVIORS, rememberDisclosures };
+    const view = await mount(behaviors);
+    const thinking = required(view.renderRoot, ".thinking");
+    if (!(thinking instanceof HTMLDetailsElement)) throw new Error("Expected thinking disclosure");
+    const render = vi.spyOn(view, "render");
+    thinking.open = false;
+    thinking.dispatchEvent(new Event("toggle"));
+    expect(render).not.toHaveBeenCalled();
+    view.messages = [...view.messages];
+    await view.updateComplete;
+    expect(required(view.renderRoot, ".thinking").hasAttribute("open")).toBe(false);
+    view.remove();
+
+    const restored = await mount(behaviors);
+    expect(required(restored.renderRoot, ".thinking").hasAttribute("open")).toBe(!rememberDisclosures);
+    restored.sessionId = "another-session";
+    await restored.updateComplete;
+    expect(required(restored.renderRoot, ".thinking").hasAttribute("open")).toBe(true);
+  });
+
+  it("keeps a remembered collapse scoped to its entry when earlier thinking is prepended", async () => {
+    const view = await mount();
+    const thinking = required(view.renderRoot, ".thinking");
+    if (!(thinking instanceof HTMLDetailsElement)) throw new Error("Expected thinking disclosure");
+    thinking.open = false;
+    thinking.dispatchEvent(new Event("toggle"));
+    view.messages = [{ role: "assistant", entryId: "earlier-thinking", parts: [{ type: "thinking", text: "Earlier plan." }] }, ...view.messages];
+    await view.updateComplete;
+    const entries = view.renderRoot.querySelectorAll<HTMLDetailsElement>(".thinking");
+    expect(entries).toHaveLength(2);
+    expect(entries[0]?.open).toBe(true);
+    expect(entries[1]?.open).toBe(false);
   });
 
   it.each([true, false])("follows native group and nested toggles without rerendering (remember choices: %s)", async (rememberDisclosures) => {

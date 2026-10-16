@@ -388,8 +388,6 @@ export const chatStyles = css`
   .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; opacity: .45; flex: 0 0 auto; }
   .activity-dock.active .dot { width: 6px; height: 6px; animation: pulse 1s ease-in-out infinite; opacity: 1; }
   .msg { --ui-transcript-bg: var(--pi-bg); display: flow-root; max-width: 100%; min-width: 0; margin: 0; padding: 12px 16px 16px; overflow: visible; }
-  .chat > .msg.user { margin-top: 8px; }
-  .chat > .msg.user:first-child { margin-top: 0; }
   .chat > .msg:last-child, .chat > .session-activity:last-child { margin-bottom: 0; }
   .msg.conversation-message { --ui-transcript-bg: var(--pi-chat-conversation-bg); --formatted-link-color: color-mix(in srgb, var(--pi-accent) 45%, var(--pi-text) 55%); --formatted-muted-color: color-mix(in srgb, var(--pi-text-secondary) 80%, var(--pi-text) 20%); border-inline-start: 3px solid color-mix(in srgb, var(--pi-muted) 55%, var(--pi-border) 45%); padding-inline-start: 13px; }
   .msg.user { --ui-transcript-bg: color-mix(in srgb, var(--pi-accent) 6%, var(--pi-bg)); border-inline-start-color: color-mix(in srgb, var(--pi-accent) 55%, var(--pi-bg)); }
@@ -407,6 +405,8 @@ export const chatStyles = css`
   .msg.event-group > summary > span { min-width: 0; overflow-wrap: anywhere; }
   .group-body { --ui-activity-edge-width: 0px; padding: 0; }
   .group-msg + .group-msg { border-block-start: 1px solid var(--pi-muted); }
+  /* Let tool surfaces draw this shared separator using their own state tone. */
+  .group-msg + .group-msg.tool-execution-shell { border-block-start: 0; --ui-activity-separator-width: 1px; }
   .group-msg.tool-execution-shell { padding: 0; }
   .chat-image { --pi-image-max-height: 320px; --pi-image-radius: 8px; display: block; max-width: 100%; margin: 8px 0 0; }
   .tool-image-thumbnails { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0; }
@@ -478,6 +478,7 @@ export const chatStyles = css`
   .part { max-width: 100%; min-width: 0; box-sizing: border-box; overflow: visible; overflow-wrap: anywhere; }
   .part + .part { margin-top: 10px; }
   .thinking { --ui-activity-tone: color-mix(in srgb, #4f83b3 70%, var(--pi-text) 30%); }
+  .group-msg > .thinking { width: calc(100% + 24px); max-width: none; margin-inline: -12px; }
   .thinking-icon { flex: 0 0 auto; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.5; }
   .thinking > summary { font-weight: 600; }
   .tool-line > .ui-transcript-heading { font: 13px/20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }

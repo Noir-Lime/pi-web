@@ -2,6 +2,7 @@ import { LitElement, html, nothing } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import { keyed } from "lit/directives/keyed.js";
+import { live } from "lit/directives/live.js";
 import { ChatDisclosureController } from "../chatDisclosure";
 import { writeClipboardText } from "../clipboard";
 import { queuedMessageAttachmentLabel, type QueuedMessageAction, type QueuedMessageActionTarget } from "../queuedMessageActions";
@@ -1031,7 +1032,7 @@ export class ChatView extends LitElement {
     const disclosureKey = this.groupDisclosureKey(group, defaultOpen);
     const open = this.behaviors.rememberDisclosures ? this.disclosures.isOpen(disclosureKey, defaultOpen) : defaultOpen;
     return html`
-      <details class=${`${chatMessageGroupClassName(defaultOpen)} ui-transcript-surface ui-transcript-activity`} data-index=${startIndex} data-scroll-anchor-id=${this.groupAnchorKey(group, defaultOpen) ?? nothing} ?open=${open} @toggle=${this.behaviors.rememberDisclosures ? (event: Event) => { this.onGroupToggle(disclosureKey, event, defaultOpen); } : undefined}>
+      <details class=${`${chatMessageGroupClassName(defaultOpen)} ui-transcript-surface ui-transcript-activity`} data-index=${startIndex} data-scroll-anchor-id=${this.groupAnchorKey(group, defaultOpen) ?? nothing} ?open=${open} @toggle=${this.behaviors.rememberDisclosures ? (event: Event) => { this.onDisclosureToggle(disclosureKey, event, defaultOpen); } : undefined}>
         <summary class="ui-transcript-disclosure ui-transcript-heading">
           <span class="label">${chatMessageGroupLabel(defaultOpen)}</span>
           <span>${summarizeChatGroup(messages.map((event) => event.message))}</span>
@@ -1158,7 +1159,17 @@ export class ChatView extends LitElement {
     if (part.type === "text" || part.type === "thinking") {
       const text = part.displayText ?? part.text;
       if (text === "") return null;
-      if (part.type === "thinking") return html`<details class="part thinking ui-transcript-surface ui-transcript-activity"><summary class="ui-transcript-disclosure ui-transcript-heading"><svg class="thinking-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M6 14a5 5 0 1 1 8-1H9l-3 2v-1Z"/><circle cx="4" cy="17" r="1"/></svg>Thinking</summary><formatted-text .imagesEnabled=${this.behaviors.loadImages} .codeBlocks=${this.behaviors.codeBlocks} .intentKey=${intentKey} .contentRendering=${this.contentRendering} .machineId=${this.machineId} .workspaceContext=${this.workspaceContext} .text=${text}></formatted-text></details>`;
+      if (part.type === "thinking") {
+        const disclosureKey = `thinking:${intentKey}`;
+        const open = this.behaviors.rememberDisclosures ? this.disclosures.isOpen(disclosureKey, true) : true;
+        return html`
+          <details class="part thinking ui-transcript-surface ui-transcript-activity" ?open=${this.behaviors.rememberDisclosures ? live(open) : open}
+            @toggle=${this.behaviors.rememberDisclosures ? (event: Event) => { this.onDisclosureToggle(disclosureKey, event, true); } : undefined}>
+            <summary class="ui-transcript-disclosure ui-transcript-heading"><svg class="thinking-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M6 14a5 5 0 1 1 8-1H9l-3 2v-1Z"/><circle cx="4" cy="17" r="1"/></svg>Thinking</summary>
+            <formatted-text .imagesEnabled=${this.behaviors.loadImages} .codeBlocks=${this.behaviors.codeBlocks} .intentKey=${intentKey} .contentRendering=${this.contentRendering} .machineId=${this.machineId} .workspaceContext=${this.workspaceContext} .text=${text}></formatted-text>
+          </details>
+        `;
+      }
       if (message.role === "bash") return html`<pre class="part shell-output">${text}</pre>`;
       return html`<formatted-text .imagesEnabled=${this.behaviors.loadImages} .codeBlocks=${this.behaviors.codeBlocks} .intentKey=${intentKey} class="part" .contentRendering=${this.contentRendering} .machineId=${this.machineId} .workspaceContext=${this.workspaceContext} .text=${text}></formatted-text>`;
     }
@@ -1209,7 +1220,7 @@ export class ChatView extends LitElement {
     return null;
   }
 
-  private onGroupToggle(key: string, event: Event, defaultOpen: boolean) {
+  private onDisclosureToggle(key: string, event: Event, defaultOpen: boolean) {
     const details = event.currentTarget;
     if (!(details instanceof HTMLDetailsElement)) return;
     // The browser owns disclosure visibility; retain the choice without rebuilding
