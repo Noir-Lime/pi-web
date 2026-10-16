@@ -52,9 +52,6 @@ export const chatStyles = css`
   .chat > .msg:last-child, .chat > .session-activity:last-child { margin-bottom: 0; }
   .msg.conversation-message { padding: 12px; --ui-transcript-bg: var(--pi-chat-conversation-bg); --formatted-link-color: color-mix(in srgb, var(--pi-accent) 45%, var(--pi-text) 55%); --formatted-muted-color: color-mix(in srgb, var(--pi-text-secondary) 80%, var(--pi-text) 20%); border-inline-start: 3px solid color-mix(in srgb, var(--pi-muted) 55%, var(--pi-border) 45%); padding-inline-start: 12px; }
   .msg.user { --ui-transcript-bg: color-mix(in srgb, var(--pi-accent) 6%, var(--pi-bg)); border-inline-start-color: color-mix(in srgb, var(--pi-accent) 55%, var(--pi-bg)); }
-  .msg.conversation-message > .msg-header .msg-header-trailing { opacity: 1; }
-  .msg.conversation-message > .msg-header .ui-button { color: var(--formatted-muted-color); }
-  .msg.conversation-message > .msg-header .ui-button:focus-visible { outline-color: var(--pi-text); }
   .msg.tool { color: var(--pi-text); }
   .msg.tool-execution-shell, .msg.ask-user-record-shell { padding: 0; border: 0; background: transparent; color: var(--pi-text); }
   .msg.ask-user-record-shell ask-user-card { margin: 0 auto; }
@@ -105,28 +102,30 @@ export const chatStyles = css`
   .session-activity strong { color: var(--pi-purple); }
   .session-activity span, .session-activity small { color: var(--pi-muted); }
   .history-boundary small { color: var(--pi-dim); }
-  .msg-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 32px; margin-bottom: 4px; }
-  /* Both columns set the row height; center content while actions stay at the top. */
-  .msg.conversation-layout { display: grid; grid-template: "body actions" auto "meta meta" auto / minmax(0, 1fr) fit-content(50%); align-items: start; padding: 0; }
-  .conversation-body { grid-area: body; min-width: 0; align-self: center; padding: 12px; }
-  .conversation-layout > .msg-meta-details { grid-area: meta; padding: 12px; }
-  .msg-header.conversation-header { grid-area: actions; min-width: 0; margin: 0; }
-  .msg-header.conversation-header .msg-header-trailing { flex-wrap: wrap; }
-  .msg-header.conversation-header .msg-actions { flex-wrap: wrap; flex-shrink: 1; }
-  .msg-header-trailing { min-width: 0; flex: 1 1 auto; display: inline-flex; align-items: stretch; justify-content: flex-end; gap: 0; }
-  .msg-actions { flex: 0 0 auto; }
-  .msg-action { font-size: 14px; }
-  .msg-action:disabled { opacity: .45; cursor: not-allowed; }
-  .msg-fork-icon { font-size: 17px; }
+  .msg-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 28px; margin-bottom: 4px; }
+  .msg.conversation-layout { padding: 0; }
+  .conversation-content { position: relative; min-width: 0; }
+  .conversation-body { min-width: 0; padding: 12px; }
+  .conversation-layout > .msg-meta-details { padding: 6px 12px; }
+  .conversation-content > .msg-header.conversation-header { position: absolute; inset-block-end: 0; inset-inline-end: 0; z-index: 6; min-height: 0; margin: 0; }
+  .msg-actions { display: contents; }
+  .msg-actions-strip { display: flex; flex-wrap: nowrap; width: max-content; background: var(--ui-transcript-bg, var(--pi-bg)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pi-text) 12%, transparent); }
+  pi-message-actions-menu[open] { background: var(--ui-transcript-bg, var(--pi-bg)); }
+  .msg-actions-strip .ui-button { flex: 0 0 auto; white-space: nowrap; }
+  .msg-actions [role="alert"] { max-width: 240px; padding: 4px 10px; color: var(--pi-danger); }
+  .msg-fork-icon { font-size: 14px; }
+  .msg-info-icon { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  pi-message-actions-menu { flex: 0 0 auto; opacity: 0; pointer-events: none; }
   .label { display: block; color: var(--pi-muted); font-size: 12px; font-weight: 400; }
   .msg-header .label { min-width: 0; margin: 0; overflow-wrap: anywhere; }
-  .msg-header-trailing { opacity: .8; transition: opacity .12s ease; }
-  .msg:hover > .msg-header .msg-header-trailing, .msg:focus-within > .msg-header .msg-header-trailing, .group-msg:hover > .transcript-content > .msg-header .msg-header-trailing, .group-msg:focus-within > .transcript-content > .msg-header .msg-header-trailing, .msg-header-trailing:has(.msg-meta[aria-expanded="true"]) { opacity: 1; }
+  .msg:hover > .msg-header pi-message-actions-menu, .msg:focus-within > .msg-header pi-message-actions-menu,
+  .msg:hover > .conversation-content > .msg-header pi-message-actions-menu, .msg:focus-within > .conversation-content > .msg-header pi-message-actions-menu,
+  .group-msg:hover > .transcript-content > .msg-header pi-message-actions-menu, .group-msg:focus-within > .transcript-content > .msg-header pi-message-actions-menu,
+  pi-message-actions-menu:focus-within, pi-message-actions-menu[open] { opacity: 1; pointer-events: auto; }
   @media (hover: none), (pointer: coarse) {
-    .msg-header-trailing { opacity: 1; }
+    pi-message-actions-menu { opacity: 1; pointer-events: auto; }
   }
-  .msg-meta[aria-expanded="true"] { background: var(--pi-surface-hover); color: var(--pi-text); }
-  .msg-info-icon { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .msg-actions-strip .ui-button:hover:not(:disabled), .msg-meta[aria-expanded="true"] { background: color-mix(in srgb, var(--pi-text) 8%, transparent); color: var(--pi-text); }
   .msg-meta-details { clear: both; min-width: 0; padding: 6px 0; color: var(--pi-muted); font: 12px/18px system-ui, sans-serif; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
   formatted-text.part { display: block; }
   formatted-text.part, .queued-message formatted-text { text-align: start; unicode-bidi: plaintext; }

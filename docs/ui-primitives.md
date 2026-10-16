@@ -11,6 +11,7 @@ Control primitives live in `src/client/src/components/ui/controlStyles.ts`; rela
 | Button | `button.ui-button` | `uiButtonStyles` |
 | Standalone action | Add `ui-button--action` for a bordered silhouette without elevation; combine with `ui-button--primary` for emphasis | `uiButtonStyles` |
 | Compact button | Add `ui-button--compact` | `uiButtonStyles` |
+| Small transcript action | Add `ui-button--small`, optionally with `ui-button--icon` | `uiButtonStyles` |
 | Icon button | Add `ui-button--icon` and an accessible name | `uiButtonStyles` |
 | Primary action | Add `ui-button--primary` | `uiButtonStyles` |
 | Native select | `select.ui-select` | `uiButtonStyles` |
@@ -116,7 +117,7 @@ The chat consumer owns these layout classes and message separators; `uiTranscrip
 
 - Primitives own control sizing, padding, borders, hover, focus, selected, disabled, and danger treatments. Change those centrally rather than copying them into each screen.
 - Consumers own layout and domain content: labels, counts, tree indentation, popup placement, and callbacks. Preserve semantic classes used by controllers and tests alongside primitive classes.
-- Standalone buttons default to 44px targets. Secondary toolbars, popup items, and compact buttons use 32px desktop targets. Coarse pointers get at least 44px height, and icon targets also get at least 44px width. Compact file/tree rows are an explicit exception: they remain 32px for every pointer type, with matching 16px indentation in Files and Git.
+- Standalone buttons default to 44px targets. Secondary toolbars, popup items, and compact buttons use 32px desktop targets. Small transcript actions use 28px desktop targets with 14px icons, matching the chat corner arrows. Message headers use a single ellipsis trigger on hover or keyboard focus (always visible for coarse pointers). Clicking it reveals a single-row icon strip to its left; overflow scrolls horizontally rather than wrapping. `pi-message-actions-menu` owns native popover dismissal and placement; consumers supply accessible icon buttons. Conversation controls overlay the bottom-right corner without reserving a text column or header row. The closed trigger has no background. Expanded controls use an opaque background matching the transcript surface and a subtle inset shadow for contrast; expanded message information follows the message body. Respect reduced-motion preferences when revealing the strip. Coarse pointers get at least 44px height, and icon targets also get at least 44px width. Compact file/tree rows are an explicit exception: they remain 32px for every pointer type, with matching 16px indentation in Files and Git.
 - Use shared separators, not repeated outlines or exterior gaps between related controls. A group followed by empty bar space needs a trailing boundary; use `ui-toolbar-group--bounded` rather than a one-off button border. Its separator shares the next group's leading border when the gap collapses. Do not add a trailing separator where the bar edge already bounds the group. Keep meaningful separation between unrelated groups.
 - Keep the existing compact 28px desktop subsession disclosure as a specialized tree control; it is not a toolbar button.
 - Check geometry in a real browser. Native-control interaction tests still belong at the consuming component boundary.

@@ -1,5 +1,7 @@
 import { html, nothing } from "lit";
 import { live } from "lit/directives/live.js";
+import { MessageActionsMenu } from "./chat/MessageActionsMenu";
+import { renderSessionWarningIcon } from "./shared";
 import { chatToolOutputLabel, chatMessageGroupClassName, chatMessageGroupLabel } from "./chat/transcriptLabels";
 import { chatMessageHasHeader, summarizeChatGroup, type ChatDisplayGroup, type ChatGroup } from "../chatGroups";
 import type { ChatBehaviors } from "../chatBehaviors";
@@ -8,7 +10,6 @@ import type { AskUserOutcome } from "../../../shared/apiTypes";
 import type { ChatContentRendering } from "../formatting/contentRendering";
 import type { MarkdownWorkspaceContext } from "../formatting/workspaceLinks";
 import type { ChatLine, ChatPart } from "../chatTypes";
-import { renderSessionWarningIcon } from "./shared";
 import type { ImageOpenDetail } from "./ImagePresentation";
 import type { ChatMessageActionController } from "./ChatMessageActionController";
 
@@ -57,10 +58,16 @@ export function renderMessage(context: TranscriptRenderContext, message: ChatLin
     const conversationClass = hasHeader && (message.role === "user" || message.role === "assistant") ? " conversation-message conversation-layout" : "";
     return html`
       <article class=${`${hasHeader ? `msg ${message.role}${conversationClass}` : shellClass} ui-transcript-surface`} data-index=${index} data-scroll-anchor-id=${context.anchors.message(index, message) ?? nothing}>
-        ${hasHeader ? renderMessageHeader(context, message, String(index), index, entryActionHeaders) : null}
         ${conversationClass !== "" ? html`
-          <div class="conversation-body">${message.parts.map((part, partIndex) => renderPart(context, part, message, index, partIndex))}</div>
-        ` : message.parts.map((part, partIndex) => renderPart(context, part, message, index, partIndex))}
+          <div class="conversation-content">
+            ${renderMessageHeader(context, message, String(index), index, entryActionHeaders, message.role, true)}
+            <div class="conversation-body">${message.parts.map((part, partIndex) => renderPart(context, part, message, index, partIndex))}</div>
+          </div>
+          ${renderMessageMetadata(context, message, String(index))}
+        ` : html`
+          ${hasHeader ? renderMessageHeader(context, message, String(index), index, entryActionHeaders) : null}
+          ${message.parts.map((part, partIndex) => renderPart(context, part, message, index, partIndex))}
+        `}
       </article>
     `;
   }
@@ -154,7 +161,7 @@ function renderGroupedParts(context: TranscriptRenderContext, message: ChatLine,
   `);
 }
 
-export function renderMessageHeader(context: TranscriptRenderContext, message: ChatLine, key: string, index: number, entryActionHeaders: ReadonlySet<ChatLine>, label: string = message.role) {
+export function renderMessageHeader(context: TranscriptRenderContext, message: ChatLine, key: string, index: number, entryActionHeaders: ReadonlySet<ChatLine>, label: string = message.role, metadataBelow = false) {
     const meta = context.metadata.label(message);
     const expanded = context.metadata.expandedKey === key;
     const detailId = `message-meta-${key}`;
@@ -162,15 +169,24 @@ export function renderMessageHeader(context: TranscriptRenderContext, message: C
     return html`
       <div class=${conversation ? "msg-header conversation-header" : "msg-header"}>
         <span class=${conversation ? "visually-hidden" : "label"}>${label}</span>
-        <div class="msg-header-trailing">
-          ${renderMessageActions(context, message, key, context.messages[index - context.messageStart] ?? message, entryActionHeaders.has(message))}
-          <button type="button" class="msg-meta ui-button ui-button--icon ui-button--compact" title=${meta} aria-label="Message information" aria-controls=${detailId} aria-expanded=${String(expanded)} @click=${() => { context.metadata.expand(expanded ? undefined : key); }}>${renderSessionWarningIcon("info", "msg-info-icon")}</button>
-        </div>
+        <pi-message-actions-menu>
+          <div class="msg-actions-strip">
+            ${renderMessageActions(context, message, key, context.messages[index - context.messageStart] ?? message, entryActionHeaders.has(message))}
+            <button type="button" class="msg-meta ui-button ui-button--icon ui-button--small" title=${meta} aria-label="Message information" aria-controls=${detailId} aria-expanded=${String(expanded)} @click=${(event: MouseEvent) => {
+              context.metadata.expand(expanded ? undefined : key);
+              const menu = event.currentTarget instanceof HTMLElement ? event.currentTarget.closest("pi-message-actions-menu") : null;
+              if (menu instanceof MessageActionsMenu) menu.close();
+            }}>${renderSessionWarningIcon("info", "msg-info-icon")}</button>
+          </div>
+        </pi-message-actions-menu>
       </div>
-      <div id=${detailId} class="msg-meta-details" ?hidden=${!expanded}>${meta}</div>
+      ${metadataBelow ? null : renderMessageMetadata(context, message, key)}
     `;
   }
 
+function renderMessageMetadata(context: TranscriptRenderContext, message: ChatLine, key: string) {
+  return html`<div id=${`message-meta-${key}`} class="msg-meta-details" ?hidden=${context.metadata.expandedKey !== key}>${context.metadata.label(message)}</div>`;
+}
 
 export function renderPart(context: TranscriptRenderContext, part: ChatPart, message: ChatLine, messageIndex: number, partIndex: number) {
     const intentKey = JSON.stringify([context.machineId, context.sessionId, message.entryId ?? messageIndex, partIndex]);
@@ -244,11 +260,11 @@ export function renderMessageActions(context: TranscriptRenderContext, message: 
   if (actions.length === 0) return null;
   const error = context.actions.errorMessage(key);
   return html`
-    <div class="msg-actions ui-toolbar-group" aria-label="Message actions">
+    <div class="msg-actions" aria-label="Message actions">
       ${actions.map(({ action, enabled, ariaLabel }) => {
         const presentation = context.actions.presentation(key, action.id);
         const icon = presentation?.icon ?? action.icon;
-        return html`<button type="button" class=${`msg-action ui-button ui-button--compact ${icon === undefined ? "" : "ui-button--icon"}`} title=${presentation?.title ?? action.title} aria-label=${presentation?.ariaLabel ?? presentation?.title ?? ariaLabel} ?disabled=${!enabled || context.actions.pending(key, action)} @click=${(event: MouseEvent) => { event.stopPropagation(); void context.actions.run(source, message, key, action); }}>${icon ?? action.title}</button>`;
+        return html`<button type="button" class=${`msg-action ui-button ui-button--small ${icon === undefined ? "" : "ui-button--icon"}`} title=${presentation?.title ?? action.title} aria-label=${presentation?.ariaLabel ?? presentation?.title ?? ariaLabel} ?disabled=${!enabled || context.actions.pending(key, action)} @click=${(event: MouseEvent) => { event.stopPropagation(); void context.actions.run(source, message, key, action); }}>${icon ?? action.title}</button>`;
       })}
       ${error === undefined ? null : html`<span role="alert">${error}</span>`}
     </div>

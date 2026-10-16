@@ -29,6 +29,8 @@ export const uiButtonStyles = css`
   .ui-button--action.ui-button--primary { border-color: var(--pi-accent-border); }
   .ui-button--compact { --ui-control-size: 32px; --ui-control-padding: 6px 10px; }
   .ui-button--icon { flex: 0 0 auto; min-width: var(--ui-control-size, 44px); padding-inline: 0; font-size: 16px; }
+  .ui-button--small { --ui-control-size: 28px; --ui-control-padding: 4px 6px; }
+  .ui-button--small.ui-button--icon { font-size: 14px; }
   .ui-button:hover:not(:disabled), .ui-select:hover:not(:disabled), .ui-menu-item:hover:not(:disabled):not(:has(input:disabled)) {
     background: var(--pi-surface-hover);
     color: var(--pi-text);

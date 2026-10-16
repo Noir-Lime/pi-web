@@ -33,6 +33,9 @@ it("keeps the same Info button and focus while showing and hiding a separate met
   expect(button.querySelector("svg")).not.toBeNull();
   expect(region.hidden).toBe(false);
   expect(region.textContent).toBe(chatMessageMetadataLabel(message));
+  const content = view.shadowRoot?.querySelector(".conversation-content");
+  if (!content) throw new Error("Expected conversation content");
+  expect(content.nextElementSibling).toBe(region);
 
   button.click();
   await view.updateComplete;
