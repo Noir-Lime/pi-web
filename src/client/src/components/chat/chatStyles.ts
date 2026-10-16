@@ -38,7 +38,7 @@ export const chatStyles = css`
   .chat-wrap.plain .msg-header, .chat-wrap.plain .event-group > summary { position: static; top: auto; }
   .chat-wrap.plain *, .chat-wrap.plain *::before, .chat-wrap.plain *::after { transition: none !important; animation: none !important; box-shadow: none !important; text-shadow: none !important; filter: none !important; backdrop-filter: none !important; transform: none !important; border-radius: 0 !important; }
   .chat-wrap.plain .chat-image { --pi-image-radius: 0; }
-  .activity-dock { position: absolute; bottom: 0; left: 50%; transform: translateX(-50%); z-index: 20; display: flex; align-items: center; gap: 4px; max-width: calc(100% - 16px); height: var(--pi-chat-jump-size); min-width: 0; box-sizing: border-box; background: var(--pi-bg-overlay); color: var(--pi-muted); padding: 3px 6px; font-size: 11px; line-height: 16px; pointer-events: none; }
+  .activity-dock { position: absolute; bottom: 0; left: 50%; transform: translateX(-50%); z-index: 20; display: flex; align-items: center; gap: 4px; max-width: calc(100% - 16px); height: var(--pi-chat-jump-size); min-width: 0; box-sizing: border-box; background: var(--pi-success-surface); color: var(--pi-text); padding: 3px 6px; font-size: 11px; line-height: 16px; pointer-events: none; }
   .chat-wrap.plain .activity-dock { left: 8px; right: 8px; width: max-content; margin-inline: auto; }
   .activity-dock.active .dot { color: var(--pi-success); }
   .activity-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
