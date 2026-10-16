@@ -29,12 +29,25 @@ describe("shouldShowMachinesSection", () => {
 });
 
 describe("header identity", () => {
-  it("shows the plain brand without an icon or address", async () => {
+  it("leaves header identity to the machine switcher without a separate brand title", async () => {
     const panel = await mountHeaderPanel([machine("local")]);
 
-    expect(panel.shadowRoot?.querySelector("header strong")?.textContent).toBe("PI WEB");
-    expect(panel.shadowRoot?.querySelector(".brand-icon")).toBeNull();
-    expect(panel.shadowRoot?.querySelector(".brand-domain")).toBeNull();
+    expect(panel.shadowRoot?.querySelector("header")?.textContent).not.toContain("PI WEB");
+    expect(panel.shadowRoot?.querySelector("machine-switcher")).toBeInstanceOf(MachineSwitcher);
+  });
+
+  it("opens Actions from a named button with a decorative icon and responsive label", async () => {
+    const panel = await mountHeaderPanel([machine("local")]);
+    panel.onShowActions = vi.fn();
+    await panel.updateComplete;
+    const button = panel.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Show Actions"]');
+    if (!button) throw new Error("Missing Actions button");
+
+    expect(button.title).toBe("Show Actions");
+    expect(button.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+    expect(button.querySelector(".actions-label")?.textContent).toBe("Actions");
+    button.click();
+    expect(panel.onShowActions).toHaveBeenCalledOnce();
   });
 
   it("keeps the machine switcher visible with a single machine", async () => {
