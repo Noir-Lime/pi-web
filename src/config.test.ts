@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_ATTACHMENT_FOLDER, DEFAULT_EXTENSION_DIALOGS_TIMEOUT_MS, DEFAULT_MAX_UPLOAD_BYTES, DEFAULT_UPLOADS_FOLDER, AGENT_SESSION_DIR_ENV_KEYS, agentSessionDirEnvOverride, askUserEnabled, detectDeprecatedAgentInputs, effectiveAgentConfig, environmentFactsEnabled, effectivePiWebConfig, loadPiWebConfig, maxUploadBytes, offlineModeEnabled, savePiWebConfig, spawnSessionsEnabled, subsessionsEnabled } from "./config.js";
 
+import { KNOWN_THINKING_LEVELS } from "./shared/thinkingLevels.js";
+
 let tempDir: string;
 let configPath: string;
 
@@ -17,14 +19,14 @@ afterEach(async () => {
 });
 
 describe("sessionNaming config", () => {
-  it.each([{}, { model: "provider/model" }, { maxTokens: 24 }, { model: "provider/org/model", maxTokens: Number.MAX_SAFE_INTEGER }])("round-trips overrides %j without adding defaults", (sessionNaming) => {
+  it.each([{}, { model: "provider/model" }, { maxTokens: 24 }, { model: "provider/org/model", maxTokens: Number.MAX_SAFE_INTEGER }, ...KNOWN_THINKING_LEVELS.map((thinkingLevel) => ({ thinkingLevel }))])("round-trips overrides %j without adding defaults", (sessionNaming) => {
     savePiWebConfig({ sessionNaming }, testOptions());
     expect(loadPiWebConfig(testOptions()).config.sessionNaming).toEqual(sessionNaming);
     expect(effectivePiWebConfig(testOptions()).config.sessionNaming).toEqual(sessionNaming);
   });
 
   it("preserves overrides on unrelated saves and resets with an empty object", async () => {
-    const sessionNaming = { model: "provider/model", maxTokens: 80 };
+    const sessionNaming = { model: "provider/model", maxTokens: 80, thinkingLevel: "off" as const };
     savePiWebConfig({ sessionNaming }, testOptions());
     savePiWebConfig({ ...loadPiWebConfig(testOptions()).config, port: 9000 }, testOptions());
     expect(loadPiWebConfig(testOptions()).config.sessionNaming).toEqual(sessionNaming);
@@ -39,6 +41,7 @@ describe("sessionNaming config", () => {
     null, [], "provider/model", { unknown: true },
     ...["", "model", "/model", "provider/", " provider/model", "provider/model ", "provider /model", 42, null].map((model) => ({ model })),
     ...[0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "24", null].map((maxTokens) => ({ maxTokens })),
+    ...["", "ultra", "MINIMAL", " minimal ", null, false, 42, {}, []].map((thinkingLevel) => ({ thinkingLevel })),
   ])("rejects invalid overrides %j when loading", async (sessionNaming) => {
     await writeFile(configPath, JSON.stringify({ sessionNaming }), "utf8");
     expect(() => loadPiWebConfig(testOptions())).toThrow("PI WEB config sessionNaming");

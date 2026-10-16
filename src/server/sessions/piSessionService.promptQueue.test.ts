@@ -149,7 +149,7 @@ describe("PiSessionService prompt, queue, and auth warnings", () => {
     const configPath = join(configDir, "config.json");
     const config = createFilePiWebConfigService({ env: { PI_WEB_CONFIG: configPath }, cwd: configDir });
     const read = vi.fn(config.read);
-    const calls: { model: string; maxTokens: number | undefined; finish: () => void }[] = [];
+    const calls: { model: string; maxTokens: number | undefined; reasoning: string | undefined; finish: () => void }[] = [];
     const streamFn: StreamFn = (model, _context, options) => {
       const stream = createAssistantMessageEventStream();
       const message: AssistantMessage = {
@@ -159,12 +159,12 @@ describe("PiSessionService prompt, queue, and auth warnings", () => {
         stopReason: "stop", timestamp: Date.now(),
       };
       calls.push({
-        model: `${model.provider}/${model.id}`, maxTokens: options?.maxTokens,
+        model: `${model.provider}/${model.id}`, maxTokens: options?.maxTokens, reasoning: options?.reasoning,
         finish: () => { stream.push({ type: "done", reason: "stop", message }); stream.end(message); },
       });
       return stream;
     };
-    const fakes = ["live-first", "live-second", "live-third"].map((id) => fakeRuntime(id, { model: sessionModel, agent: { streamFunction: streamFn } }));
+    const fakes = ["live-first", "live-second", "live-third"].map((id) => fakeRuntime(id, { model: sessionModel, thinkingLevel: "high", agent: { streamFunction: streamFn } }));
     const remaining = [...fakes];
     const service = new PiSessionService(new CapturingSessionEventHub(), {
       agentDir: TEST_AGENT_DIR, modelRuntime: testModelRuntime,
@@ -179,14 +179,14 @@ describe("PiSessionService prompt, queue, and auth warnings", () => {
     try {
       await service.prompt(sessionRef("live-first"), "First request");
       await vi.waitFor(() => { expect(calls).toHaveLength(1); });
-      await config.write({ sessionNaming: { model: `${alternate.provider}/${alternate.id}`, maxTokens: 2048 } });
-      expect(calls[0]).toMatchObject({ model: `${sessionModel.provider}/${sessionModel.id}`, maxTokens: 24 });
+      await config.write({ sessionNaming: { model: `${alternate.provider}/${alternate.id}`, maxTokens: 2048, thinkingLevel: "off" } });
+      expect(calls[0]).toMatchObject({ model: `${sessionModel.provider}/${sessionModel.id}`, maxTokens: 24, reasoning: "minimal" });
       calls[0]?.finish();
       await vi.waitFor(() => { expect(fakes[0]?.session.sessionName).toBe("Generated title"); });
 
       await service.prompt(sessionRef("live-second"), "Second request");
       await vi.waitFor(() => { expect(calls).toHaveLength(2); });
-      expect(calls[1]).toMatchObject({ model: `${alternate.provider}/${alternate.id}`, maxTokens: 2048 });
+      expect(calls[1]).toMatchObject({ model: `${alternate.provider}/${alternate.id}`, maxTokens: 2048, reasoning: undefined });
       // Direct file edits must work too, without a save notification or reload.
       await writeFile(configPath, "{}\n", "utf8");
       calls[1]?.finish();
@@ -194,13 +194,13 @@ describe("PiSessionService prompt, queue, and auth warnings", () => {
 
       await service.prompt(sessionRef("live-third"), "Third request");
       await vi.waitFor(() => { expect(calls).toHaveLength(3); });
-      expect(calls[2]).toMatchObject({ model: `${sessionModel.provider}/${sessionModel.id}`, maxTokens: 24 });
+      expect(calls[2]).toMatchObject({ model: `${sessionModel.provider}/${sessionModel.id}`, maxTokens: 24, reasoning: "minimal" });
       calls[2]?.finish();
       await vi.waitFor(() => { expect(fakes[2]?.session.sessionName).toBe("Generated title"); });
       await service.prompt(sessionRef("live-first"), "Another request");
       expect(calls).toHaveLength(3);
       expect(read).toHaveBeenCalledTimes(3);
-      expect(fakes.every((fake) => fake.session.model === sessionModel)).toBe(true);
+      expect(fakes.every((fake) => fake.session.model === sessionModel && fake.session.thinkingLevel === "high")).toBe(true);
     } finally {
       for (const call of calls) call.finish();
       await service.dispose();

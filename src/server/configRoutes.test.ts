@@ -68,7 +68,7 @@ describe("config routes", () => {
   });
 
   it.each(["/api/config", "/api/machines/local/config"])("saves and resets session naming through %s", async (url) => {
-    const sessionNaming = { model: "provider/org/model", maxTokens: 64 };
+    const sessionNaming = { model: "provider/org/model", maxTokens: 64, thinkingLevel: "off" as const };
     const saved = await app.inject({ method: "PUT", url, payload: { config: { sessionNaming } } });
     expect(saved.statusCode).toBe(200);
     expect(parsePiWebConfigResponseBody(saved.json()).config.sessionNaming).toEqual(sessionNaming);
@@ -79,17 +79,32 @@ describe("config routes", () => {
   });
 
   it("preserves session naming on unrelated selected-machine saves", async () => {
-    savedConfig.sessionNaming = { model: "provider/model", maxTokens: 48 };
+    const sessionNaming = { model: "provider/model", maxTokens: 48, thinkingLevel: "high" as const };
+    savedConfig.sessionNaming = sessionNaming;
     const response = await app.inject({ method: "PUT", url: "/api/machines/local/config", payload: { config: { spawnSessions: false } } });
     expect(response.statusCode).toBe(200);
-    expect(response.json<PiWebConfigResponse>().config.sessionNaming).toEqual({ model: "provider/model", maxTokens: 48 });
-    expect(savedConfig.sessionNaming).toEqual({ model: "provider/model", maxTokens: 48 });
+    expect(response.json<PiWebConfigResponse>().config.sessionNaming).toEqual(sessionNaming);
+    expect(savedConfig.sessionNaming).toEqual(sessionNaming);
   });
 
   it.each(["/api/config", "/api/machines/local/config"])("validates session naming before writing through %s", async (url) => {
     const response = await app.inject({ method: "PUT", url, payload: { config: { sessionNaming: { maxTokens: 0 } } } });
     expect(response.statusCode).toBe(400);
     expect(service.write).not.toHaveBeenCalled();
+  });
+
+  it.each(["", "ultra", null, false, 42, {}, []])("rejects invalid naming thinking level %j before writing and in remote responses", async (thinkingLevel) => {
+    const config = { sessionNaming: { thinkingLevel } };
+    for (const url of ["/api/config", "/api/machines/local/config"]) {
+      const result = await app.inject({ method: "PUT", url, payload: { config } });
+      expect(result.statusCode).toBe(400);
+      expect(result.json<{ error: string }>().error).toContain("sessionNaming.thinkingLevel");
+    }
+    expect(service.write).not.toHaveBeenCalled();
+    const response = responseFor({}, true);
+    for (const field of ["config", "effectiveConfig"]) {
+      expect(() => parsePiWebConfigResponseBody({ ...response, [field]: config })).toThrow("sessionNaming.thinkingLevel");
+    }
   });
 
   it("rejects invalid session naming in remote config responses", () => {

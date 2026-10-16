@@ -3,6 +3,7 @@ import { createAssistantMessageEventStream, getCurrentSystemPrompt } from "@eare
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import { cleanSessionName, fallbackSessionName, generateShortSessionName, requireInitialSessionName } from "./sessionNameGenerator.js";
+import { KNOWN_THINKING_LEVELS } from "../../shared/thinkingLevels.js";
 
 function fakeModel(): Model<Api> {
   return { id: "fake-model", name: "Fake Model", api: "anthropic-messages", provider: "anthropic", baseUrl: "https://example.test", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 1000, maxTokens: 100 };
@@ -65,6 +66,7 @@ describe("sessionNameGenerator", () => {
   it.each([false, true])("keeps the default budget at 24 tokens (reasoning: %s)", async (reasoning) => {
     const streamFn: StreamFn = (model, context, options) => {
       expect(options?.maxTokens).toBe(24);
+      expect(options?.reasoning).toBe("minimal");
       return streamThatCompletes("A short title")(model, context, options);
     };
     await generateShortSessionName(streamFn, { ...fakeModel(), reasoning }, "A request");
@@ -76,6 +78,15 @@ describe("sessionNameGenerator", () => {
       return streamThatCompletes("A short title")(model, context, options);
     };
     await generateShortSessionName(streamFn, fakeModel(), "A request", 2048);
+  });
+
+  it.each(KNOWN_THINKING_LEVELS)("passes naming thinking level %s independently of the token budget", async (level) => {
+    const streamFn: StreamFn = (model, context, options) => {
+      expect(options?.reasoning).toBe(level === "off" ? undefined : level);
+      expect(options?.maxTokens).toBe(24);
+      return streamThatCompletes("A short title")(model, context, options);
+    };
+    expect(await generateShortSessionName(streamFn, fakeModel(), "A request", undefined, level)).toBe("A short title");
   });
 
   it("returns undefined when the stream reports an error", async () => {

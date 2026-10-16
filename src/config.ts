@@ -5,6 +5,7 @@ import type { PiWebConfigValues, PiWebDeprecatedAgentInput } from "./shared/apiT
 import { isPiWebPluginId, piWebPluginIdPattern } from "./shared/pluginIds.js";
 import { requireDefaultThemePreference } from "./shared/themePreference.js";
 import { requireDefaultStreamingBehavior } from "./shared/streamingBehavior.js";
+import { isKnownThinkingLevel } from "./shared/thinkingLevels.js";
 
 export type PiWebConfig = PiWebConfigValues;
 
@@ -299,19 +300,24 @@ function parsePiWebConfig(value: Record<string, unknown>, path: string): PiWebCo
 
 export function parseSessionNamingConfig(value: unknown, path: string): NonNullable<PiWebConfigValues["sessionNaming"]> {
   if (!isRecord(value)) throw new Error(`PI WEB config sessionNaming must be an object: ${path}`);
-  const unknownKey = Object.keys(value).find((key) => key !== "model" && key !== "maxTokens");
+  const unknownKey = Object.keys(value).find((key) => key !== "model" && key !== "maxTokens" && key !== "thinkingLevel");
   if (unknownKey !== undefined) throw new Error(`PI WEB config sessionNaming has unknown key ${JSON.stringify(unknownKey)}: ${path}`);
   const model = value["model"];
   const maxTokens = value["maxTokens"];
+  const thinkingLevel = value["thinkingLevel"];
   if (model !== undefined && (typeof model !== "string" || !/^[^/\s]+\/\S+$/.test(model))) {
     throw new Error(`PI WEB config sessionNaming.model must be an exact provider/model-id with non-empty parts: ${path}`);
   }
   if (maxTokens !== undefined && (typeof maxTokens !== "number" || !Number.isSafeInteger(maxTokens) || maxTokens <= 0)) {
     throw new Error(`PI WEB config sessionNaming.maxTokens must be a positive safe integer: ${path}`);
   }
+  if (thinkingLevel !== undefined && (typeof thinkingLevel !== "string" || !isKnownThinkingLevel(thinkingLevel))) {
+    throw new Error(`PI WEB config sessionNaming.thinkingLevel must be a known thinking level: ${path}`);
+  }
   return {
     ...(model !== undefined ? { model } : {}),
     ...(maxTokens !== undefined ? { maxTokens } : {}),
+    ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
   };
 }
 

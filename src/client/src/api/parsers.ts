@@ -8,6 +8,7 @@ import { PI_WEB_PLUGIN_RECOVERY_COMMANDS, pluginDisableRecoveryCommand } from ".
 import { parseServerNoticeScope } from "../../../shared/serverNoticeContract";
 import { requireDefaultThemePreference } from "../../../shared/themePreference";
 import { requireDefaultStreamingBehavior } from "../../../shared/streamingBehavior";
+import { isKnownThinkingLevel } from "../../../shared/thinkingLevels";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -1486,11 +1487,14 @@ function optionalSessionNaming(value: unknown): PiWebConfigValues["sessionNaming
   if (!isRecord(value) || Array.isArray(value)) throw new Error("Invalid PI WEB sessionNaming field");
   const model = optionalString(value, "model");
   const maxTokens = optionalNumber(value, "maxTokens");
+  const thinkingLevel = optionalString(value, "thinkingLevel");
   if (model !== undefined && !/^[^/\s]+\/[^\s]+$/.test(model)) throw new Error("Invalid PI WEB sessionNaming.model field");
   if (maxTokens !== undefined && (!Number.isSafeInteger(maxTokens) || maxTokens <= 0)) throw new Error("Invalid PI WEB sessionNaming.maxTokens field");
+  if (thinkingLevel !== undefined && !isKnownThinkingLevel(thinkingLevel)) throw new Error("Invalid PI WEB sessionNaming.thinkingLevel field");
   return {
     ...optionalField("model", model),
     ...optionalField("maxTokens", maxTokens),
+    ...optionalField("thinkingLevel", thinkingLevel),
   };
 }
 

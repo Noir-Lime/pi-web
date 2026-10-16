@@ -132,21 +132,21 @@ describe("SettingsSessiondPanel DOM", () => {
 
   it("separates saved naming values and immediate-effect help from restart permissions", async () => {
     const config = configResponse();
-    config.effectiveConfig.sessionNaming = { model: "provider/naming", maxTokens: 64 };
+    config.effectiveConfig.sessionNaming = { model: "provider/naming", maxTokens: 64, thinkingLevel: "off" };
     const panel = await mount(config);
     const summary = panel.shadowRoot?.querySelector("section[aria-labelledby='naming-summary-heading']");
     expect(summary?.getAttribute("aria-describedby")).toBe("naming-summary-help");
     expect(summary?.querySelector("h3")?.textContent).toBe("For the next naming request");
     expect(summary?.querySelector("small")?.textContent).toBe("Saved naming settings apply without a restart. Existing names and in-progress naming requests are unchanged.");
-    expect(Array.from(summary?.querySelectorAll("dd") ?? [], (item) => item.textContent)).toEqual(["provider/naming", "64"]);
+    expect(Array.from(summary?.querySelectorAll("dd") ?? [], (item) => item.textContent)).toEqual(["provider/naming", "64", "off"]);
     panel.configResponse = configResponse();
     await panel.updateComplete;
-    expect(Array.from(summary?.querySelectorAll("dd") ?? [], (item) => item.textContent)).toEqual(["Use session model", "24"]);
+    expect(Array.from(summary?.querySelectorAll("dd") ?? [], (item) => item.textContent)).toEqual(["Use session model", "24", "minimal"]);
   });
 
   it("searches and selects naming models while preserving the budget, and resets defaults", async () => {
     const config = configResponse();
-    config.config.sessionNaming = { model: "openai/gpt-5", maxTokens: 48 };
+    config.config.sessionNaming = { model: "openai/gpt-5", maxTokens: 48, thinkingLevel: "off" };
     const panel = await mount(config);
     panel.namingModels = [
       { provider: "openai", id: "gpt-5", name: "GPT 5" },
@@ -173,7 +173,7 @@ describe("SettingsSessiondPanel DOM", () => {
     choices?.[0]?.click();
     await panel.updateComplete;
     expect(panel.shadowRoot?.querySelector("command-picker")).toBeNull();
-    expect(onSave).toHaveBeenLastCalledWith({ sessionNaming: { model: "anthropic/claude-sonnet", maxTokens: 48 } });
+    expect(onSave).toHaveBeenLastCalledWith({ sessionNaming: { model: "anthropic/claude-sonnet", maxTokens: 48, thinkingLevel: "off" } });
     const budget = toggle(panel, "session-naming-max-tokens");
     for (const invalid of ["0", "-1", "1.5"]) {
       onSave.mockClear();
@@ -183,10 +183,10 @@ describe("SettingsSessiondPanel DOM", () => {
     }
     budget.value = "64";
     budget.dispatchEvent(new Event("change"));
-    expect(onSave).toHaveBeenLastCalledWith({ sessionNaming: { model: "openai/gpt-5", maxTokens: 64 } });
+    expect(onSave).toHaveBeenLastCalledWith({ sessionNaming: { model: "openai/gpt-5", maxTokens: 64, thinkingLevel: "off" } });
     budget.value = "";
     budget.dispatchEvent(new Event("change"));
-    expect(onSave).toHaveBeenLastCalledWith({ sessionNaming: { model: "openai/gpt-5" } });
+    expect(onSave).toHaveBeenLastCalledWith({ sessionNaming: { model: "openai/gpt-5", thinkingLevel: "off" } });
     model?.click();
     await panel.updateComplete;
     const resetPicker = panel.shadowRoot?.querySelector<CommandPicker>("command-picker");
@@ -194,7 +194,32 @@ describe("SettingsSessiondPanel DOM", () => {
     await resetPicker.updateComplete;
     resetPicker.shadowRoot?.querySelector<HTMLButtonElement>("button.ui-selection-option")?.click();
     await panel.updateComplete;
-    expect(onSave).toHaveBeenLastCalledWith({ sessionNaming: { maxTokens: 48 } });
+    expect(onSave).toHaveBeenLastCalledWith({ sessionNaming: { maxTokens: 48, thinkingLevel: "off" } });
+  });
+
+  it("saves thinking overrides including off and resets to minimal without changing the model or budget", async () => {
+    const config = configResponse();
+    config.config.sessionNaming = { model: "provider/naming", maxTokens: 64 };
+    const panel = await mount(config);
+    const onSave = vi.fn();
+    panel.onSave = onSave;
+    const select = panel.shadowRoot?.querySelector<HTMLSelectElement>("#session-naming-thinking-level");
+    if (!select) throw new Error("Missing thinking-level selector");
+    expect(select.value).toBe("");
+    expect(select.selectedOptions[0]?.textContent).toBe("Default (minimal)");
+    expect(Array.from(select.options, (option) => option.value)).toEqual(["", "off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+    select.value = "off";
+    select.dispatchEvent(new Event("change"));
+    expect(onSave).toHaveBeenLastCalledWith({ sessionNaming: { model: "provider/naming", maxTokens: 64, thinkingLevel: "off" } });
+    panel.configResponse = { ...config, config: { sessionNaming: { model: "provider/naming", maxTokens: 64, thinkingLevel: "off" } } };
+    await panel.updateComplete;
+    expect(select.value).toBe("off");
+    select.value = "";
+    select.dispatchEvent(new Event("change"));
+    expect(onSave).toHaveBeenLastCalledWith({ sessionNaming: { model: "provider/naming", maxTokens: 64 } });
+    panel.saving = true;
+    await panel.updateComplete;
+    expect(select.disabled).toBe(true);
   });
 
   it("defaults to the session model and 24 tokens, allows cancel, and disables naming controls during saves", async () => {

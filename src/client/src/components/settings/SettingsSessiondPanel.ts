@@ -3,6 +3,7 @@ import { customElement, property, state } from "lit/decorators.js";
 import { live } from "lit/directives/live.js";
 import type { PiWebConfigResponse, PiWebConfigValues, SessionModel } from "../../api";
 import "../CommandPicker";
+import { isKnownThinkingLevel, KNOWN_THINKING_LEVELS } from "../../../../shared/thinkingLevels";
 import { uiFormStyles } from "../ui/formStyles";
 import { uiButtonStyles } from "../ui/controlStyles";
 import { uiSettingsStyles } from "../ui/settingsStyles";
@@ -152,12 +153,31 @@ export class SettingsSessiondPanel extends LitElement {
               }}>
             <small id="session-naming-max-tokens-help">Use a positive whole number. Clear to use 24 tokens, regardless of the model.</small>
           </div>
+          <div class="field ui-form-field">
+            <label for="session-naming-thinking-level">Naming thinking level</label>
+            <select id="session-naming-thinking-level" class="ui-select"
+              aria-describedby="session-naming-thinking-level-help"
+              .value=${live(config.config.sessionNaming?.thinkingLevel ?? "")}
+              ?disabled=${this.loading || this.saving}
+              @change=${(event: Event) => {
+                const input = event.target;
+                if (!(input instanceof HTMLSelectElement)) return;
+                if (input.value === "" || isKnownThinkingLevel(input.value)) {
+                  void this.saveNamingField("thinkingLevel", input.value === "" ? undefined : input.value);
+                }
+              }}>
+              <option value="">Default (minimal)</option>
+              ${KNOWN_THINKING_LEVELS.map((level) => html`<option value=${level}>${level}</option>`)}
+            </select>
+            <small id="session-naming-thinking-level-help">Controls reasoning for naming only. Off disables optional thinking where supported; model support varies.</small>
+          </div>
           <section class="effective-card ui-settings-summary" aria-labelledby="naming-summary-heading" aria-describedby="naming-summary-help">
             <h3 id="naming-summary-heading">For the next naming request</h3>
             <small id="naming-summary-help">Saved naming settings apply without a restart. Existing names and in-progress naming requests are unchanged.</small>
             <dl>
               <div><dt>Naming model</dt><dd>${config.effectiveConfig.sessionNaming?.model ?? "Use session model"}</dd></div>
               <div><dt>Naming token budget</dt><dd>${config.effectiveConfig.sessionNaming?.maxTokens ?? 24}</dd></div>
+              <div><dt>Naming thinking level</dt><dd>${config.effectiveConfig.sessionNaming?.thinkingLevel ?? "minimal"}</dd></div>
             </dl>
           </section>
         `}
@@ -200,6 +220,7 @@ export class SettingsSessiondPanel extends LitElement {
     const sessionNaming = {
       ...(current.model === undefined ? {} : { model: current.model }),
       ...(current.maxTokens === undefined ? {} : { maxTokens: current.maxTokens }),
+      ...(current.thinkingLevel === undefined ? {} : { thinkingLevel: current.thinkingLevel }),
     };
     await this.onSave?.({ sessionNaming });
   }
