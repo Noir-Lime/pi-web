@@ -933,7 +933,7 @@ export class ChatView extends LitElement {
     return html`
       <details class=${`${chatMessageGroupClassName(defaultOpen)} ui-transcript-surface`} data-index=${startIndex} data-scroll-anchor-id=${this.groupAnchorKey(group, defaultOpen) ?? nothing} ?open=${open} @toggle=${this.behaviors.rememberDisclosures ? (event: Event) => { this.onGroupToggle(disclosureKey, event, defaultOpen); } : undefined}>
         <summary class="ui-transcript-disclosure">
-          <b class="label">${chatMessageGroupLabel(defaultOpen)}</b>
+          <span class="label">${chatMessageGroupLabel(defaultOpen)}</span>
           <span>${summarizeChatGroup(messages.map((event) => event.message))}</span>
         </summary>
         ${this.renderMessageGroupBody(group, entryActionHeaders)}
@@ -961,15 +961,16 @@ export class ChatView extends LitElement {
     const meta = this.messageMetaLabel(message);
     const expanded = this.expandedMetaKey === key;
     const detailId = `message-meta-${key}`;
+    const conversation = label === "user" || label === "assistant";
     return html`
-      <div class="msg-header">
-        <b class="label">${label}</b>
+      <div class=${conversation ? "msg-header conversation-header" : "msg-header"}>
+        <span class=${conversation ? "visually-hidden" : "label"}>${label}</span>
         <div class="msg-header-trailing">
           ${this.renderMessageActions(message, key, this.messages[index - this.messageStart] ?? message, entryActionHeaders.has(message))}
           <button type="button" class="msg-meta ui-button ui-button--icon ui-button--compact" title=${meta} aria-label="Message information" aria-controls=${detailId} aria-expanded=${String(expanded)} @click=${() => { this.expandedMetaKey = expanded ? undefined : key; }}>${renderSessionWarningIcon("info", "msg-info-icon")}</button>
         </div>
-        <div id=${detailId} class="msg-meta-details" ?hidden=${!expanded}>${meta}</div>
       </div>
+      <div id=${detailId} class="msg-meta-details" ?hidden=${!expanded}>${meta}</div>
     `;
   }
 

@@ -41,6 +41,22 @@ it("keeps the same Info button and focus while showing and hiding a separate met
   expect(view.shadowRoot?.activeElement).toBe(button);
 });
 
+it("keeps conversational roles available to assistive technology without repeated visual headings", async () => {
+  const view = new ChatView();
+  view.messages = [{ ...message, role: "user", entryId: "request" }, message, { ...message, role: "system", entryId: "notice" }];
+  document.body.append(view);
+  await view.updateComplete;
+
+  const headers = [...(view.shadowRoot?.querySelectorAll(".msg-header") ?? [])];
+  expect(headers).toHaveLength(3);
+  expect(headers[0]?.querySelector(".visually-hidden")?.textContent).toBe("user");
+  expect(headers[1]?.querySelector(".visually-hidden")?.textContent).toBe("assistant");
+  expect(headers[0]?.querySelector(".label")).toBeNull();
+  expect(headers[1]?.querySelector(".label")).toBeNull();
+  expect(headers[2]?.querySelector(".label")?.textContent).toBe("system");
+  expect(view.shadowRoot?.querySelectorAll('button[aria-label="Message information"]')).toHaveLength(3);
+});
+
 it("shows only the metadata region controlled by the selected message's Info button", async () => {
   const view = new ChatView();
   view.messages = [{ ...message, role: "user", entryId: "first" }, message];
