@@ -650,7 +650,7 @@ export class ChatView extends LitElement {
           <div class="session-warnings-controls">
             <button
               type="button"
-              class="session-warnings-collapse"
+              class="session-warnings-collapse ui-button ui-button--compact"
               title="Minimise warnings"
               aria-label="Minimise warnings"
               @click=${this.handleToggleWarnings}
@@ -665,7 +665,7 @@ export class ChatView extends LitElement {
         ${rows.map((row) => {
           const dismissId = row.dismissId;
           return html`
-          <div class=${row.severityClass}>
+          <div class=${`${row.severityClass} ui-transcript-surface`}>
             <div class="session-warning-head">
               ${renderSessionWarningIcon(row.severity, "session-warning-icon")}
               ${row.source === undefined ? null : html`<span class="session-warning-source">${row.source}</span>`}
@@ -677,7 +677,7 @@ export class ChatView extends LitElement {
             ${dismissId === undefined ? null : html`
               <button
                 type="button"
-                class="session-warning-dismiss"
+                class="session-warning-dismiss ui-button ui-button--icon ui-button--compact"
                 title="Don't show this warning again"
                 aria-label="Dismiss warning"
                 @click=${() => { this.onDismissWarning?.(dismissId); }}
@@ -753,14 +753,14 @@ export class ChatView extends LitElement {
     const unavailableReason = actionsUnavailable === undefined ? undefined : actionsUnavailable === "" ? "Individual queue controls are unavailable with this runtime." : actionsUnavailable;
     const actionsDisabled = this.queuedMessageActionPending || actionsUnavailable !== undefined;
     return html`
-      <aside class="queued-messages" aria-live="polite">
+      <aside class="queued-messages ui-transcript-surface" aria-live="polite">
         <div class="queued-header">
           <div class="queued-heading">
             <strong>${section.heading}</strong>
             <small>${section.detail}</small>
           </div>
           ${canClear ? html`
-            <button type="button" class="queued-clear-button" ?disabled=${this.queuedMessageActionPending} aria-label="Clear queue" title="Clear queued messages without stopping active work" @click=${this.handleClearServerQueue}>${renderTrashIcon()}</button>
+            <button type="button" class="queued-clear-button ui-button ui-button--icon ui-button--compact" ?disabled=${this.queuedMessageActionPending} aria-label="Clear queue" title="Clear queued messages without stopping active work" @click=${this.handleClearServerQueue}>${renderTrashIcon()}</button>
           ` : null}
         </div>
         ${unavailableReason === undefined ? nothing : html`<small role="status">${unavailableReason}</small>`}
@@ -773,14 +773,14 @@ export class ChatView extends LitElement {
                   <span class="queued-attachments" title="Attachments included with this queued message"><span aria-hidden="true">📎</span> ${queuedMessageAttachmentLabel(message)}</span>
                 `}
               </div>
-              <div class="queued-message-actions">
-                <button type="button" class="queued-action" aria-label="Copy queued message" title="Copy message" @click=${async () => {
+              <div class="queued-message-actions ui-toolbar-group">
+                <button type="button" class="queued-action ui-button ui-button--icon ui-button--compact" aria-label="Copy queued message" title="Copy message" @click=${async () => {
                   this.queuedCopyFeedback = await writeClipboardText(message.text) ? "Copied" : "Could not copy message";
                 }}>${renderCopyIcon()}</button>
                 ${section.source !== "server" || this.onQueuedMessageAction === undefined ? nothing : html`
-                  <button type="button" class="queued-action" ?disabled=${actionsDisabled} title=${unavailableReason ?? (message.kind === "steer" ? "Move to the end of the follow-up queue" : "Move to the end of the steering queue")} aria-label=${message.kind === "steer" ? "Switch to Queue" : "Switch to Steer"} @click=${() => { this.actOnQueuedMessage("toggle", index, section.messages); }}>${message.kind === "steer" ? renderQueueIcon() : renderSteerIcon()}</button>
-                  <button type="button" class="queued-action" ?disabled=${actionsDisabled} aria-label="Recall queued message" title=${unavailableReason ?? "Recall this message's text and clear later queued messages"} @click=${() => { this.actOnQueuedMessage("edit", index, section.messages); }}>${renderGoBackIcon()}</button>
-                  <button type="button" class="queued-action" ?disabled=${actionsDisabled} aria-label="Remove queued message" title=${unavailableReason ?? "Remove only this message"} @click=${() => { this.actOnQueuedMessage("remove", index, section.messages); }}>${renderTrashIcon()}</button>
+                  <button type="button" class="queued-action ui-button ui-button--icon ui-button--compact" ?disabled=${actionsDisabled} title=${unavailableReason ?? (message.kind === "steer" ? "Move to the end of the follow-up queue" : "Move to the end of the steering queue")} aria-label=${message.kind === "steer" ? "Switch to Queue" : "Switch to Steer"} @click=${() => { this.actOnQueuedMessage("toggle", index, section.messages); }}>${message.kind === "steer" ? renderQueueIcon() : renderSteerIcon()}</button>
+                  <button type="button" class="queued-action ui-button ui-button--icon ui-button--compact" ?disabled=${actionsDisabled} aria-label="Recall queued message" title=${unavailableReason ?? "Recall this message's text and clear later queued messages"} @click=${() => { this.actOnQueuedMessage("edit", index, section.messages); }}>${renderGoBackIcon()}</button>
+                  <button type="button" class="queued-action ui-button ui-button--icon ui-button--compact" ?disabled=${actionsDisabled} aria-label="Remove queued message" title=${unavailableReason ?? "Remove only this message"} @click=${() => { this.actOnQueuedMessage("remove", index, section.messages); }}>${renderTrashIcon()}</button>
                 `}
               </div>
             </div>
@@ -801,17 +801,17 @@ export class ChatView extends LitElement {
     if (text === undefined || this.onUseSuggestedInput === undefined
       || this.suggestedInputPending || this.suppressedSuggestedInput === text) return null;
     return html`
-      <aside class="suggested-input">
+      <aside class="suggested-input ui-transcript-surface">
         <div class="suggested-input-header">
           <strong>Suggested input</strong>
           ${this.onDismissSuggestedInput === undefined ? null : html`
-            <button type="button" class="suggested-input-dismiss" aria-label="Dismiss suggested input" title="Dismiss suggested input in this browser"
+            <button type="button" class="suggested-input-dismiss ui-button ui-button--icon ui-button--compact" aria-label="Dismiss suggested input" title="Dismiss suggested input in this browser"
               @click=${() => { this.onDismissSuggestedInput?.(this.machineId, this.sessionId, text); }}>×</button>
           `}
         </div>
         <p class="suggested-input-text" dir="auto">${text === "" ? "Empty input" : text}</p>
         <small>Replaces your current draft. Nothing is sent.</small>
-        <button type="button" class="suggested-input-use" @click=${() => { this.onUseSuggestedInput?.(this.machineId, this.sessionId); }}>Use suggested input</button>
+        <button type="button" class="suggested-input-use ui-button ui-button--primary" @click=${() => { this.onUseSuggestedInput?.(this.machineId, this.sessionId); }}>Use suggested input</button>
       </aside>
     `;
   }
@@ -849,7 +849,7 @@ export class ChatView extends LitElement {
   private renderSessionActivity() {
     if (!this.isCompacting) return null;
     return html`
-      <aside class="session-activity compacting" aria-live="polite">
+      <aside class="session-activity compacting ui-transcript-surface" aria-live="polite">
         <strong>Compacting history…</strong>
         <span>The agent is summarizing earlier context. New prompts will be queued until compaction finishes.</span>
         ${this.pendingMessageCount > 0 ? html`<small>${this.pendingMessageCount} queued ${this.pendingMessageCount === 1 ? "message" : "messages"}</small>` : null}
@@ -879,7 +879,7 @@ export class ChatView extends LitElement {
     if (this.loadingMore) return html`<div class="history-boundary"><span>Loading earlier messages…</span>${range}</div>`;
     if (this.hasMore) return html`
       <div class="history-boundary">
-        <button type="button" class="history-load-button" ?disabled=${this.loadMoreRequested} @click=${() => { this.requestLoadMore(); }}>Load earlier messages</button>
+        <button type="button" class="history-load-button ui-button ui-button--compact" ?disabled=${this.loadMoreRequested} @click=${() => { this.requestLoadMore(); }}>Load earlier messages</button>
         ${this.behaviors.automaticHistory ? html`<span>Scroll up to load earlier messages</span>` : null}
         ${range}
       </div>
@@ -905,7 +905,7 @@ export class ChatView extends LitElement {
     const hasHeader = chatMessageHasHeader(message);
     const shellClass = toolOnly ? "msg tool-execution-shell" : "msg ask-user-record-shell";
     return html`
-      <article class=${hasHeader ? `msg ${message.role}` : shellClass} data-index=${index} data-scroll-anchor-id=${chatMessageAnchorKey(index, message) ?? nothing}>
+      <article class=${`${hasHeader ? `msg ${message.role}` : shellClass} ui-transcript-surface`} data-index=${index} data-scroll-anchor-id=${chatMessageAnchorKey(index, message) ?? nothing}>
         ${hasHeader ? this.renderMessageHeader(message, String(index), index, entryActionHeaders) : null}
         ${message.parts.map((part, partIndex) => this.renderPart(part, message, index, partIndex))}
       </article>
@@ -915,7 +915,7 @@ export class ChatView extends LitElement {
   private renderToolImageOutput(message: ChatLine, index: number, entryActionHeaders: ReadonlySet<ChatLine>, toolName?: string) {
     const label = chatToolOutputLabel(toolName);
     return html`
-      <article class="msg tool-image-output" data-index=${index} data-scroll-anchor-id=${chatMessageAnchorKey(index, message) ?? nothing}>
+      <article class="msg tool-image-output ui-transcript-surface" data-index=${index} data-scroll-anchor-id=${chatMessageAnchorKey(index, message) ?? nothing}>
         ${this.renderMessageHeader(message, String(index), index, entryActionHeaders, label)}
         ${message.parts.map((part, partIndex) => this.renderPart(part, message, index, partIndex))}
       </article>
@@ -931,8 +931,8 @@ export class ChatView extends LitElement {
     const disclosureKey = this.groupDisclosureKey(group, defaultOpen);
     const open = this.behaviors.rememberDisclosures ? this.disclosures.isOpen(disclosureKey, defaultOpen) : defaultOpen;
     return html`
-      <details class=${chatMessageGroupClassName(defaultOpen)} data-index=${startIndex} data-scroll-anchor-id=${this.groupAnchorKey(group, defaultOpen) ?? nothing} ?open=${open} @toggle=${this.behaviors.rememberDisclosures ? (event: Event) => { this.onGroupToggle(disclosureKey, event, defaultOpen); } : undefined}>
-        <summary>
+      <details class=${`${chatMessageGroupClassName(defaultOpen)} ui-transcript-surface`} data-index=${startIndex} data-scroll-anchor-id=${this.groupAnchorKey(group, defaultOpen) ?? nothing} ?open=${open} @toggle=${this.behaviors.rememberDisclosures ? (event: Event) => { this.onGroupToggle(disclosureKey, event, defaultOpen); } : undefined}>
+        <summary class="ui-transcript-disclosure">
           <b class="label">${chatMessageGroupLabel(defaultOpen)}</b>
           <span>${summarizeChatGroup(messages.map((event) => event.message))}</span>
         </summary>
@@ -947,7 +947,7 @@ export class ChatView extends LitElement {
         ${messages.map(({ message, index }, offset) => {
           const toolOnly = this.isToolExecutionOnlyMessage(message);
           return html`
-            <section class=${toolOnly ? "group-msg tool-execution-shell" : `group-msg ${message.role}`} data-index=${index} data-scroll-anchor-id=${chatEventAnchorKey(index, message) ?? nothing}>
+            <section class=${`${toolOnly ? "group-msg tool-execution-shell" : `group-msg ${message.role}`} ui-transcript-surface`} data-index=${index} data-scroll-anchor-id=${chatEventAnchorKey(index, message) ?? nothing}>
               ${chatMessageHasHeader(message) ? this.renderMessageHeader(message, `${String(startIndex)}:${String(offset)}`, index, entryActionHeaders) : null}
               ${message.parts.map((part, partIndex) => this.renderPart(part, message, index, partIndex))}
             </section>
@@ -960,13 +960,15 @@ export class ChatView extends LitElement {
   private renderMessageHeader(message: ChatLine, key: string, index: number, entryActionHeaders: ReadonlySet<ChatLine>, label: string = message.role) {
     const meta = this.messageMetaLabel(message);
     const expanded = this.expandedMetaKey === key;
+    const detailId = `message-meta-${key}`;
     return html`
       <div class="msg-header">
         <b class="label">${label}</b>
         <div class="msg-header-trailing">
           ${this.renderMessageActions(message, key, this.messages[index - this.messageStart] ?? message, entryActionHeaders.has(message))}
-          <span class=${expanded ? "msg-meta expanded" : "msg-meta"} role="button" tabindex="0" title=${meta} aria-label=${meta} aria-expanded=${String(expanded)} @click=${() => { this.expandedMetaKey = expanded ? undefined : key; }} @keydown=${(event: KeyboardEvent) => { this.onMetaKeydown(event, key, expanded); }}>${meta}</span>
+          <button type="button" class="msg-meta ui-button ui-button--icon ui-button--compact" title=${meta} aria-label="Message information" aria-controls=${detailId} aria-expanded=${String(expanded)} @click=${() => { this.expandedMetaKey = expanded ? undefined : key; }}>${renderSessionWarningIcon("info", "msg-info-icon")}</button>
         </div>
+        <div id=${detailId} class="msg-meta-details" ?hidden=${!expanded}>${meta}</div>
       </div>
     `;
   }
@@ -978,12 +980,13 @@ export class ChatView extends LitElement {
     if (actions.length === 0) return null;
     const feedback = this.messageActionFeedback;
     return html`
-      <div class="msg-actions" aria-label="Message actions">
+      <div class="msg-actions ui-toolbar-group" aria-label="Message actions">
         ${actions.map(({ action, enabled, ariaLabel }) => {
           const presentation = feedback?.machineId === this.machineId && feedback.sessionId === this.sessionId && feedback.key === key && feedback.actionId === action.id
             ? feedback.presentation : undefined;
           const pending = action.target === "display" ? this.displayedMessageActionsPending.has(this.messageActionKey(key, action.id)) : this.messageActionPending;
-          return html`<button type="button" class="msg-action" title=${presentation?.title ?? action.title} aria-label=${presentation?.ariaLabel ?? presentation?.title ?? ariaLabel} ?disabled=${!enabled || pending} @click=${(event: MouseEvent) => { void this.actOnMessage(source, message, key, action, event); }}>${presentation?.icon ?? action.icon ?? action.title}</button>`;
+          const icon = presentation?.icon ?? action.icon;
+          return html`<button type="button" class=${`msg-action ui-button ui-button--compact ${icon === undefined ? "" : "ui-button--icon"}`} title=${presentation?.title ?? action.title} aria-label=${presentation?.ariaLabel ?? presentation?.title ?? ariaLabel} ?disabled=${!enabled || pending} @click=${(event: MouseEvent) => { void this.actOnMessage(source, message, key, action, event); }}>${icon ?? action.title}</button>`;
         })}
         ${this.messageActionError?.machineId === this.machineId && this.messageActionError.sessionId === this.sessionId && this.messageActionError.key === key ? html`<span role="alert">${this.messageActionError.message}</span>` : null}
       </div>
@@ -1034,12 +1037,6 @@ export class ChatView extends LitElement {
     this.messageActionFeedback = undefined;
   }
 
-  private onMetaKeydown(event: KeyboardEvent, key: string, expanded: boolean) {
-    if (event.key !== "Enter" && event.key !== " ") return;
-    event.preventDefault();
-    this.expandedMetaKey = expanded ? undefined : key;
-  }
-
   private messageMetaLabel(message: ChatLine): string {
     const cached = this.messageMetaCache.get(message);
     if (cached !== undefined) return cached;
@@ -1060,13 +1057,13 @@ export class ChatView extends LitElement {
     if (part.type === "text" || part.type === "thinking") {
       const text = part.displayText ?? part.text;
       if (text === "") return null;
-      if (part.type === "thinking") return html`<details class="part"><summary>thinking</summary><formatted-text .imagesEnabled=${this.behaviors.loadImages} .codeBlocks=${this.behaviors.codeBlocks} .intentKey=${intentKey} .contentRendering=${this.contentRendering} .machineId=${this.machineId} .workspaceContext=${this.workspaceContext} .text=${text}></formatted-text></details>`;
+      if (part.type === "thinking") return html`<details class="part"><summary class="ui-transcript-disclosure">thinking</summary><formatted-text .imagesEnabled=${this.behaviors.loadImages} .codeBlocks=${this.behaviors.codeBlocks} .intentKey=${intentKey} .contentRendering=${this.contentRendering} .machineId=${this.machineId} .workspaceContext=${this.workspaceContext} .text=${text}></formatted-text></details>`;
       if (message.role === "bash") return html`<pre class="part shell-output">${text}</pre>`;
       return html`<formatted-text .imagesEnabled=${this.behaviors.loadImages} .codeBlocks=${this.behaviors.codeBlocks} .intentKey=${intentKey} class="part" .contentRendering=${this.contentRendering} .machineId=${this.machineId} .workspaceContext=${this.workspaceContext} .text=${text}></formatted-text>`;
     }
     if (part.type === "skillInvocation") return html`
       <details class="part skill-invocation">
-        <summary><b>[skill]</b> ${part.name}</summary>
+        <summary class="ui-transcript-disclosure"><b>[skill]</b> ${part.name}</summary>
         <small>${part.location}</small>
         <formatted-text .imagesEnabled=${this.behaviors.loadImages} .codeBlocks=${this.behaviors.codeBlocks} .intentKey=${intentKey} .contentRendering=${this.contentRendering} .machineId=${this.machineId} .workspaceContext=${this.workspaceContext} .text=${part.content}></formatted-text>
       </details>
@@ -1104,7 +1101,7 @@ export class ChatView extends LitElement {
     if (part.type === "toolExecution") return html`<tool-execution-view class="part" .execution=${part}></tool-execution-view>`;
     if (part.type === "toolResult") return html`
       <details class="part" ?open=${part.isError}>
-        <summary>${part.isError ? "✖" : "✓"} ${part.toolName} result</summary>
+        <summary class="ui-transcript-disclosure">${part.isError ? "✖" : "✓"} ${part.toolName} result</summary>
         <formatted-text .imagesEnabled=${this.behaviors.loadImages} .codeBlocks=${this.behaviors.codeBlocks} .intentKey=${intentKey} .contentRendering=${this.contentRendering} .machineId=${this.machineId} .workspaceContext=${this.workspaceContext} .text=${part.text}></formatted-text>
       </details>
     `;

@@ -1,6 +1,8 @@
 import { LitElement, css, html, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { ifDefined } from "lit/directives/if-defined.js";
+import { uiButtonStyles } from "./ui/controlStyles";
+import { uiTranscriptStyles } from "./ui/transcriptStyles";
 import {
   EXTENSION_DIALOG_INPUT_MAX_LENGTH,
   type ExtensionDialogAnswer,
@@ -126,7 +128,7 @@ export class ExtensionDialogCard extends LitElement {
   private renderOpen(dialog: PendingExtensionDialog): TemplateResult {
     const countdown = extensionDialogCountdownText(dialog.timeoutAt, this.countdownNow === 0 ? Date.now() : this.countdownNow);
     return html`
-      <article class="card open-card" aria-labelledby="extension-dialog-heading">
+      <article class="ui-transcript-surface card open-card" aria-labelledby="extension-dialog-heading">
         <header class="card-header">
           <h2 id="extension-dialog-heading">${dialog.title}</h2>
           ${countdown === undefined
@@ -151,9 +153,9 @@ export class ExtensionDialogCard extends LitElement {
     return html`
       ${dialog.message === undefined ? null : html`<p class="dialog-message">${dialog.message}</p>`}
       <footer class="dialog-footer">
-        <button class="secondary-action" type="button" ?disabled=${this.closing} @click=${() => { this.cancelDialog(dialog); }}>Cancel</button>
-        <button class="secondary-action" type="button" ?disabled=${this.closing} @click=${() => { this.answerDialog(dialog, false); }}>No</button>
-        <button class="primary-action" type="button" ?disabled=${this.closing} @click=${() => { this.answerDialog(dialog, true); }}>Yes</button>
+        <button class="ui-button ui-button--compact secondary-action" type="button" ?disabled=${this.closing} @click=${() => { this.cancelDialog(dialog); }}>Cancel</button>
+        <button class="ui-button ui-button--compact secondary-action" type="button" ?disabled=${this.closing} @click=${() => { this.answerDialog(dialog, false); }}>No</button>
+        <button class="ui-button ui-button--primary primary-action" type="button" ?disabled=${this.closing} @click=${() => { this.answerDialog(dialog, true); }}>Yes</button>
       </footer>
     `;
   }
@@ -162,11 +164,11 @@ export class ExtensionDialogCard extends LitElement {
     return html`
       <div class="dialog-options" role="group" aria-label="Choices">
         ${(dialog.options ?? []).map((option) => html`
-          <button class="option-button" type="button" ?disabled=${this.closing} @click=${() => { this.answerDialog(dialog, option); }}>${option}</button>
+          <button class="ui-button option-button" type="button" ?disabled=${this.closing} @click=${() => { this.answerDialog(dialog, option); }}>${option}</button>
         `)}
       </div>
       <footer class="dialog-footer">
-        <button class="secondary-action" type="button" ?disabled=${this.closing} @click=${() => { this.cancelDialog(dialog); }}>Cancel</button>
+        <button class="ui-button ui-button--compact secondary-action" type="button" ?disabled=${this.closing} @click=${() => { this.cancelDialog(dialog); }}>Cancel</button>
       </footer>
     `;
   }
@@ -186,8 +188,8 @@ export class ExtensionDialogCard extends LitElement {
           @input=${(event: Event) => { this.changeInput(event); }}
         />
         <footer class="dialog-footer">
-          <button class="secondary-action" type="button" ?disabled=${this.closing} @click=${() => { this.cancelDialog(dialog); }}>Cancel</button>
-          <button class="primary-action" type="submit" ?disabled=${this.closing}>${this.closing ? "Sending…" : "Send"}</button>
+          <button class="ui-button ui-button--compact secondary-action" type="button" ?disabled=${this.closing} @click=${() => { this.cancelDialog(dialog); }}>Cancel</button>
+          <button class="ui-button ui-button--primary primary-action" type="submit" ?disabled=${this.closing}>${this.closing ? "Sending…" : "Send"}</button>
         </footer>
       </form>
     `;
@@ -195,14 +197,14 @@ export class ExtensionDialogCard extends LitElement {
 
   private renderClosed(closed: ClosedExtensionDialog): TemplateResult {
     return html`
-      <article class="card closed-card" aria-labelledby="extension-dialog-closed-heading">
+      <article class="ui-transcript-surface card closed-card" aria-labelledby="extension-dialog-closed-heading">
         <header class="card-header">
           <h2 id="extension-dialog-closed-heading">${closed.dialog.title}</h2>
           <span class=${`header-status ${closed.reason}`}>${extensionDialogCloseLabel(closed.reason)}</span>
         </header>
         <p class="closed-summary">${extensionDialogCloseSummary(closed)}</p>
         <footer class="dialog-footer">
-          <button class="secondary-action" type="button" @click=${() => { this.dismissClosed(closed); }}>Dismiss</button>
+          <button class="ui-button ui-button--compact secondary-action" type="button" @click=${() => { this.dismissClosed(closed); }}>Dismiss</button>
         </footer>
       </article>
     `;
@@ -269,7 +271,7 @@ export class ExtensionDialogCard extends LitElement {
     this.countdownTimer = undefined;
   }
 
-  static override styles = css`
+  static override styles = [uiButtonStyles, uiTranscriptStyles, css`
     :host {
       display: block;
       box-sizing: border-box;
@@ -278,11 +280,6 @@ export class ExtensionDialogCard extends LitElement {
       color: var(--pi-text);
       font: 14px system-ui, sans-serif;
       container-type: inline-size;
-    }
-    .card {
-      border: 1px solid var(--pi-border);
-      border-radius: 10px;
-      background: var(--pi-surface);
     }
     .card-header {
       position: sticky;
@@ -294,10 +291,7 @@ export class ExtensionDialogCard extends LitElement {
       gap: 12px;
       min-height: 22px;
       padding: 8px 16px 7px;
-      border-bottom: 1px solid var(--pi-border-muted);
-      border-radius: 9px 9px 0 0;
       background: var(--pi-surface);
-      box-shadow: 0 8px 18px var(--pi-shadow-soft);
     }
     h2, p { margin-top: 0; }
     h2 {
@@ -317,15 +311,15 @@ export class ExtensionDialogCard extends LitElement {
       line-height: 1.4;
       overflow-wrap: anywhere;
     }
-    .dialog-options { display: grid; gap: 7px; padding: 12px 16px; }
+    .dialog-options { display: grid; gap: 0; padding: 12px 16px; }
     .option-button {
       display: block;
       width: 100%;
+      color: var(--pi-text);
       text-align: start;
       line-height: 1.35;
       overflow-wrap: anywhere;
     }
-    .option-button:hover:not(:disabled) { border-color: var(--pi-accent); background: var(--pi-surface-hover); }
     .dialog-input-form { display: grid; }
     .dialog-input {
       box-sizing: border-box;
@@ -343,25 +337,12 @@ export class ExtensionDialogCard extends LitElement {
       flex-wrap: wrap;
       align-items: center;
       justify-content: flex-end;
-      gap: 8px;
+      gap: 0;
       border-top: 1px solid var(--pi-border-muted);
       padding: 12px 16px;
     }
     .dialog-message + .dialog-footer, .dialog-options + .dialog-footer { border-top: 0; }
-    button {
-      border: 1px solid var(--pi-border);
-      border-radius: 8px;
-      background: var(--pi-surface);
-      color: var(--pi-text);
-      padding: 7px 12px;
-      font: inherit;
-      cursor: pointer;
-    }
-    button:hover:not(:disabled) { background: var(--pi-surface-hover); }
-    button:disabled { cursor: wait; opacity: .65; }
-    button:focus-visible, .dialog-input:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 2px; }
-    .primary-action { border-color: var(--pi-accent); background: var(--pi-accent); color: var(--pi-accent-contrast, white); font-weight: 650; }
-    .primary-action:hover:not(:disabled) { background: color-mix(in srgb, var(--pi-accent) 86%, white); }
+    .dialog-input:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 2px; }
     .closed-summary {
       margin: 0;
       padding: 12px 16px;
@@ -371,10 +352,7 @@ export class ExtensionDialogCard extends LitElement {
       white-space: pre-wrap;
       overflow-wrap: anywhere;
     }
-    @container (max-width: 580px) {
-      .primary-action { min-height: 42px; }
-    }
-  `;
+  `];
 }
 
 declare global {

@@ -160,16 +160,16 @@ export class ContentRendererHost extends LitElement {
         ${this.choices.length < 2
           ? choice === undefined ? null : html`<span class="code-block-label" title=${choice.label}>${choice.label}</span>`
           : html`
-          <select class="code-block-label" aria-label="Diagram renderer" @change=${(event: Event) => { if (event.target instanceof HTMLSelectElement) this.selectRenderer(event.target.value); }}>
+          <select class="code-block-label ui-select" aria-label="Diagram renderer" @change=${(event: Event) => { if (event.target instanceof HTMLSelectElement) this.selectRenderer(event.target.value); }}>
             ${this.choices.map(({ id, label }) => html`<option value=${id} .selected=${id === this.selectedId}>${label}</option>`)}
           </select>
         `}
         ${this.renderer === undefined ? null : html`
-          <button type="button" aria-controls="content" aria-pressed=${!showingRaw} @click=${() => { this.setRaw(false); }}>${this.renderer.renderMode === "automatic" ? "Preview" : "Render"}</button>
-          <button type="button" aria-controls="content" aria-pressed=${showingRaw} @click=${() => { this.setRaw(true); }}>Raw</button>
+          <button type="button" class="ui-button ui-button--compact" aria-controls="content" aria-pressed=${!showingRaw} @click=${() => { this.setRaw(false); }}>${this.renderer.renderMode === "automatic" ? "Preview" : "Render"}</button>
+          <button type="button" class="ui-button ui-button--compact" aria-controls="content" aria-pressed=${showingRaw} @click=${() => { this.setRaw(true); }}>Raw</button>
         `}
         ${this.codeBlocks?.copy === false ? null : html`
-          <button class="copy code-block-copy" type="button" title=${this.copyStatus} aria-label=${this.copyStatus} @click=${() => { void this.copy(); }}><span aria-hidden="true">${this.copyStatus === "Copied source" ? "✓" : "⧉"}</span></button>
+          <button class="copy code-block-copy ui-button ui-button--icon ui-button--compact" type="button" title=${this.copyStatus} aria-label=${this.copyStatus} @click=${() => { void this.copy(); }}><span aria-hidden="true">${this.copyStatus === "Copied source" ? "✓" : "⧉"}</span></button>
           <span class="sr-only" role="status">${this.copyStatus === "Copy source" ? "" : this.copyStatus}</span>
         `}
       </div>`}
@@ -189,10 +189,8 @@ export class ContentRendererHost extends LitElement {
     :host { display: block; flex-shrink: 0; margin: 0 0 10px; min-width: 0; color: var(--pi-text); }
     :host([external-controls]) { margin: 0; background: var(--pi-bg); }
     #content { border-radius: 0 0 7px 7px; }
-    select { max-width: 100%; color: var(--pi-text); background: var(--pi-bg); border: 1px solid var(--pi-border); border-radius: 6px; padding: 3px; font: 12px/1.5 system-ui, sans-serif; }
-    button { color: var(--pi-muted); background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 3px 8px; font: 12px/1.5 system-ui, sans-serif; cursor: pointer; }
-    button:hover { color: var(--pi-text); background: var(--pi-bg); border-color: var(--pi-border-muted); }
-    button[aria-pressed="true"] { color: var(--pi-text); background: var(--pi-bg); border-color: var(--pi-border); }
+    select { max-width: 100%; }
+    .ui-button[aria-pressed="true"] { color: var(--pi-text); background: var(--pi-surface-hover); }
     :is(button, select, pre, .plain-code-block, .preview):focus-visible { outline: 2px solid var(--pi-accent); outline-offset: -2px; }
     pre { overflow: auto; white-space: pre; text-align: left; direction: ltr; padding: 12px; margin: 0; }
     /* Raw-source policy must not restyle elements produced by a plugin preview. */

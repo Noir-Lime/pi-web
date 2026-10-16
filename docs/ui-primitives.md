@@ -2,7 +2,7 @@
 
 Use shared primitives for new controls. Migrate existing controls as their surfaces are updated; a feature change does not require a whole-app restyle.
 
-The current primitives live in `src/client/src/components/ui/controlStyles.ts`. They style native elements rather than wrapping them in custom elements, so browser focus, disabled state, form behavior, labels, and existing event handlers remain intact.
+Control primitives live in `src/client/src/components/ui/controlStyles.ts`; related files in that directory provide dialog, file-list, and transcript patterns. They style native elements rather than wrapping them in custom elements, so browser focus, disabled state, form behavior, labels, and existing event handlers remain intact.
 
 ## Available primitives
 
@@ -19,6 +19,8 @@ The current primitives live in `src/client/src/components/ui/controlStyles.ts`. 
 | Primary-size toolbar | Add `ui-toolbar--primary` for 44px controls | `uiToolbarStyles` plus `uiButtonStyles` |
 | Bounded control group | Add `ui-toolbar-group--bounded` where a group meets empty bar space | `uiToolbarStyles` |
 | Popup surface | `.ui-menu` containing native `.ui-menu-item` controls | `uiMenuStyles` plus `uiButtonStyles` |
+| Flat transcript section | `.ui-transcript-surface`; consumer sets `--ui-transcript-bg` and internal padding | `uiTranscriptStyles` from `ui/transcriptStyles.ts` |
+| Transcript disclosure | Native `summary.ui-transcript-disclosure` | `uiTranscriptStyles` |
 
 Include the required style exports in the Lit element that owns the shadow root. `listStyles` already includes all three exports for navigation lists. Styles do not cross shadow boundaries automatically.
 
@@ -70,6 +72,12 @@ Form content uses `ui-dialog-body ui-form-body`. Labels use `ui-form-field`, tex
 
 Keep only content-specific rules in each dialog. Existing dimension differences can use the internal composition properties `--ui-dialog-width`, `--ui-dialog-max-height`, `--ui-dialog-top`, and `--ui-dialog-z`; do not copy the common backdrop or header styles. These primitives do not introduce custom stylesheet loading or a new theming API.
 
+## Transcript hierarchy
+
+Chat uses flat transcript sections rather than nested card outlines. Put breathing room inside the section; use restrained role/state tones and labels to distinguish hierarchy. Successful tools stay neutral, while running and error states remain explicit. Nested sections do not need another enclosing border. Code/diff content may retain one useful boundary, and editable inputs retain their input affordance.
+
+`uiTranscriptStyles` owns the frameless surface and full-width disclosure treatment (32px desktop, at least 44px for coarse pointers). Consumers own grouping, indentation, native disclosure state, and layout. Give sticky headings an opaque tone matching their section so scrolled text cannot show through them. Transcript patterns are internal and are not part of the browser-plugin UI styles capability.
+
 ## Ownership and hierarchy
 
 - Primitives own control sizing, padding, borders, hover, focus, selected, disabled, and danger treatments. Change those centrally rather than copying them into each screen.
@@ -81,8 +89,8 @@ Keep only content-specific rules in each dialog. Existing dimension differences 
 
 ## Migration boundary
 
-The current consumers are navigation headings, session selection controls, navigation dropdowns, the chat composer's model/thinking/send/stop toolbar, main navigation tabs, and the common selection/form dialogs. More specialized surfaces, such as Settings and session cleanup, are not yet migrated.
+The current consumers are navigation headings, session selection controls, navigation dropdowns, the chat composer's model/thinking/send/stop toolbar, main navigation tabs, the common selection/form dialogs, and chat transcript sections and controls. More specialized surfaces, such as Settings and session cleanup, are not yet migrated.
 
-The internal style exports also supply the host-owned [UI styles capabilities](plugins.md#host-provided-ui-styles). External plugins request v1 and apply its CSS inside their shadow root; they must not deep-import these client modules or bundle a copy of their styling. Relay, Files, and Git use v1 for buttons, selects, toolbars, tabs, and compact file/tree rows. Menus, forms, and dialogs are not part of the public contract.
+The internal style exports also supply the host-owned [UI styles capabilities](plugins.md#host-provided-ui-styles). External plugins request v1 and apply its CSS inside their shadow root; they must not deep-import these client modules or bundle a copy of their styling. Relay, Files, and Git use v1 for buttons, selects, toolbars, tabs, and compact file/tree rows. Menus, forms, dialogs, and transcript patterns are not part of the public contract.
 
 Keep the documented v1 classes, markup patterns, and supported states compatible when improving their appearance. Breaking contract changes need a new capability version rather than silently changing existing plugins. Extra selectors in the generated stylesheet do not become supported APIs just because they are present.
