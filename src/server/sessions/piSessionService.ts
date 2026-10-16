@@ -1199,6 +1199,8 @@ export class PiSessionService implements SessionRouteService {
   private readonly sessionEntryMutationCounts = new WeakMap<PiAgentSession, number>();
   /** Exempt only a command's own prompt receipt while it invokes guarded session control. */
   private readonly extensionCommandExecution = new AsyncLocalStorage<ExtensionCommandExecution>();
+  private readonly runtimeMessageCounts = new WeakMap<PiAgentSession, number>();
+  private readonly snapshotMessageCounts = new WeakMap<readonly unknown[], number>();
   private readonly pendingPromptEchoes = new WeakMap<PiAgentSession, { userIndex: number; message: ReturnType<typeof userMessage> }[]>();
   private readonly publishedAssistantPartials = new WeakMap<PiAgentSession, unknown>();
   private readonly assistantStreamIds = new WeakMap<PiAgentSession, string>();
@@ -2638,7 +2640,7 @@ export class PiSessionService implements SessionRouteService {
     await this.activityMarker.refresh(session.sessionFile, this.hasActiveWork(session));
     if (this.hasActiveWork(session)) return this.statusFromSession(session);
     const branch = await this.readableSessionBranch(ref, session);
-    return this.statusFromSession(session, transcriptMessageCount(branch));
+    return this.statusFromSession(session, this.snapshotMessageCount(branch));
   }
 
   /**
@@ -3159,6 +3161,7 @@ export class PiSessionService implements SessionRouteService {
       this.treeNavigations.delete(session);
       if (this.isCurrentActiveSession(session)) {
         this.flushDeferredTreeNavigationWork(session);
+        this.reconcileRuntimeMessageCount(session);
         this.publishStatus(session);
       } else {
         this.deferredGeneratedSessionNames.delete(session);
@@ -4537,6 +4540,7 @@ export class PiSessionService implements SessionRouteService {
       }
     }
     this.restoreSubsessionReceipts(session);
+    this.reconcileRuntimeMessageCount(session);
     const unsubscribe = session.subscribe((event) => {
       const eventType = getString(event, "type");
       const message = getProperty(event, "message");
@@ -4550,6 +4554,16 @@ export class PiSessionService implements SessionRouteService {
         this.subsessionStoppedParents.add(session);
       }
       const entry = getProperty(event, "entry");
+      // Regular message_end precedes persistence; boundary drafts instead emit
+      // entry_appended. Only message entries contribute to the transcript count.
+      const role = getString(message, "role");
+      if ((eventType === "message_end" && (role === "user" || role === "assistant" || role === "toolResult" || role === "system"))
+        || (eventType === "entry_appended" && getString(entry, "type") === "message")) {
+        this.runtimeMessageCounts.set(session, this.runtimeMessageCount(session) + 1);
+      }
+      // Reconcile once after the run has actually settled, not per streamed
+      // update or per message. Tree changes can replace the branch entirely.
+      if (eventType === "agent_settled" || eventType === "session_tree") this.reconcileRuntimeMessageCount(session);
       if (eventType === "entry_appended" && getString(entry, "type") === "custom_message"
         && getString(entry, "customType") === SUBSESSION_NOTIFICATION_CUSTOM_TYPE) {
         inbox.receive(completionReceiptIds(getProperty(entry, "details")));
@@ -4995,7 +5009,28 @@ export class PiSessionService implements SessionRouteService {
     this.events.publishGlobal({ type: "activity.update", activity });
   }
 
-  private statusFromSession(session: PiAgentSession, messageCount = session.messages.length): ClientSessionStatus {
+  private reconcileRuntimeMessageCount(session: PiAgentSession): number {
+    const count = transcriptMessageCount(session.sessionManager.getBranch());
+    this.runtimeMessageCounts.set(session, count);
+    return count;
+  }
+
+  private runtimeMessageCount(session: PiAgentSession): number {
+    return this.runtimeMessageCounts.get(session) ?? this.reconcileRuntimeMessageCount(session);
+  }
+
+  private snapshotMessageCount(branch: readonly unknown[]): number {
+    // The gateway reuses immutable disk snapshots until the file changes.
+    // Keep disk counts separate: an idle runtime may lag external appends.
+    const cached = this.snapshotMessageCounts.get(branch);
+    if (cached !== undefined) return cached;
+    const count = transcriptMessageCount(branch);
+    this.snapshotMessageCounts.set(branch, count);
+    return count;
+  }
+
+  // session.messages is the compacted model context, not the browser transcript.
+  private statusFromSession(session: PiAgentSession, messageCount = this.runtimeMessageCount(session)): ClientSessionStatus {
     const stats = session.getSessionStats();
     const model = session.model === undefined ? undefined : modelToClientModel(session.model);
     const contextUsage = session.getContextUsage();
@@ -5157,7 +5192,7 @@ function clientSessionFromActiveSession(session: PiAgentSession): ClientSession 
     persisted: sessionFileExists(session.sessionFile),
     created,
     modified: created,
-    messageCount: session.messages.length,
+    messageCount: transcriptMessageCount(session.sessionManager.getBranch()),
     firstMessage: "",
     ...(metadata === undefined ? {} : { metadata }),
     ...(session.sessionName === undefined ? {} : { name: session.sessionName }),
@@ -5208,7 +5243,7 @@ function archiveInputFromActiveSession(session: PiAgentSession): ArchiveSessionI
     path: sessionFile,
     created: new Date().toISOString(),
     modified: new Date().toISOString(),
-    messageCount: session.messages.length,
+    messageCount: transcriptMessageCount(session.sessionManager.getBranch()),
     firstMessage: "",
     ...(metadata === undefined ? {} : { metadata }),
     ...(session.sessionName === undefined ? {} : { name: session.sessionName }),
