@@ -450,7 +450,7 @@ export class ChatView extends LitElement {
     const identity = machineSessionKey(this.machineId, this.sessionId);
     const copied = await writeClipboardText(text);
     if (this.isConnected && identity === machineSessionKey(this.machineId, this.sessionId)) {
-      this.queuedCopyFeedback = copied ? "Copied" : "Could not copy message";
+      this.queuedCopyFeedback = copied ? "" : "Could not copy message";
     }
   }
 

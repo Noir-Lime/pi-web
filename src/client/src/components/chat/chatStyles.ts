@@ -31,7 +31,7 @@ export const chatStyles = css`
   }
   .visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0 0 0 0) !important; clip-path: inset(50%) !important; white-space: nowrap !important; border: 0 !important; }
   /* Contain sticky headers in the scroller's paint context, below its overlay scrollbar. */
-  .chat { isolation: isolate; --pi-chat-conversation-bg: color-mix(in srgb, var(--pi-muted) 6%, var(--pi-bg)); --pi-chat-sticky-top: 0px; flex: 1 1 auto; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 0 0 16px; box-sizing: border-box; }
+  .chat { isolation: isolate; --pi-chat-conversation-bg: color-mix(in srgb, var(--pi-muted) 6%, var(--pi-bg)); --pi-chat-sticky-top: 0px; flex: 1 1 auto; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 0; box-sizing: border-box; }
   .chat-jumps { position: absolute; right: 0; bottom: 0; z-index: 21; display: flex; gap: 0; background: var(--pi-bg-overlay); }
   .chat-jumps button { display: inline-grid; place-items: center; box-sizing: border-box; width: var(--pi-chat-jump-size); height: var(--pi-chat-jump-size); padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--pi-muted); font: 14px/1 system-ui, sans-serif; cursor: pointer; }
   .chat-jumps::before, .activity-dock::before { content: ""; position: absolute; inset: 0; border: 1px solid var(--pi-border-muted); border-bottom: 0; pointer-events: none; }
@@ -78,7 +78,7 @@ export const chatStyles = css`
   .group-msg.system { color: var(--pi-text-secondary); }
   .history-boundary { position: relative; z-index: 5; display: grid; gap: 3px; justify-items: center; margin: 0 0 14px; color: var(--pi-muted); font-size: 12px; text-align: center; }
   .history-load-button { color: var(--pi-text-secondary); }
-  .queued-messages { --ui-transcript-bg: color-mix(in srgb, var(--pi-warning) 5%, var(--pi-bg)); max-width: 100%; min-width: 0; display: grid; gap: 8px; margin: 0 0 12px; padding: 12px 16px; color: var(--pi-text); overflow: hidden; }
+  .queued-messages { --ui-transcript-bg: color-mix(in srgb, var(--pi-warning) 5%, var(--pi-bg)); max-width: 100%; min-width: 0; display: grid; gap: 8px; margin: 0; padding: 12px 16px; color: var(--pi-text); overflow: hidden; }
   .queued-header { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 10px; }
   .queued-heading { min-width: 0; flex: 1 1 180px; display: grid; gap: 2px; }
   .queued-heading strong { color: var(--pi-warning); }

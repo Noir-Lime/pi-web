@@ -766,6 +766,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
   static override styles = [listStyles, sidebarListStyles, css`
     /* Keep positioned/animated session content in the scroller's paint hierarchy. */
     .list-body { isolation: isolate; }
+    .subheading.ui-toolbar { margin-top: 0; }
     h2 .section-count, h2 .section-unread-count { flex: 0 0 auto; align-self: center; padding-inline: 6px; display: inline; color: var(--pi-muted); font-size: inherit; }
     h2 .section-unread-count { color: var(--pi-accent); text-transform: none; }
     .bulk-row { flex-wrap: wrap; }
