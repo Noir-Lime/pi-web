@@ -32,23 +32,22 @@ export const chatStyles = css`
   .visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0 0 0 0) !important; clip-path: inset(50%) !important; white-space: nowrap !important; border: 0 !important; }
   /* Contain sticky headers in the scroller's paint context, below its overlay scrollbar. */
   .chat { isolation: isolate; --pi-chat-conversation-bg: color-mix(in srgb, var(--pi-muted) 6%, var(--pi-bg)); --pi-chat-sticky-top: 0px; flex: 1 1 auto; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 0 0 16px; box-sizing: border-box; }
-  .chat-jumps { position: absolute; right: 0; bottom: 0; z-index: 21; display: flex; gap: 0; }
-  .chat-jumps button { display: inline-grid; place-items: center; box-sizing: border-box; width: var(--pi-chat-jump-size); height: var(--pi-chat-jump-size); padding: 0; border: 0; border-radius: 0; background: var(--pi-bg); color: var(--pi-muted); font: 16px/1 system-ui, sans-serif; cursor: pointer; }
-  .chat-jumps button + button, .activity-dock + .chat-jumps button:first-child { border-inline-start: 1px solid var(--pi-border-muted); }
-  .chat-jumps button.following { color: var(--pi-accent); background: var(--pi-selection-bg); }
+  .chat-jumps { position: absolute; right: 0; bottom: 0; z-index: 21; display: flex; gap: 0; background: var(--pi-bg-overlay); }
+  .chat-jumps button { display: inline-grid; place-items: center; box-sizing: border-box; width: var(--pi-chat-jump-size); height: var(--pi-chat-jump-size); padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--pi-muted); font: 14px/1 system-ui, sans-serif; cursor: pointer; }
+  .chat-jumps::before, .activity-dock::before { content: ""; position: absolute; inset: 0; border: 1px solid var(--pi-border-muted); border-bottom: 0; pointer-events: none; }
+  .activity-dock::before { border-inline-end: 0; }
+  .activity-dock + .chat-jumps::before { border-inline-start: 0; }
+  .chat-jumps button.following { color: var(--pi-accent); }
   .chat-jumps button:hover, .chat-jumps button:focus-visible { color: var(--pi-text-bright); background: var(--pi-selection-bg); }
   .chat-jumps button:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: -2px; }
   .chat-wrap.plain .msg-header, .chat-wrap.plain .event-group > summary { position: static; top: auto; }
   .chat-wrap.plain *, .chat-wrap.plain *::before, .chat-wrap.plain *::after { transition: none !important; animation: none !important; box-shadow: none !important; text-shadow: none !important; filter: none !important; backdrop-filter: none !important; transform: none !important; border-radius: 0 !important; }
   .chat-wrap.plain .chat-image { --pi-image-radius: 0; }
-  @media (pointer: coarse) {
-    .chat-wrap { --pi-chat-jump-size: 44px; }
-  }
-  .activity-dock { position: absolute; right: calc(var(--pi-chat-jump-size) * 2); bottom: 0; z-index: 20; display: flex; align-items: center; gap: 6px; width: 240px; max-width: calc(100% - var(--pi-chat-jump-size) * 2); height: var(--pi-chat-jump-size); min-width: 0; box-sizing: border-box; border: 0; border-radius: 0; background: var(--pi-bg-overlay); color: var(--pi-muted); padding: 3px 10px; font-size: 11px; line-height: 16px; pointer-events: none; backdrop-filter: blur(6px); }
-  .activity-dock.active { color: var(--pi-success); background: var(--pi-success-bg-overlay); }
+  .activity-dock { position: absolute; right: calc(var(--pi-chat-jump-size) * 2); bottom: 0; z-index: 20; display: flex; align-items: center; gap: 4px; width: max-content; max-width: calc(100% - var(--pi-chat-jump-size) * 2); height: var(--pi-chat-jump-size); min-width: 0; box-sizing: border-box; border: 0; border-radius: 0; background: var(--pi-bg-overlay); color: var(--pi-muted); padding: 3px 6px; font-size: 11px; line-height: 16px; pointer-events: none; backdrop-filter: blur(6px); }
+  .activity-dock.active .dot { color: var(--pi-success); }
   .activity-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; opacity: .45; flex: 0 0 auto; }
-  .activity-dock.active .dot { width: 6px; height: 6px; animation: pulse 1s ease-in-out infinite; opacity: 1; }
+  .activity-dock.active .dot { width: 5px; height: 5px; animation: pulse 1s ease-in-out infinite; opacity: 1; }
   .msg { --ui-transcript-bg: var(--pi-bg); display: flow-root; max-width: 100%; min-width: 0; margin: 0; padding: 12px 16px 16px; overflow: visible; }
   .chat > .msg:last-child, .chat > .session-activity:last-child { margin-bottom: 0; }
   .msg.conversation-message { --ui-transcript-bg: var(--pi-chat-conversation-bg); --formatted-link-color: color-mix(in srgb, var(--pi-accent) 45%, var(--pi-text) 55%); --formatted-muted-color: color-mix(in srgb, var(--pi-text-secondary) 80%, var(--pi-text) 20%); border-inline-start: 3px solid color-mix(in srgb, var(--pi-muted) 55%, var(--pi-border) 45%); padding-inline-start: 13px; }
