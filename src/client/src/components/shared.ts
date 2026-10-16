@@ -368,10 +368,11 @@ export const chatStyles = css`
     .notification-header { gap: 4px; padding-inline: 8px; }
     .notification-list { padding-inline: 8px; }
   }
-  .chat { --pi-chat-conversation-bg: color-mix(in srgb, var(--pi-muted) 6%, var(--pi-bg)); --pi-chat-sticky-top: 0px; flex: 1 1 auto; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 0 0 16px; box-sizing: border-box; }
+  /* Contain sticky headers in the scroller's paint context, below its overlay scrollbar. */
+  .chat { isolation: isolate; --pi-chat-conversation-bg: color-mix(in srgb, var(--pi-muted) 6%, var(--pi-bg)); --pi-chat-sticky-top: 0px; flex: 1 1 auto; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 0 0 16px; box-sizing: border-box; }
   .chat-jumps { position: absolute; right: 0; bottom: 0; z-index: 21; display: flex; gap: 0; }
   .chat-jumps button { display: inline-grid; place-items: center; box-sizing: border-box; width: var(--pi-chat-jump-size); height: var(--pi-chat-jump-size); padding: 0; border: 0; border-radius: 0; background: var(--pi-bg); color: var(--pi-muted); font: 16px/1 system-ui, sans-serif; cursor: pointer; }
-  .chat-jumps button + button { border-inline-start: 1px solid var(--pi-border-muted); }
+  .chat-jumps button + button, .activity-dock + .chat-jumps button:first-child { border-inline-start: 1px solid var(--pi-border-muted); }
   .chat-jumps button.following { color: var(--pi-accent); background: var(--pi-selection-bg); }
   .chat-jumps button:hover, .chat-jumps button:focus-visible { color: var(--pi-text-bright); background: var(--pi-selection-bg); }
   .chat-jumps button:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: -2px; }
@@ -381,9 +382,8 @@ export const chatStyles = css`
   @media (pointer: coarse) {
     .chat-wrap { --pi-chat-jump-size: 44px; }
   }
-  /* Reserve equal space on both sides so the centered notice clears both jump targets by 8px. */
-  .activity-dock { position: absolute; left: 50%; bottom: 0; transform: translateX(-50%); z-index: 20; display: flex; align-items: center; gap: 6px; width: 240px; max-width: calc(100% - var(--pi-chat-jump-size) * 4 - 16px); min-width: 0; box-sizing: border-box; border: 1px solid var(--pi-border); border-bottom: 0; border-radius: 8px 8px 0 0; background: var(--pi-bg-overlay); color: var(--pi-muted); padding: 3px 10px; font-size: 11px; line-height: 16px; pointer-events: none; backdrop-filter: blur(6px); }
-  .activity-dock.active { border-color: var(--pi-success-border); color: var(--pi-success); background: var(--pi-success-bg-overlay); }
+  .activity-dock { position: absolute; right: calc(var(--pi-chat-jump-size) * 2); bottom: 0; z-index: 20; display: flex; align-items: center; gap: 6px; width: 240px; max-width: calc(100% - var(--pi-chat-jump-size) * 2); height: var(--pi-chat-jump-size); min-width: 0; box-sizing: border-box; border: 0; border-radius: 0; background: var(--pi-bg-overlay); color: var(--pi-muted); padding: 3px 10px; font-size: 11px; line-height: 16px; pointer-events: none; backdrop-filter: blur(6px); }
+  .activity-dock.active { color: var(--pi-success); background: var(--pi-success-bg-overlay); }
   .activity-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; opacity: .45; flex: 0 0 auto; }
   .activity-dock.active .dot { width: 6px; height: 6px; animation: pulse 1s ease-in-out infinite; opacity: 1; }
@@ -562,7 +562,7 @@ export const promptEditorStyles = css`
   :host { position: relative; z-index: 5; display: block; color: var(--pi-text); font: 14px system-ui, sans-serif; }
   footer { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; padding: 0; border-top: 1px solid var(--pi-border); }
   footer.shell-mode { border-top-color: var(--pi-success); background: var(--pi-success-bg); }
-  .editor-wrap { position: relative; min-width: 0; }
+  .editor-wrap, .editor-input { position: relative; min-width: 0; }
   .actions { justify-content: flex-end; flex-wrap: nowrap; white-space: nowrap; border-top: 1px solid var(--pi-border-muted); }
   .compact-status { display: flex; min-width: 0; align-items: stretch; flex: 1 1 0; }
   .compact-status > .ui-toolbar-group { flex: 0 1 auto; }
@@ -574,8 +574,7 @@ export const promptEditorStyles = css`
   .stop-button:not(:disabled), .stop-button:hover:not(:disabled) { color: var(--pi-danger); }
   .select-thinking .prompt-thinking-gauge .gauge-bar { fill: currentColor; stroke: none; opacity: .28; }
   .select-thinking .prompt-thinking-gauge .gauge-bar-active { opacity: 1; }
-  .editor-attach { position: absolute; right: 8px; bottom: 8px; z-index: 2; width: 30px; height: 30px; }
-  .editor-attach .prompt-action-icon { width: 16px; height: 16px; }
+  .editor-attach { position: absolute; right: 0; bottom: 0; z-index: 2; border-inline-start: 1px solid var(--pi-border-muted); }
   textarea, .markdown-editor .cm-editor { box-sizing: border-box; width: 100%; min-height: 54px; max-height: 220px; resize: none; overflow: hidden; border-radius: 0; border: 0; background: var(--pi-bg); color: var(--pi-text); font: var(--pi-control-font-size, 16px)/1.4 var(--pi-control-font-family, system-ui, sans-serif); }
   textarea { overflow-y: auto; padding: 12px 16px; }
   textarea:focus-visible, .markdown-editor:focus-within { outline: 2px solid var(--pi-accent); outline-offset: -2px; }
