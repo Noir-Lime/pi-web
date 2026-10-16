@@ -66,15 +66,16 @@ export const chatStyles = css`
   .msg.event-group > summary > span { min-width: 0; overflow-wrap: anywhere; }
   .group-body { --ui-activity-edge-width: 0px; padding: 0; }
   .group-msg + .group-msg { border-block-start: 1px solid var(--pi-muted); }
-  /* Let tool surfaces draw this shared separator using their own state tone. */
-  .group-msg + .group-msg.tool-execution-shell { border-block-start: 0; --ui-activity-separator-width: 1px; }
-  .group-msg.tool-execution-shell { padding: 0; }
+  /* Section surfaces meet without exterior gaps; their children own body padding. */
+  .transcript-section { min-width: 0; }
+  .transcript-content { min-width: 0; padding: 8px 12px; }
+  .transcript-content + .transcript-content { padding-top: 0; }
   .chat-image { --pi-image-max-height: 320px; --pi-image-radius: 8px; display: block; max-width: 100%; margin: 8px 0 0; }
   .tool-image-thumbnails { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0; }
   .image-output-sources { margin-top: 4px; }
   .image-output-source { padding: 4px 12px; }
   .image-output-source + .image-output-source { border-top: 1px solid var(--pi-border-muted); }
-  .group-msg { --ui-transcript-inset: 12px; display: flow-root; max-width: 100%; min-width: 0; padding: 8px var(--ui-transcript-inset); color: var(--pi-text); overflow: visible; }
+  .group-msg { display: flow-root; max-width: 100%; min-width: 0; padding: 0; color: var(--pi-text); overflow: visible; }
   .group-msg.system { color: var(--pi-text-secondary); }
   .history-boundary { position: relative; z-index: 5; display: grid; gap: 3px; justify-items: center; margin: 0 0 14px; color: var(--pi-muted); font-size: 12px; text-align: center; }
   .history-load-button { color: var(--pi-text-secondary); }
@@ -120,7 +121,7 @@ export const chatStyles = css`
   .label { display: block; color: var(--pi-muted); font-size: 12px; font-weight: 400; }
   .msg-header .label { min-width: 0; margin: 0; overflow-wrap: anywhere; }
   .msg-header-trailing { opacity: .8; transition: opacity .12s ease; }
-  .msg:hover > .msg-header .msg-header-trailing, .msg:focus-within > .msg-header .msg-header-trailing, .group-msg:hover > .msg-header .msg-header-trailing, .group-msg:focus-within > .msg-header .msg-header-trailing, .msg-header-trailing:has(.msg-meta[aria-expanded="true"]) { opacity: 1; }
+  .msg:hover > .msg-header .msg-header-trailing, .msg:focus-within > .msg-header .msg-header-trailing, .group-msg:hover > .transcript-content > .msg-header .msg-header-trailing, .group-msg:focus-within > .transcript-content > .msg-header .msg-header-trailing, .msg-header-trailing:has(.msg-meta[aria-expanded="true"]) { opacity: 1; }
   @media (hover: none), (pointer: coarse) {
     .msg-header-trailing { opacity: 1; }
   }
@@ -132,7 +133,6 @@ export const chatStyles = css`
   .part { max-width: 100%; min-width: 0; box-sizing: border-box; overflow: visible; overflow-wrap: anywhere; }
   .part + .part { margin-top: 10px; }
   .thinking { --ui-activity-tone: color-mix(in srgb, #4f83b3 70%, var(--pi-text) 30%); }
-  .group-msg > .thinking { width: calc(100% + 2 * var(--ui-transcript-inset)); max-width: none; margin-inline: calc(-1 * var(--ui-transcript-inset)); }
   .thinking-icon { flex: 0 0 auto; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.5; }
   .thinking > summary { font-weight: 600; }
   .tool-line > .ui-transcript-heading { font: 13px/20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }

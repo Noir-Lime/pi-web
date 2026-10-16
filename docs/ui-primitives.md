@@ -78,7 +78,24 @@ Chat uses flat transcript sections rather than nested card outlines. Put breathi
 
 `uiTranscriptStyles` owns the frameless surface and full-width disclosure treatment (32px desktop, at least 44px for coarse pointers). Consumers own grouping, indentation, native disclosure state, and layout. Give sticky headings an opaque tone matching their section so scrolled text cannot show through them. Transcript patterns are internal and are not part of the browser-plugin UI styles capability.
 
-Chat's `.group-msg` sets the internal composition property `--ui-transcript-inset` (12px) and uses it for inline padding. In `chat/chatStyles.ts`, direct-child thinking disclosures use that same inset for their full-bleed width and negative inline margins. Keep the padding and full-bleed geometry tied to this property rather than duplicating offsets; the shared transcript primitive does not own this consumer layout.
+### Activity-group layout contract
+
+Activity groups and their `.group-msg` wrappers have no padding. In `chatTranscriptTemplates.ts`, `renderGroupedParts` assigns each visible part one of two explicit layouts:
+
+- `.transcript-section`: thinking, tool executions, tool-call/result surfaces, and inline question forms/records. Sections fill the available width with no exterior padding or margin. Each surface owns its heading and internal body padding, including when collapsed.
+- `.transcript-content`: consecutive ordinary text, skill descriptions/disclosures, and images. A content run owns 8px vertical and 12px horizontal padding. Message headers use the same content inset; adjacent content wrappers do not double their vertical spacing.
+
+For mixed messages, alternate sections and content runs rather than padding the whole message and making sections escape it with negative margins. Empty displayed text does not create a content wrapper. Keep ordinary conversation-message layout separate from this activity-group contract.
+
+```html
+<section class="group-msg ui-transcript-surface">
+  <div class="transcript-section"><!-- full-width thinking/tool/form surface --></div>
+  <div class="transcript-content"><!-- inset ordinary content --></div>
+  <div class="transcript-section"><!-- next full-width surface --></div>
+</section>
+```
+
+The chat consumer owns these layout classes and message separators; `uiTranscriptStyles` owns surface and disclosure styling. New activity parts must choose their layout in `renderGroupedParts`, not add message-type padding exceptions. Verify expanded and collapsed sections, section-to-section boundaries, and mixed content in a real browser.
 
 ### Inline forms and records
 

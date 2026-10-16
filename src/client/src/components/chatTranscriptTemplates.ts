@@ -125,18 +125,34 @@ export function renderMessageGroupBody(context: TranscriptRenderContext, { messa
     return html`
       <div class="group-body">
         ${messages.map(({ message, index }, offset) => {
-          const toolOnly = isToolExecutionOnlyMessage(message);
           return html`
-            <section class=${`${toolOnly ? "group-msg tool-execution-shell" : `group-msg ${message.role}`} ui-transcript-surface`} data-index=${index} data-scroll-anchor-id=${context.anchors.event(index, message) ?? nothing}>
-              ${chatMessageHasHeader(message) ? renderMessageHeader(context, message, `${String(startIndex)}:${String(offset)}`, index, entryActionHeaders) : null}
-              ${message.parts.map((part, partIndex) => renderPart(context, part, message, index, partIndex))}
-            </section>
-          `;
+            <section class=${`group-msg ${message.role} ui-transcript-surface`} data-index=${index} data-scroll-anchor-id=${context.anchors.event(index, message) ?? nothing}>
+              ${chatMessageHasHeader(message) ? html`<div class="transcript-content">${renderMessageHeader(context, message, `${String(startIndex)}:${String(offset)}`, index, entryActionHeaders)}</div>` : null}
+              ${renderGroupedParts(context, message, index)}
+            </section>`;
         })}
       </div>
     `;
   }
 
+
+/** Sections own their body inset; only consecutive ordinary content shares outer padding. */
+function renderGroupedParts(context: TranscriptRenderContext, message: ChatLine, messageIndex: number) {
+  const runs: { section: boolean; parts: { part: ChatPart; index: number }[] }[] = [];
+  message.parts.forEach((part, index) => {
+    if ((part.type === "text" || part.type === "thinking") && (part.displayText ?? part.text) === "") return;
+    const section = part.type === "thinking" || part.type === "toolCall" || part.type === "toolResult"
+      || part.type === "toolExecution" || part.type === "askUserQuestion" || part.type === "askUserRecord";
+    const previous = runs.at(-1);
+    if (!section && previous !== undefined && !previous.section) previous.parts.push({ part, index });
+    else runs.push({ section, parts: [{ part, index }] });
+  });
+  return runs.map((run) => html`
+    <div class=${run.section ? "transcript-section" : "transcript-content"}>
+      ${run.parts.map(({ part, index }) => renderPart(context, part, message, messageIndex, index))}
+    </div>
+  `);
+}
 
 export function renderMessageHeader(context: TranscriptRenderContext, message: ChatLine, key: string, index: number, entryActionHeaders: ReadonlySet<ChatLine>, label: string = message.role) {
     const meta = context.metadata.label(message);
