@@ -1197,6 +1197,7 @@ export class PiSessionService implements SessionRouteService {
   private readonly suggestedInputs = new Map<string, string>();
   /** Counts async operations that may append an entry before they settle. */
   private readonly sessionEntryMutationCounts = new WeakMap<PiAgentSession, number>();
+  private readonly manualCompactionEnded = new WeakSet<PiAgentSession>();
   /** Exempt only a command's own prompt receipt while it invokes guarded session control. */
   private readonly extensionCommandExecution = new AsyncLocalStorage<ExtensionCommandExecution>();
   private readonly runtimeMessageCounts = new WeakMap<PiAgentSession, number>();
@@ -1329,12 +1330,17 @@ export class PiSessionService implements SessionRouteService {
       {
         onCompactionStart: (session) => {
           this.beginSessionEntryMutation(session, "compact the session");
+          this.manualCompactionEnded.delete(session);
           this.publishActivity(session, "compacting", "active");
           this.publishStatus(session);
         },
         onCompactionEnd: (session, result, detail) => {
           this.endSessionEntryMutation(session);
-          this.publishActivity(session, result === "success" ? "compaction complete" : "compaction failed", result === "success" ? "idle" : "error", detail);
+          // The SDK terminal event carries the authoritative aborted flag, even
+          // when an extension cancels by throwing an otherwise ordinary error.
+          if (!this.manualCompactionEnded.delete(session) && result === "error") {
+            this.publishCompactionOutcome(session, { reason: "manual", errorMessage: `Compaction failed: ${detail ?? "Unknown error"}` });
+          }
           this.publishStatus(session);
         },
         reloadSession: (session) => this.reloadSessionRuntime(session),
@@ -4596,7 +4602,11 @@ export class PiSessionService implements SessionRouteService {
       this.publishActivityForEvent(session, event);
       if (eventType === "message_start" && getString(message, "role") === "user") this.suggestedInputs.delete(session.sessionId);
       if (eventType === "agent_end") this.abortRunScopedExtensionDialogs(session.sessionId);
-      if (eventType === "compaction_end") this.scheduleCompactionQueueDrain(session.sessionId);
+      if (eventType === "compaction_end") {
+        if (getString(event, "reason") === "manual") this.manualCompactionEnded.add(session);
+        this.publishCompactionOutcome(session, event);
+        this.scheduleCompactionQueueDrain(session.sessionId);
+      }
       if (eventType === "compaction_end" || eventType === "bash_execution_end") this.scheduleSubsessionDelivery(session);
       if (eventType === "agent_start" || eventType === "agent_end") this.scheduleCompactionQueueDrain(session.sessionId);
       this.publishStatus(session);
@@ -4609,6 +4619,26 @@ export class PiSessionService implements SessionRouteService {
       this.assistantStreamIds.delete(session);
     };
     this.active.set(session.sessionId, active);
+  }
+
+  private publishCompactionOutcome(session: PiAgentSession, event: unknown): void {
+    const aborted = getBoolean(event, "aborted") === true;
+    const errorMessage = getString(event, "errorMessage");
+    const automatic = getString(event, "reason") !== "manual";
+    const message = aborted
+      ? (automatic ? "Automatic compaction cancelled." : "Compaction cancelled.")
+      : errorMessage === undefined ? undefined : "Couldn’t compact history. Try again.";
+    if (!aborted && errorMessage !== undefined) {
+      this.events.publish(session.sessionId, { type: "session.diagnostic", message: errorMessage });
+    }
+    this.publishActivity(session, aborted ? "compaction cancelled" : errorMessage === undefined ? "compaction complete" : "compaction failed",
+      !aborted && errorMessage !== undefined ? "error" : "idle", message);
+    // Successful compaction already has a canonical summary in the transcript.
+    // Keep cancellation/failure feedback in the refresh-safe session inbox only.
+    const generation = this.notificationGenerationBySession.get(session);
+    if (message !== undefined && generation !== undefined) {
+      this.publishNotificationMutations(this.notificationStore.addNotification(generation, message, aborted ? "info" : "error").mutations);
+    }
   }
 
   private scheduleCompactionQueueDrain(sessionId: string, delayMs = 0): void {
