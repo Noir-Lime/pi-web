@@ -232,6 +232,7 @@ export function savePiWebConfig(config: PiWebConfig, options: LoadOptions = {}):
   delete existing["uploads"];
   delete existing["attachments"];
   delete existing["maxUploadBytes"];
+  delete existing["sessionNaming"];
   delete existing["spawnSessions"];
   delete existing["subsessions"];
   delete existing["askUser"];
@@ -264,6 +265,7 @@ function piWebConfigRecord(config: PiWebConfig): Record<string, unknown> {
     ...(config.uploads !== undefined ? { uploads: config.uploads } : {}),
     ...(config.attachments !== undefined ? { attachments: config.attachments } : {}),
     ...(config.maxUploadBytes !== undefined ? { maxUploadBytes: config.maxUploadBytes } : {}),
+    ...(config.sessionNaming !== undefined ? { sessionNaming: config.sessionNaming } : {}),
     ...(config.spawnSessions !== undefined ? { spawnSessions: config.spawnSessions } : {}),
     ...(config.subsessions !== undefined ? { subsessions: config.subsessions } : {}),
     ...(config.askUser !== undefined ? { askUser: config.askUser } : {}),
@@ -285,12 +287,31 @@ function parsePiWebConfig(value: Record<string, unknown>, path: string): PiWebCo
     ...(value["uploads"] !== undefined ? { uploads: parseUploadsConfig(value["uploads"], path) } : {}),
     ...(value["attachments"] !== undefined ? { attachments: parseAttachmentsConfig(value["attachments"], path) } : {}),
     ...(value["maxUploadBytes"] !== undefined ? { maxUploadBytes: parseMaxUploadBytes(value["maxUploadBytes"], "maxUploadBytes", path) } : {}),
+    ...(value["sessionNaming"] !== undefined ? { sessionNaming: parseSessionNamingConfig(value["sessionNaming"], path) } : {}),
     ...(value["spawnSessions"] !== undefined ? { spawnSessions: parseSpawnSessions(value["spawnSessions"], path) } : {}),
     ...(value["subsessions"] !== undefined ? { subsessions: parseSubsessions(value["subsessions"], path) } : {}),
     ...(value["askUser"] !== undefined ? { askUser: parseAskUser(value["askUser"], path) } : {}),
     ...(value["environmentFacts"] !== undefined ? { environmentFacts: parseBooleanKey(value["environmentFacts"], "environmentFacts", path) } : {}),
     ...(value["extensionDialogsTimeoutMs"] !== undefined ? { extensionDialogsTimeoutMs: parseExtensionDialogsTimeoutMs(value["extensionDialogsTimeoutMs"], path) } : {}),
     ...(value["agent"] !== undefined ? { agent: parseAgentConfig(value["agent"], path) } : {}),
+  };
+}
+
+export function parseSessionNamingConfig(value: unknown, path: string): NonNullable<PiWebConfigValues["sessionNaming"]> {
+  if (!isRecord(value)) throw new Error(`PI WEB config sessionNaming must be an object: ${path}`);
+  const unknownKey = Object.keys(value).find((key) => key !== "model" && key !== "maxTokens");
+  if (unknownKey !== undefined) throw new Error(`PI WEB config sessionNaming has unknown key ${JSON.stringify(unknownKey)}: ${path}`);
+  const model = value["model"];
+  const maxTokens = value["maxTokens"];
+  if (model !== undefined && (typeof model !== "string" || !/^[^/\s]+\/\S+$/.test(model))) {
+    throw new Error(`PI WEB config sessionNaming.model must be an exact provider/model-id with non-empty parts: ${path}`);
+  }
+  if (maxTokens !== undefined && (typeof maxTokens !== "number" || !Number.isSafeInteger(maxTokens) || maxTokens <= 0)) {
+    throw new Error(`PI WEB config sessionNaming.maxTokens must be a positive safe integer: ${path}`);
+  }
+  return {
+    ...(model !== undefined ? { model } : {}),
+    ...(maxTokens !== undefined ? { maxTokens } : {}),
   };
 }
 

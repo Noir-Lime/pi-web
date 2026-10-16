@@ -62,6 +62,22 @@ describe("sessionNameGenerator", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it.each([false, true])("keeps the default budget at 24 tokens (reasoning: %s)", async (reasoning) => {
+    const streamFn: StreamFn = (model, context, options) => {
+      expect(options?.maxTokens).toBe(24);
+      return streamThatCompletes("A short title")(model, context, options);
+    };
+    await generateShortSessionName(streamFn, { ...fakeModel(), reasoning }, "A request");
+  });
+
+  it("passes an explicit token budget to the model", async () => {
+    const streamFn: StreamFn = (model, context, options) => {
+      expect(options?.maxTokens).toBe(2048);
+      return streamThatCompletes("A short title")(model, context, options);
+    };
+    await generateShortSessionName(streamFn, fakeModel(), "A request", 2048);
+  });
+
   it("returns undefined when the stream reports an error", async () => {
     const streamFn = streamThatErrors();
 

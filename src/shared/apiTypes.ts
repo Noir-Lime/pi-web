@@ -179,6 +179,8 @@ export interface PiWebConfigValues {
   attachments?: PiWebAttachmentsConfig;
   /** Maximum accepted HTTP request body size in bytes (uploads/attachments). */
   maxUploadBytes?: number;
+  /** Machine-wide automatic naming overrides; omitted values use the session model and a 24-token generation budget. */
+  sessionNaming?: { model?: string; maxTokens?: number };
   /** When true, LLMs can start new sessions via the spawn_session tool. */
   spawnSessions?: boolean;
   /**

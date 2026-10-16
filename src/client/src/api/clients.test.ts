@@ -120,6 +120,21 @@ describe("machine-scoped runtime API", () => {
 });
 
 describe("settings config and plugin APIs", () => {
+  it("loads naming models through the selected machine under the application base", async () => {
+    vi.stubEnv("BASE_URL", "./");
+    vi.stubGlobal("document", { baseURI: "https://pi.example.test/nested/" });
+    const response = { models: [{ provider: "provider", id: "naming", name: "Naming" }] };
+    const fetchMock = stubSequenceFetch([jsonResponse(response), jsonResponse({ models: [] })]);
+
+    await expect(configApi.namingModels("remote /a")).resolves.toEqual(response);
+    await expect(configApi.namingModels()).resolves.toEqual({ models: [] });
+
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      "https://pi.example.test/nested/api/machines/remote%20%2Fa/models",
+      "https://pi.example.test/nested/api/machines/local/models",
+    ]);
+  });
+
   it("preserves gateway config and plugin routes by default", async () => {
     const fetchMock = stubSequenceFetch([
       jsonResponse(piWebConfigResponse({ host: "127.0.0.1" })),

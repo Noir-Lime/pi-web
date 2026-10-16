@@ -1477,6 +1477,20 @@ function parsePiWebConfigValues(value: unknown): PiWebConfigValues {
     ...optionalField("spawnSessions", optionalBoolean(record, "spawnSessions")),
     ...optionalField("subsessions", optionalBoolean(record, "subsessions")),
     ...optionalField("askUser", optionalBoolean(record, "askUser")),
+    ...optionalField("sessionNaming", optionalSessionNaming(record["sessionNaming"])),
+  };
+}
+
+function optionalSessionNaming(value: unknown): PiWebConfigValues["sessionNaming"] {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || Array.isArray(value)) throw new Error("Invalid PI WEB sessionNaming field");
+  const model = optionalString(value, "model");
+  const maxTokens = optionalNumber(value, "maxTokens");
+  if (model !== undefined && !/^[^/\s]+\/[^\s]+$/.test(model)) throw new Error("Invalid PI WEB sessionNaming.model field");
+  if (maxTokens !== undefined && (!Number.isSafeInteger(maxTokens) || maxTokens <= 0)) throw new Error("Invalid PI WEB sessionNaming.maxTokens field");
+  return {
+    ...optionalField("model", model),
+    ...optionalField("maxTokens", maxTokens),
   };
 }
 

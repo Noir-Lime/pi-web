@@ -16,6 +16,35 @@ afterEach(async () => {
   await rm(tempDir, { recursive: true, force: true });
 });
 
+describe("sessionNaming config", () => {
+  it.each([{}, { model: "provider/model" }, { maxTokens: 24 }, { model: "provider/org/model", maxTokens: Number.MAX_SAFE_INTEGER }])("round-trips overrides %j without adding defaults", (sessionNaming) => {
+    savePiWebConfig({ sessionNaming }, testOptions());
+    expect(loadPiWebConfig(testOptions()).config.sessionNaming).toEqual(sessionNaming);
+    expect(effectivePiWebConfig(testOptions()).config.sessionNaming).toEqual(sessionNaming);
+  });
+
+  it("preserves overrides on unrelated saves and resets with an empty object", async () => {
+    const sessionNaming = { model: "provider/model", maxTokens: 80 };
+    savePiWebConfig({ sessionNaming }, testOptions());
+    savePiWebConfig({ ...loadPiWebConfig(testOptions()).config, port: 9000 }, testOptions());
+    expect(loadPiWebConfig(testOptions()).config.sessionNaming).toEqual(sessionNaming);
+    savePiWebConfig({ ...loadPiWebConfig(testOptions()).config, sessionNaming: {} }, testOptions());
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual({ port: 9000, sessionNaming: {} });
+    savePiWebConfig({}, testOptions());
+    expect(loadPiWebConfig(testOptions()).config).not.toHaveProperty("sessionNaming");
+    expect(effectivePiWebConfig(testOptions()).config).not.toHaveProperty("sessionNaming");
+  });
+
+  it.each([
+    null, [], "provider/model", { unknown: true },
+    ...["", "model", "/model", "provider/", " provider/model", "provider/model ", "provider /model", 42, null].map((model) => ({ model })),
+    ...[0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "24", null].map((maxTokens) => ({ maxTokens })),
+  ])("rejects invalid overrides %j when loading", async (sessionNaming) => {
+    await writeFile(configPath, JSON.stringify({ sessionNaming }), "utf8");
+    expect(() => loadPiWebConfig(testOptions())).toThrow("PI WEB config sessionNaming");
+  });
+});
+
 describe("PI WEB config persistence", () => {
   it("writes and reads the configured PI WEB config path", () => {
     const requestedConfig = {

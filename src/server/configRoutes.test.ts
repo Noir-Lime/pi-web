@@ -67,6 +67,38 @@ describe("config routes", () => {
     expect(response.json<PiWebConfigResponse>().config).toEqual(expectedConfig);
   });
 
+  it.each(["/api/config", "/api/machines/local/config"])("saves and resets session naming through %s", async (url) => {
+    const sessionNaming = { model: "provider/org/model", maxTokens: 64 };
+    const saved = await app.inject({ method: "PUT", url, payload: { config: { sessionNaming } } });
+    expect(saved.statusCode).toBe(200);
+    expect(parsePiWebConfigResponseBody(saved.json()).config.sessionNaming).toEqual(sessionNaming);
+    expect(parsePiWebConfigResponseBody(saved.json()).effectiveConfig.sessionNaming).toEqual(sessionNaming);
+    const reset = await app.inject({ method: "PUT", url, payload: { config: { sessionNaming: {} } } });
+    expect(reset.statusCode).toBe(200);
+    expect(savedConfig.sessionNaming).toEqual({});
+  });
+
+  it("preserves session naming on unrelated selected-machine saves", async () => {
+    savedConfig.sessionNaming = { model: "provider/model", maxTokens: 48 };
+    const response = await app.inject({ method: "PUT", url: "/api/machines/local/config", payload: { config: { spawnSessions: false } } });
+    expect(response.statusCode).toBe(200);
+    expect(response.json<PiWebConfigResponse>().config.sessionNaming).toEqual({ model: "provider/model", maxTokens: 48 });
+    expect(savedConfig.sessionNaming).toEqual({ model: "provider/model", maxTokens: 48 });
+  });
+
+  it.each(["/api/config", "/api/machines/local/config"])("validates session naming before writing through %s", async (url) => {
+    const response = await app.inject({ method: "PUT", url, payload: { config: { sessionNaming: { maxTokens: 0 } } } });
+    expect(response.statusCode).toBe(400);
+    expect(service.write).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid session naming in remote config responses", () => {
+    const response = responseFor({}, true);
+    for (const field of ["config", "effectiveConfig"]) {
+      expect(() => parsePiWebConfigResponseBody({ ...response, [field]: { sessionNaming: { model: "/missing" } } })).toThrow("sessionNaming.model");
+    }
+  });
+
   it("rejects invalid config payloads before writing", async () => {
     const response = await app.inject({
       method: "PUT",

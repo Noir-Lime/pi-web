@@ -5,10 +5,20 @@ import { createAssistantMessageEventStream, InMemoryCredentialStore, type Assist
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PiWebConfigResponse, PiWebConfigValues } from "../../shared/apiTypes.js";
 import { PiSessionService } from "./piSessionService.js";
+import { createFilePiWebConfigService } from "../configRoutes.js";
 import { CapturingSessionEventHub, createTestModelRuntime, fakeRuntime, fakeSessionManager, runtimeCreator, seedCredential, sessionGateway, sessionRecord, sessionRef, TEST_MODEL_ID, TEST_MODEL_PROVIDER, testModel, testModelRuntime, type RuntimeCreator } from "./piSessionService.testSupport.js";
 
 const TEST_AGENT_DIR = "/tmp/pi-web-test-agent";
+
+function namingConfigResponse(sessionNaming?: PiWebConfigValues["sessionNaming"]): PiWebConfigResponse {
+  const config = sessionNaming === undefined ? {} : { sessionNaming };
+  return {
+    path: "/tmp/pi-web/config.json", exists: true, config, effectiveConfig: config,
+    envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, askUser: false },
+  };
+}
 
 beforeEach(() => {
   // Pi 0.82 uses PI_OFFLINE for refreshes after runtime creation. These tests
@@ -88,8 +98,10 @@ describe("PiSessionService prompt, queue, and auth warnings", () => {
     await service.dispose();
   });
 
-  it("generates a session name for the first prompt via the session's agent.streamFunction", async () => {
+  it.each([false, true])("generates a name without changing the session model (configured: %s)", async (configured) => {
     const model = testModel();
+    const namingModel = testModelRuntime.getModels().find((candidate) => candidate.id !== model.id);
+    if (namingModel === undefined) throw new Error("A second catalog model is required");
     const streamCalls: unknown[] = [];
     const streamFn: StreamFn = (streamModel, context, options) => {
       streamCalls.push({ streamModel, context, options });
@@ -115,6 +127,7 @@ describe("PiSessionService prompt, queue, and auth warnings", () => {
       modelRuntime: testModelRuntime,
       createAgentRuntime: runtimeCreator(fake.runtime),
       sessionManager: sessionGateway([sessionRecord("name-session")]),
+      ...(configured ? { config: { read: () => namingConfigResponse({ model: `${namingModel.provider}/${namingModel.id}`, maxTokens: 2048 }) } } : {}),
       heartbeatIntervalMs: 60_000,
     });
 
@@ -122,8 +135,103 @@ describe("PiSessionService prompt, queue, and auth warnings", () => {
     await vi.waitFor(() => { expect(fake.session.sessionName).toBe("Fix login bug"); });
 
     expect(streamCalls).toHaveLength(1);
+    expect(streamCalls[0]).toMatchObject({ streamModel: configured ? namingModel : model, options: { maxTokens: configured ? 2048 : 24 } });
+    expect(fake.session.model).toBe(model);
     expect(hub.sessionEvents.some(({ event }) => event.type === "session.name" && event.name === "Fix login bug")).toBe(true);
     await service.dispose();
+  });
+
+  it("reads the config file fresh for each new title without changing in-progress calls or existing titles", async () => {
+    const sessionModel = testModel();
+    const alternate = testModelRuntime.getModels().find((model) => model.id !== sessionModel.id);
+    if (alternate === undefined) throw new Error("A second model is required");
+    const configDir = await mkdtemp(join(tmpdir(), "pi-web-naming-config-"));
+    const configPath = join(configDir, "config.json");
+    const config = createFilePiWebConfigService({ env: { PI_WEB_CONFIG: configPath }, cwd: configDir });
+    const read = vi.fn(config.read);
+    const calls: { model: string; maxTokens: number | undefined; finish: () => void }[] = [];
+    const streamFn: StreamFn = (model, _context, options) => {
+      const stream = createAssistantMessageEventStream();
+      const message: AssistantMessage = {
+        role: "assistant", content: [{ type: "text", text: "Generated title" }],
+        api: model.api, provider: model.provider, model: model.id,
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        stopReason: "stop", timestamp: Date.now(),
+      };
+      calls.push({
+        model: `${model.provider}/${model.id}`, maxTokens: options?.maxTokens,
+        finish: () => { stream.push({ type: "done", reason: "stop", message }); stream.end(message); },
+      });
+      return stream;
+    };
+    const fakes = ["live-first", "live-second", "live-third"].map((id) => fakeRuntime(id, { model: sessionModel, agent: { streamFunction: streamFn } }));
+    const remaining = [...fakes];
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: TEST_AGENT_DIR, modelRuntime: testModelRuntime,
+      sessionManager: sessionGateway(fakes.map((fake) => sessionRecord(fake.session.sessionId))),
+      createAgentRuntime: () => {
+        const next = remaining.shift();
+        if (next === undefined) throw new Error("Unexpected runtime open");
+        return Promise.resolve(next.runtime);
+      },
+      config: { read }, heartbeatIntervalMs: 60_000,
+    });
+    try {
+      await service.prompt(sessionRef("live-first"), "First request");
+      await vi.waitFor(() => { expect(calls).toHaveLength(1); });
+      await config.write({ sessionNaming: { model: `${alternate.provider}/${alternate.id}`, maxTokens: 2048 } });
+      expect(calls[0]).toMatchObject({ model: `${sessionModel.provider}/${sessionModel.id}`, maxTokens: 24 });
+      calls[0]?.finish();
+      await vi.waitFor(() => { expect(fakes[0]?.session.sessionName).toBe("Generated title"); });
+
+      await service.prompt(sessionRef("live-second"), "Second request");
+      await vi.waitFor(() => { expect(calls).toHaveLength(2); });
+      expect(calls[1]).toMatchObject({ model: `${alternate.provider}/${alternate.id}`, maxTokens: 2048 });
+      // Direct file edits must work too, without a save notification or reload.
+      await writeFile(configPath, "{}\n", "utf8");
+      calls[1]?.finish();
+      await vi.waitFor(() => { expect(fakes[1]?.session.sessionName).toBe("Generated title"); });
+
+      await service.prompt(sessionRef("live-third"), "Third request");
+      await vi.waitFor(() => { expect(calls).toHaveLength(3); });
+      expect(calls[2]).toMatchObject({ model: `${sessionModel.provider}/${sessionModel.id}`, maxTokens: 24 });
+      calls[2]?.finish();
+      await vi.waitFor(() => { expect(fakes[2]?.session.sessionName).toBe("Generated title"); });
+      await service.prompt(sessionRef("live-first"), "Another request");
+      expect(calls).toHaveLength(3);
+      expect(read).toHaveBeenCalledTimes(3);
+      expect(fakes.every((fake) => fake.session.model === sessionModel)).toBe(true);
+    } finally {
+      for (const call of calls) call.finish();
+      await service.dispose();
+      await rm(configDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([false, true])("falls back without blocking the prompt on naming config/model failure (config read fails: %s)", async (readFails) => {
+    const expectedError = new Error(readFails ? "Config unavailable" : "Session naming model is unavailable: missing-provider/missing-model");
+    const fake = fakeRuntime("missing-naming-model", { model: testModel() });
+    const info = vi.fn();
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: TEST_AGENT_DIR,
+      modelRuntime: testModelRuntime,
+      createAgentRuntime: runtimeCreator(fake.runtime),
+      sessionManager: sessionGateway([sessionRecord("missing-naming-model")]),
+      config: { read: () => {
+        if (readFails) throw expectedError;
+        return namingConfigResponse({ model: "missing-provider/missing-model" });
+      } },
+      logger: { info },
+      heartbeatIntervalMs: 60_000,
+    });
+    try {
+      await service.prompt(sessionRef("missing-naming-model"), "Please fix the login bug");
+      await vi.waitFor(() => { expect(fake.session.sessionName).toBe("Please fix the login bug"); });
+      expect(fake.calls.prompt).toHaveLength(1);
+      expect(info).toHaveBeenCalledWith({ sessionId: "missing-naming-model", err: expectedError }, "Session naming failed; using the first-message fallback");
+    } finally {
+      await service.dispose();
+    }
   });
 
   it("includes queued message details in session status", async () => {

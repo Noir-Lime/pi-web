@@ -387,6 +387,13 @@
 <td>Sessiond restart</td>
 </tr>
 <tr>
+<th scope="row">Session naming<br><code>sessionNaming.model</code><br><code>sessionNaming.maxTokens</code></th>
+<td>Machine; no project overrides</td>
+<td>Session model; 24 tokens</td>
+<td>Choose a separate naming model and generation budget in Settings → Session daemon.</td>
+<td>Next naming request; no restart</td>
+</tr>
+<tr>
 <th scope="row"><span id="extension-dialogs" class="reference-anchor"></span>Extension dialog timeout<br><code>extensionDialogsTimeoutMs</code></th>
 <td>Machine</td>
 <td><code>300000</code> (5 min)</td>
@@ -401,6 +408,12 @@
 <td>Sessiond restart</td>
 </tr>
 </tbody></table></div>
+<details class="config-details" id="session-naming"><summary>Session naming model and token budget</summary>
+<p>Use <strong>Settings → Session daemon → Session naming</strong> on the selected machine. The naming model button opens a searchable list of that machine’s available models; choose <strong>Use session model</strong> to remove the model override. No active session is required. Refresh settings to reload the list after configuring a provider. Naming defaults to the session’s model and <strong>24 tokens</strong>, including for reasoning models. It does not change the conversation’s model.</p>
+<pre><code>{ "sessionNaming": { "model": "provider/model-id", "maxTokens": 2048 } }</code></pre>
+<p>Both overrides are optional. Omit <code>model</code> to use the session model; omit <code>maxTokens</code> to restore 24. The model uses that machine’s catalog and configured credentials. The budget must be a positive integer; providers may count reasoning against it. It does not control title length.</p>
+<p>Saved model and budget changes apply to the next naming request without a restart or reload. Existing names and in-progress naming requests are unchanged. Agent permission changes in the same panel still require a session-daemon restart. Naming failures use the first-message fallback and are recorded in daemon logs.</p>
+</details>
 <details class="config-details"><summary>Independent sessions vs. tracked subsessions</summary>
 <p>Independent sessions run in a workspace of the same project without returning output to their parent. Tracked subsessions run in the parent’s working directory and return results automatically; the parent can keep working or wait for them. Delivered results are not automatically repeated, but remain available for review.</p>
 <p>Agent-created tracked subsessions are collapsed under their parent. Use <strong>Agent subsessions</strong> to expand them. User-created forks and clones, unknown-origin sessions, children without an available parent, and independent sessions remain visible.</p>

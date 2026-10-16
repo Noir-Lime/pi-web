@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PiWebConfigResponse } from "../../api";
 import { SettingsSessiondPanel } from "./SettingsSessiondPanel";
 import type { SettingsPanelFrame } from "./SettingsPanelFrame";
+import type { CommandPicker } from "../CommandPicker";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -127,6 +128,124 @@ describe("SettingsSessiondPanel DOM", () => {
     expect(summary?.querySelector("h3")?.textContent).toBe("After the next daemon restart");
     expect(summary?.querySelector("small")?.textContent).toContain("This does not show the running daemon’s active settings.");
     expect(Array.from(summary?.querySelectorAll("dd") ?? [], (item) => item.textContent)).toEqual(["Disabled", "Disabled", "Enabled"]);
+  });
+
+  it("separates saved naming values and immediate-effect help from restart permissions", async () => {
+    const config = configResponse();
+    config.effectiveConfig.sessionNaming = { model: "provider/naming", maxTokens: 64 };
+    const panel = await mount(config);
+    const summary = panel.shadowRoot?.querySelector("section[aria-labelledby='naming-summary-heading']");
+    expect(summary?.getAttribute("aria-describedby")).toBe("naming-summary-help");
+    expect(summary?.querySelector("h3")?.textContent).toBe("For the next naming request");
+    expect(summary?.querySelector("small")?.textContent).toBe("Saved naming settings apply without a restart. Existing names and in-progress naming requests are unchanged.");
+    expect(Array.from(summary?.querySelectorAll("dd") ?? [], (item) => item.textContent)).toEqual(["provider/naming", "64"]);
+    panel.configResponse = configResponse();
+    await panel.updateComplete;
+    expect(Array.from(summary?.querySelectorAll("dd") ?? [], (item) => item.textContent)).toEqual(["Use session model", "24"]);
+  });
+
+  it("searches and selects naming models while preserving the budget, and resets defaults", async () => {
+    const config = configResponse();
+    config.config.sessionNaming = { model: "openai/gpt-5", maxTokens: 48 };
+    const panel = await mount(config);
+    panel.namingModels = [
+      { provider: "openai", id: "gpt-5", name: "GPT 5" },
+      { provider: "anthropic", id: "claude-sonnet", name: "Claude Sonnet" },
+    ];
+    const onSave = vi.fn();
+    panel.onSave = onSave;
+    await panel.updateComplete;
+    const model = panel.shadowRoot?.querySelector<HTMLButtonElement>("#session-naming-model");
+    expect(model?.textContent).toContain("openai/gpt-5");
+    model?.click();
+    await panel.updateComplete;
+    const picker = panel.shadowRoot?.querySelector<CommandPicker>("command-picker");
+    if (!picker) throw new Error("Missing naming model picker");
+    await picker.updateComplete;
+    const search = picker.shadowRoot?.querySelector("input");
+    if (!search) throw new Error("Missing model search");
+    search.value = "sonnet";
+    search.dispatchEvent(new Event("input"));
+    await picker.updateComplete;
+    const choices = picker.shadowRoot?.querySelectorAll<HTMLButtonElement>("button.ui-selection-option");
+    expect(choices).toHaveLength(1);
+    expect(choices?.[0]?.textContent).toContain("Claude Sonnet");
+    choices?.[0]?.click();
+    await panel.updateComplete;
+    expect(panel.shadowRoot?.querySelector("command-picker")).toBeNull();
+    expect(onSave).toHaveBeenLastCalledWith({ sessionNaming: { model: "anthropic/claude-sonnet", maxTokens: 48 } });
+    const budget = toggle(panel, "session-naming-max-tokens");
+    for (const invalid of ["0", "-1", "1.5"]) {
+      onSave.mockClear();
+      budget.value = invalid;
+      budget.dispatchEvent(new Event("change"));
+      expect(onSave).not.toHaveBeenCalled();
+    }
+    budget.value = "64";
+    budget.dispatchEvent(new Event("change"));
+    expect(onSave).toHaveBeenLastCalledWith({ sessionNaming: { model: "openai/gpt-5", maxTokens: 64 } });
+    budget.value = "";
+    budget.dispatchEvent(new Event("change"));
+    expect(onSave).toHaveBeenLastCalledWith({ sessionNaming: { model: "openai/gpt-5" } });
+    model?.click();
+    await panel.updateComplete;
+    const resetPicker = panel.shadowRoot?.querySelector<CommandPicker>("command-picker");
+    if (!resetPicker) throw new Error("Missing naming model picker");
+    await resetPicker.updateComplete;
+    resetPicker.shadowRoot?.querySelector<HTMLButtonElement>("button.ui-selection-option")?.click();
+    await panel.updateComplete;
+    expect(onSave).toHaveBeenLastCalledWith({ sessionNaming: { maxTokens: 48 } });
+  });
+
+  it("defaults to the session model and 24 tokens, allows cancel, and disables naming controls during saves", async () => {
+    const panel = await mount();
+    const onSave = vi.fn();
+    panel.onSave = onSave;
+    const model = panel.shadowRoot?.querySelector<HTMLButtonElement>("#session-naming-model");
+    expect(model?.textContent).toContain("Use session model");
+    expect(toggle(panel, "session-naming-max-tokens").placeholder).toBe("24");
+    model?.click();
+    await panel.updateComplete;
+    const picker = panel.shadowRoot?.querySelector<CommandPicker>("command-picker");
+    if (!picker) throw new Error("Missing picker");
+    await picker.updateComplete;
+    picker.shadowRoot?.querySelector<HTMLButtonElement>("button[aria-label='Close']")?.click();
+    await panel.updateComplete;
+    expect(onSave).not.toHaveBeenCalled();
+    expect(panel.shadowRoot?.querySelector("command-picker")).toBeNull();
+    panel.saving = true;
+    await panel.updateComplete;
+    expect(model?.disabled).toBe(true);
+    expect(toggle(panel, "session-naming-max-tokens").disabled).toBe(true);
+  });
+
+  it("keeps an unavailable saved model visible and explains loading and catalog errors without changing it", async () => {
+    const config = configResponse();
+    config.config.sessionNaming = { model: "missing/model" };
+    const panel = await mount(config);
+    const onSave = vi.fn();
+    panel.onSave = onSave;
+    expect(panel.shadowRoot?.textContent).toContain("The saved naming model is unavailable");
+    expect(panel.shadowRoot?.querySelector("#session-naming-model")?.textContent).toContain("missing/model");
+    panel.namingModelsLoading = true;
+    await panel.updateComplete;
+    expect(panel.shadowRoot?.textContent).toContain("Loading naming models");
+    expect(panel.shadowRoot?.querySelector<HTMLButtonElement>("#session-naming-model")?.disabled).toBe(true);
+    panel.namingModelsLoading = false;
+    panel.namingModelsError = "Could not load models.";
+    await panel.updateComplete;
+    expect(panel.shadowRoot?.textContent).toContain("Could not load models. Refresh settings to try again. Your saved model is unchanged.");
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("closes the model picker when the settings target changes", async () => {
+    const panel = await mount();
+    panel.shadowRoot?.querySelector<HTMLButtonElement>("#session-naming-model")?.click();
+    await panel.updateComplete;
+    expect(panel.shadowRoot?.querySelector("command-picker")).not.toBeNull();
+    panel.targetLabel = "Another machine";
+    await panel.updateComplete;
+    expect(panel.shadowRoot?.querySelector("command-picker")).toBeNull();
   });
 
   it("guides unavailable settings recovery through refresh", async () => {

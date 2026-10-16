@@ -176,6 +176,7 @@ export const FEDERATED_HTTP_ROUTES = [
   { method: "POST", path: "/sessions/:sessionId/restore" },
   { method: "POST", path: "/sessions/:sessionId/reload" },
   { method: "POST", path: "/sessions/:sessionId/detach-parent" },
+  { method: "GET", path: "/models" },
   { method: "GET", path: "/auth/providers" },
   { method: "POST", path: "/auth/api-key/interactive" },
   { method: "POST", path: "/auth/logout" },

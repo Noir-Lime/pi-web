@@ -1162,10 +1162,10 @@ export interface PiSessionServiceDependencies {
    */
   catalogRefreshStatus?: CatalogRefreshStatus;
   /**
-   * Live global config reader used to resolve workspace-effective request
-   * defaults, currently the attachments save folder. Read at request time so
-   * Settings edits apply without a daemon restart. When omitted, only the
-   * project-local layer applies on top of the built-in defaults.
+   * Live global config reader for attachments and automatic session naming.
+   * Read fresh at request time so Settings edits apply without a daemon restart.
+   * When omitted, built-in
+   * defaults apply, with the project-local layer supported for attachments only.
    */
   config?: Pick<PiWebConfigService, "read">;
 }
@@ -4684,14 +4684,27 @@ export class PiSessionService implements SessionRouteService {
   private maybeGenerateSessionName(session: PiAgentSession, firstMessage: string): void {
     if (session.sessionName !== undefined || session.messages.length !== 0 || session.isStreaming || session.isCompacting) return;
 
-    const model = session.model;
-    if (model === undefined) return;
-
-    void generateShortSessionName(session.agent.streamFunction, model, firstMessage).then((name) => {
+    void this.generateSessionName(session, firstMessage).then((name) => {
+      if (name === undefined) this.logger.info({ sessionId: session.sessionId }, "Session naming returned no title; using the first-message fallback");
       this.applyGeneratedSessionName(session, name ?? fallbackSessionName(firstMessage));
-    }).catch(() => {
+    }).catch((err: unknown) => {
+      this.logger.info({ sessionId: session.sessionId, err }, "Session naming failed; using the first-message fallback");
       this.applyGeneratedSessionName(session, fallbackSessionName(firstMessage));
     });
+  }
+
+  private async generateSessionName(session: PiAgentSession, firstMessage: string): Promise<string | undefined> {
+    // Capture one config snapshot per request; later edits must not reroute an
+    // in-progress naming call or rename sessions that already have a title.
+    const naming = this.config === undefined ? {} : (await this.config.read()).effectiveConfig.sessionNaming ?? {};
+    let model = session.model;
+    if (naming.model !== undefined) {
+      const parsed = parseModelSpec(naming.model);
+      model = parsed === undefined ? undefined : session.modelRuntime.getModel(parsed.provider, parsed.modelId);
+      if (model === undefined) throw new Error(`Session naming model is unavailable: ${naming.model}`);
+    }
+    if (model === undefined) return undefined;
+    return generateShortSessionName(session.agent.streamFunction, model, firstMessage, naming.maxTokens);
   }
 
   private applyGeneratedSessionName(session: PiAgentSession, name: string | undefined): void {

@@ -3,7 +3,7 @@ import { customElement, property, state } from "lit/decorators.js";
 import { cache } from "lit/directives/cache.js";
 import { live } from "lit/directives/live.js";
 import type { AppAction } from "../actions";
-import { configApi, piPackagesApi, pluginsApi, type Machine, type MachineHealth, type MachineRuntime, type PiPackageMutationResponse, type PiPackageScope, type PiPackagesResponse, type PiWebConfigResponse, type PiWebConfigValues, type PiWebPluginsResponse } from "../api";
+import { configApi, piPackagesApi, pluginsApi, type Machine, type MachineHealth, type MachineRuntime, type SessionModel, type PiPackageMutationResponse, type PiPackageScope, type PiPackagesResponse, type PiWebConfigResponse, type PiWebConfigValues, type PiWebPluginsResponse } from "../api";
 import type { SettingsSection } from "../settingsRoute";
 import "./ModalSurface";
 import { uiDialogStyles, uiSelectionStyles } from "./ui/dialogStyles";
@@ -55,6 +55,9 @@ export class SettingsDialog extends LitElement {
   @state() private loading = true;
   @state() private accessLoading = true;
   @state() private sessiondLoading = true;
+  @state() private namingModels: SessionModel[] = [];
+  @state() private namingModelsLoading = true;
+  @state() private namingModelsError = "";
   @state() private pluginLoading = true;
   @state() private packageLoading = true;
   @state() private saving = false;
@@ -71,6 +74,7 @@ export class SettingsDialog extends LitElement {
   private loadRequestSeq = 0;
   private accessLoadRequestSeq = 0;
   private sessiondLoadRequestSeq = 0;
+  private namingModelsLoadRequestSeq = 0;
   private pluginLoadRequestSeq = 0;
   private packageLoadRequestSeq = 0;
   private packageMutationSeq = 0;
@@ -226,6 +230,9 @@ export class SettingsDialog extends LitElement {
       return html`
         <settings-sessiond-panel
           .configResponse=${this.sessiondConfigResponse}
+          .namingModels=${this.namingModels}
+          .namingModelsLoading=${this.namingModelsLoading}
+          .namingModelsError=${this.namingModelsError}
           .loading=${this.sessiondLoading}
           .saving=${this.saving}
           .error=${this.sessiondError}
@@ -372,8 +379,26 @@ export class SettingsDialog extends LitElement {
   private async reloadSessiondState(target = this.settingsTarget()): Promise<void> {
     await Promise.all([
       this.loadSessiondConfigForTarget(target),
+      this.loadNamingModelsForTarget(target),
       this.onRefreshMachineRuntime?.(target.id),
     ]);
+  }
+
+  private async loadNamingModelsForTarget(target = this.settingsTarget()): Promise<void> {
+    const requestSeq = ++this.namingModelsLoadRequestSeq;
+    this.namingModelsLoading = true;
+    this.namingModelsError = "";
+    try {
+      const response = await configApi.namingModels(target.id);
+      if (!this.isCurrentNamingModelsLoad(requestSeq, target)) return;
+      this.namingModels = response.models;
+    } catch (error) {
+      if (this.isCurrentNamingModelsLoad(requestSeq, target)) {
+        this.namingModelsError = `Failed to load naming models from ${settingsMachineTargetLabel(target)}: ${friendlySelectedMachineSettingsErrorMessage(errorMessage(error), target)}`;
+      }
+    } finally {
+      if (this.isCurrentNamingModelsLoad(requestSeq, target)) this.namingModelsLoading = false;
+    }
   }
 
   private async loadSessiondConfigForTarget(target = this.settingsTarget()): Promise<void> {
@@ -559,7 +584,11 @@ export class SettingsDialog extends LitElement {
       if (!this.isCurrentSettingsTarget(target)) return;
       this.sessiondConfigResponse = response;
       if (target.kind === "local" && this.configResponse !== undefined) this.configResponse = mergeSelectedMachineSessiondConfig(this.configResponse, response);
-      this.showSavedMessage(`Agent permissions saved for ${target.name}. Restart the session daemon to apply them. Restarting interrupts active sessions.`, "sessiond");
+      const namingOnly = Object.keys(config).length === 1 && config.sessionNaming !== undefined;
+      const message = namingOnly
+        ? `Session naming settings saved for ${target.name}. They apply to the next naming request without a restart. Existing names and in-progress naming requests are unchanged.`
+        : `Session daemon settings saved for ${target.name}. Restart the session daemon to apply agent permission changes. Restarting interrupts active sessions.${config.sessionNaming === undefined ? "" : " Naming changes apply to the next naming request without a restart."}`;
+      this.showSavedMessage(message, "sessiond");
     } catch (error) {
       if (this.isCurrentSettingsTarget(target)) {
         this.sessiondError = `Failed to save session-daemon config on ${settingsMachineTargetLabel(target)}: ${friendlySelectedMachineSettingsErrorMessage(errorMessage(error), target)}`;
@@ -669,6 +698,10 @@ export class SettingsDialog extends LitElement {
     return requestSeq === this.accessLoadRequestSeq && this.isCurrentSettingsTarget(target);
   }
 
+  private isCurrentNamingModelsLoad(requestSeq: number, target: SettingsMachineTarget): boolean {
+    return requestSeq === this.namingModelsLoadRequestSeq && this.isCurrentSettingsTarget(target);
+  }
+
   private isCurrentSessiondLoad(requestSeq: number, target: SettingsMachineTarget): boolean {
     return requestSeq === this.sessiondLoadRequestSeq && this.isCurrentSettingsTarget(target);
   }
@@ -702,6 +735,10 @@ export class SettingsDialog extends LitElement {
   }
 
   private resetSessiondStateForTargetChange(): void {
+    this.namingModelsLoadRequestSeq += 1;
+    this.namingModels = [];
+    this.namingModelsLoading = false;
+    this.namingModelsError = "";
     this.sessiondLoadRequestSeq += 1;
     this.sessiondLoading = false;
     this.sessiondError = "";

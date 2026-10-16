@@ -97,6 +97,22 @@ describe("API parsers", () => {
     }
   });
 
+  it("preserves naming configuration and rejects malformed naming fields", () => {
+    const response = {
+      path: "/tmp/config.json", exists: true, config: {}, effectiveConfig: {},
+      envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, askUser: false },
+    };
+    for (const field of ["config", "effectiveConfig"] as const) {
+      for (const sessionNaming of [{}, { model: "openai/gpt-5" }, { maxTokens: 48 }, { model: "openai/gpt-5", maxTokens: 32 }]) {
+        expect(parsePiWebConfigResponse({ ...response, [field]: { sessionNaming } })[field]).toEqual({ sessionNaming });
+      }
+      for (const sessionNaming of [[], "model", { model: 42 }, { model: "no-provider" }, { maxTokens: 0 }, { maxTokens: -1 }, { maxTokens: 1.5 }]) {
+        expect(() => parsePiWebConfigResponse({ ...response, [field]: { sessionNaming } })).toThrow();
+      }
+      expect(parsePiWebConfigResponse(response)[field]).not.toHaveProperty("sessionNaming");
+    }
+  });
+
   it("rejects malformed PI WEB attachments config fields", () => {
     const response = {
       path: "/tmp/config.json",

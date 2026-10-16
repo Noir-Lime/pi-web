@@ -1,8 +1,10 @@
-import { css, html, LitElement, type TemplateResult } from "lit";
-import { customElement, property } from "lit/decorators.js";
+import { css, html, LitElement, type PropertyValues, type TemplateResult } from "lit";
+import { customElement, property, state } from "lit/decorators.js";
 import { live } from "lit/directives/live.js";
-import type { PiWebConfigResponse, PiWebConfigValues } from "../../api";
+import type { PiWebConfigResponse, PiWebConfigValues, SessionModel } from "../../api";
+import "../CommandPicker";
 import { uiFormStyles } from "../ui/formStyles";
+import { uiButtonStyles } from "../ui/controlStyles";
 import { uiSettingsStyles } from "../ui/settingsStyles";
 import "./SettingsPanelFrame";
 import type { SettingsNotice } from "./SettingsPanelFrame";
@@ -19,8 +21,22 @@ export class SettingsSessiondPanel extends LitElement {
   @property({ attribute: false }) onReload?: () => void | Promise<void>;
   @property({ attribute: false }) onSave?: (config: PiWebConfigValues) => void | Promise<void>;
 
+  @property({ attribute: false }) namingModels: SessionModel[] = [];
+  @property({ type: Boolean }) namingModelsLoading = false;
+  @property() namingModelsError = "";
+  @state() private namingPickerOpen = false;
+
+  protected override willUpdate(changed: PropertyValues<this>): void {
+    if (changed.has("targetLabel") || (changed.has("loading") && this.loading)) this.namingPickerOpen = false;
+  }
+
   override render(): TemplateResult {
     const config = this.configResponse;
+    const namingOptions = this.namingModels.flatMap((model) => {
+      if (model.provider === undefined || model.provider === "" || model.id === undefined || model.id === "") return [];
+      const value = `${model.provider}/${model.id}`;
+      return [{ value, label: model.name ?? model.id, description: value }];
+    });
     const spawnOverridden = config?.envOverrides.spawnSessions === true;
     // On by default: the effective config is the source of truth for the toggle
     // state, so an unset config file still shows the feature as enabled.
@@ -99,16 +115,70 @@ export class SettingsSessiondPanel extends LitElement {
           </div>
           <section class="effective-card ui-settings-summary" aria-labelledby="restart-summary-heading" aria-describedby="restart-summary-help">
             <h3 id="restart-summary-heading">After the next daemon restart</h3>
-            <small id="restart-summary-help">Saved settings with environment overrides applied. This does not show the running daemon’s active settings.</small>
+            <small id="restart-summary-help">Saved agent permissions with environment overrides applied. This does not show the running daemon’s active settings.</small>
             <dl>
               <div><dt>Spawn sessions</dt><dd>${effectiveSpawn ? "Enabled" : html`<span class="muted">Disabled</span>`}</dd></div>
               <div><dt>Subsessions</dt><dd>${effectiveSubsessions ? "Enabled" : html`<span class="muted">Disabled</span>`}</dd></div>
               <div><dt>Ask questions</dt><dd>${effectiveAskUser ? "Enabled" : html`<span class="muted">Disabled</span>`}</dd></div>
             </dl>
           </section>
+          <h3>Session naming</h3>
+          <div class="field ui-form-field">
+            <span id="session-naming-model-label">Naming model</span>
+            <button id="session-naming-model" class="ui-button ui-button--action naming-model"
+              type="button" aria-labelledby="session-naming-model-label session-naming-model-value"
+              aria-describedby="session-naming-model-help" aria-haspopup="dialog"
+              ?disabled=${this.loading || this.saving || this.namingModelsLoading}
+              @click=${() => { this.namingPickerOpen = true; }}>
+              <span id="session-naming-model-value">${config.config.sessionNaming?.model ?? "Use session model"}</span>
+              <span aria-hidden="true">▾</span>
+            </button>
+            <small id="session-naming-model-help">Search models available on this machine, or use the session model.</small>
+            ${this.namingModelsLoading ? html`<small role="status">Loading naming models…</small>` : null}
+            ${this.namingModelsError ? html`<small role="status">${this.namingModelsError} Refresh settings to try again. Your saved model is unchanged.</small>` : null}
+            ${!this.namingModelsLoading && !this.namingModelsError && namingOptions.length === 0 ? html`<small role="status">No naming models are available. Configure a provider on this machine, then refresh settings.</small>` : null}
+            ${!this.namingModelsLoading && !this.namingModelsError && config.config.sessionNaming?.model !== undefined && !namingOptions.some((option) => option.value === config.config.sessionNaming?.model) ? html`<small role="status">The saved naming model is unavailable. Choose another model or use the session model.</small>` : null}
+          </div>
+          <div class="field ui-form-field">
+            <label for="session-naming-max-tokens">Naming token budget</label>
+            <input id="session-naming-max-tokens" class="ui-input" type="number" min="1" max="9007199254740991" step="1" placeholder="24"
+              aria-describedby="session-naming-max-tokens-help"
+              .value=${live(String(config.config.sessionNaming?.maxTokens ?? ""))}
+              ?disabled=${this.loading || this.saving}
+              @change=${(event: Event) => {
+                const input = event.target;
+                if (!(input instanceof HTMLInputElement)) return;
+                if (input.reportValidity()) void this.saveNamingField("maxTokens", input.value === "" ? undefined : input.valueAsNumber);
+              }}>
+            <small id="session-naming-max-tokens-help">Use a positive whole number. Clear to use 24 tokens, regardless of the model.</small>
+          </div>
+          <section class="effective-card ui-settings-summary" aria-labelledby="naming-summary-heading" aria-describedby="naming-summary-help">
+            <h3 id="naming-summary-heading">For the next naming request</h3>
+            <small id="naming-summary-help">Saved naming settings apply without a restart. Existing names and in-progress naming requests are unchanged.</small>
+            <dl>
+              <div><dt>Naming model</dt><dd>${config.effectiveConfig.sessionNaming?.model ?? "Use session model"}</dd></div>
+              <div><dt>Naming token budget</dt><dd>${config.effectiveConfig.sessionNaming?.maxTokens ?? 24}</dd></div>
+            </dl>
+          </section>
         `}
         </section>
       </settings-panel-frame>
+      ${this.namingPickerOpen ? html`
+        <command-picker title="Select naming model" searchable
+          .options=${[
+            { value: "", label: "Use session model", description: "Use the conversation’s model for naming." },
+            ...(this.namingModelsLoading || this.namingModelsError ? [] : namingOptions),
+          ]}
+          .selectedValue=${config?.config.sessionNaming?.model ?? ""}
+          .onCancel=${() => { this.namingPickerOpen = false; }}
+          .onPick=${(value: string) => {
+            if (this.loading || this.saving) return;
+            if (value !== "" && (this.namingModelsLoading || this.namingModelsError || !namingOptions.some((option) => option.value === value))) return;
+            this.namingPickerOpen = false;
+            void this.saveNamingField("model", value === "" ? undefined : value);
+          }}
+        ></command-picker>
+      ` : null}
     `;
   }
 
@@ -121,6 +191,17 @@ export class SettingsSessiondPanel extends LitElement {
 
   private renderUnavailableConfigState(): TemplateResult {
     return html`<div class="loading-card">${this.loading ? "Loading configuration…" : "Configuration is unavailable. Refresh settings to try again."}</div>`;
+  }
+
+  private async saveNamingField<K extends keyof NonNullable<PiWebConfigValues["sessionNaming"]>>(
+    key: K, value: NonNullable<PiWebConfigValues["sessionNaming"]>[K],
+  ): Promise<void> {
+    const current = { ...this.configResponse?.config.sessionNaming, [key]: value };
+    const sessionNaming = {
+      ...(current.model === undefined ? {} : { model: current.model }),
+      ...(current.maxTokens === undefined ? {} : { maxTokens: current.maxTokens }),
+    };
+    await this.onSave?.({ sessionNaming });
   }
 
   private async toggleSpawnSessions(event: Event): Promise<void> {
@@ -138,13 +219,15 @@ export class SettingsSessiondPanel extends LitElement {
     await this.onSave?.(askUserConfigPatch(enabled));
   }
 
-  static override styles = [uiFormStyles, uiSettingsStyles, css`
+  static override styles = [uiButtonStyles, uiFormStyles, uiSettingsStyles, css`
     :host { display: block; }
     h3 { margin: 0; font-size: 13px; line-height: 1.3; }
     .loading-card { color: var(--pi-muted); }
     .config-path-card span, dt { color: var(--pi-muted); font-size: 12px; font-weight: 600; }
     code { border: 1px solid var(--pi-border-muted); border-radius: 5px; background: var(--pi-bg); padding: 1px 4px; color: var(--pi-text); font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
     .field small, .effective-card small { color: var(--pi-muted); line-height: 1.45; }
+    .naming-model { justify-content: space-between; text-align: start; gap: 12px; }
+    #session-naming-model-value { min-width: 0; overflow-wrap: anywhere; }
     .effective-card dl { display: grid; gap: 8px; margin: 0; }
     .effective-card dl > div { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 12px; align-items: baseline; }
     dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
@@ -157,7 +240,7 @@ export class SettingsSessiondPanel extends LitElement {
 }
 
 export function sessiondDescription(targetLabel: string): string {
-  return `Choose what agents can do on ${targetLabel}. Changes save immediately and take effect after that machine’s session daemon restarts. Restarting interrupts active sessions and running work.`;
+  return `Configure agent permissions and session naming on ${targetLabel}. Naming changes apply to the next naming request without a restart. Agent permission changes require that machine’s session daemon to restart. Restarting interrupts active sessions and running work.`;
 }
 
 export interface SessiondPanelNoticeContext {

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { loadPiWebConfig, parseAgentConfig, parseAttachmentsConfig, parseUploadsConfig, resolveEffectivePiWebConfig, savePiWebConfig, type AgentPathHost, type LoadOptions, type PiWebConfig } from "../config.js";
+import { loadPiWebConfig, parseAgentConfig, parseAttachmentsConfig, parseSessionNamingConfig, parseUploadsConfig, resolveEffectivePiWebConfig, savePiWebConfig, type AgentPathHost, type LoadOptions, type PiWebConfig } from "../config.js";
 import type { PiWebConfigEnvOverrides, PiWebConfigResponse, PiWebConfigValues } from "../shared/apiTypes.js";
 import { requireDefaultThemePreference } from "../shared/themePreference.js";
 import { requireDefaultStreamingBehavior } from "../shared/streamingBehavior.js";
@@ -16,6 +16,7 @@ export const SELECTED_MACHINE_CONFIG_KEYS = [
   "uploads",
   "attachments",
   "maxUploadBytes",
+  "sessionNaming",
   "spawnSessions",
   "subsessions",
   "askUser",
@@ -150,6 +151,7 @@ function parseConfigRequest(value: unknown, agentPathHost: AgentPathHost = "curr
   if (shortcuts !== undefined) config.shortcuts = parseShortcutsRequest(shortcuts);
   if (value["defaultTheme"] !== undefined) config.defaultTheme = requireDefaultThemePreference(value["defaultTheme"], "request");
   if (value["defaultStreamingBehavior"] !== undefined) config.defaultStreamingBehavior = requireDefaultStreamingBehavior(value["defaultStreamingBehavior"], "request");
+  if (value["sessionNaming"] !== undefined) config.sessionNaming = parseSessionNamingConfig(value["sessionNaming"], "request");
   if (plugins !== undefined) config.plugins = parsePluginsRequest(plugins);
   if (pathAccess !== undefined) config.pathAccess = parsePathAccessRequest(pathAccess);
   if (uploads !== undefined) config.uploads = parseUploadsConfig(uploads, "request");
@@ -178,6 +180,7 @@ function pickSelectedMachineConfig(config: PiWebConfigValues): PiWebConfig {
     ...(config.uploads !== undefined ? { uploads: config.uploads } : {}),
     ...(config.attachments !== undefined ? { attachments: config.attachments } : {}),
     ...(config.maxUploadBytes !== undefined ? { maxUploadBytes: config.maxUploadBytes } : {}),
+    ...(config.sessionNaming !== undefined ? { sessionNaming: config.sessionNaming } : {}),
     ...(config.spawnSessions !== undefined ? { spawnSessions: config.spawnSessions } : {}),
     ...(config.subsessions !== undefined ? { subsessions: config.subsessions } : {}),
     ...(config.askUser !== undefined ? { askUser: config.askUser } : {}),
