@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { SessionEventHub } from "../realtime/sessionEventHub.js";
 import { PiSessionService } from "./piSessionService.js";
 import { fakeRuntime, fakeSessionManager, runtimeCreator, sessionGateway, sessionRecord, sessionRef, testModelRuntime } from "./piSessionService.testSupport.js";
@@ -97,6 +97,94 @@ describe("PiSessionService.transcriptSnapshot", () => {
       expect(snapshot.partial).toEqual({ role: "assistant", content: [{ type: "thinking", thinking: "working" }], thinkingLevel: "high", streamId: streamIdMatcher });
       expect(snapshot.status).toMatchObject({ messageCount: 1, isStreaming: true });
       expect(snapshot.seq).toBe(events.currentSeq(ref.id));
+    } finally { await service.dispose(); }
+  });
+
+  it("keeps active status and status events aligned with transcript history after compaction", async () => {
+    const { service, fake, branch, events } = fixture();
+    const oldAssistant = { role: "assistant", content: "earlier answer" };
+    branch.push(
+      { type: "message", message: user },
+      { type: "message", message: oldAssistant },
+      { type: "compaction", summary: "Earlier conversation" },
+      { type: "message", message: user },
+    );
+    // The model context is shorter than the persisted transcript after compaction.
+    fake.session.messages = [user];
+    fake.session.isStreaming = true;
+    const publish = vi.spyOn(events, "publishGlobal");
+    try {
+      expect((await service.transcriptSnapshot(ref)).status.messageCount).toBe(3);
+      expect((await service.status(ref)).messageCount).toBe(3);
+      fake.emit({ type: "message_update", message: oldAssistant });
+      const statusEvents = publish.mock.calls.map(([event]) => event).filter((event) => event.type === "status.update");
+      expect(statusEvents.at(-1)?.status.messageCount).toBe(3);
+    } finally { publish.mockRestore(); await service.dispose(); }
+  });
+
+  it("increments completed messages without scanning and reconciles drift only at settlement", async () => {
+    const { service, fake, branch } = fixture();
+    branch.push({ type: "message", message: user });
+    fake.session.isStreaming = true;
+    const assistant = { role: "assistant", content: "answer" };
+    try {
+      expect((await service.status(ref)).messageCount).toBe(1);
+      const getBranch = vi.spyOn(fake.session.sessionManager, "getBranch");
+      try {
+        for (let i = 0; i < 5; i += 1) {
+          fake.emit({ type: "message_update", message: assistant });
+          expect((await service.status(ref)).messageCount).toBe(1);
+        }
+        // Pi emits message_end before appending the completed message.
+        fake.emit({ type: "message_end", message: assistant });
+        expect((await service.status(ref)).messageCount).toBe(2);
+        branch.push({ type: "message", message: assistant });
+        fake.emit({ type: "entry_appended", entry: { type: "message", message: user } });
+        expect((await service.status(ref)).messageCount).toBe(3);
+        branch.push({ type: "message", message: user });
+        fake.emit({ type: "message_end", message: { role: "custom", content: "notice" } });
+        fake.emit({ type: "entry_appended", entry: { type: "compaction", summary: "earlier history" } });
+        fake.emit({ type: "compaction_end" });
+        expect((await service.status(ref)).messageCount).toBe(3);
+        expect(getBranch).not.toHaveBeenCalled();
+        // An unobserved append is corrected at the run's persistence boundary.
+        branch.push({ type: "message", message: user });
+        fake.emit({ type: "agent_settled" });
+        expect((await service.status(ref)).messageCount).toBe(4);
+        expect(getBranch).toHaveBeenCalled();
+      } finally { getBranch.mockRestore(); }
+    } finally { await service.dispose(); }
+  });
+
+  it("reuses the idle disk snapshot count until external history changes, without overwriting runtime state", async () => {
+    let entryReads = 0;
+    const entry = { get type() { entryReads += 1; return "message"; }, message: user };
+    let diskBranch: unknown[] = [entry];
+    const { service, fake } = fixture(() => Promise.resolve(diskBranch));
+    try {
+      expect((await service.status(ref)).messageCount).toBe(1);
+      const readsAfterFirstStatus = entryReads;
+      expect((await service.status(ref)).messageCount).toBe(1);
+      expect(entryReads).toBe(readsAfterFirstStatus);
+      // The gateway supplies a new immutable snapshot when the file changes.
+      diskBranch = [entry, { type: "message", message: user }];
+      expect((await service.status(ref)).messageCount).toBe(2);
+      expect(entryReads).toBeGreaterThan(readsAfterFirstStatus);
+      fake.session.isStreaming = true;
+      // External disk history must not replace the runtime's own branch count.
+      expect((await service.status(ref)).messageCount).toBe(0);
+    } finally { await service.dispose(); }
+  });
+
+  it("recounts when the runtime selects a different branch", async () => {
+    const { service, fake, branch } = fixture();
+    branch.push({ type: "message", message: user }, { type: "message", message: user });
+    fake.session.isStreaming = true;
+    try {
+      expect((await service.status(ref)).messageCount).toBe(2);
+      branch.pop();
+      fake.emit({ type: "session_tree" });
+      expect((await service.status(ref)).messageCount).toBe(1);
     } finally { await service.dispose(); }
   });
 
