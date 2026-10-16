@@ -43,6 +43,21 @@ describe("native transcript images", () => {
     expect(imageButton(presentation, ".placeholder").hidden).toBe(true);
   });
 
+  it("passes thumbnail presentation and numbered descriptions without replacing or rewriting the source", async () => {
+    const { image, presentation } = await mount();
+    const native = nativeImage(presentation);
+    const originalSource = native.src;
+    image.thumbnail = true;
+    image.description = "read output image 2 of 3";
+    await settleImage(image);
+    expect(presentation.thumbnail).toBe(true);
+    expect(nativeImage(presentation)).toBe(native);
+    expect(native.src).toBe(originalSource);
+    expect(native.alt).toBe("read output image 2 of 3");
+    expect(imageButton(presentation).getAttribute("aria-label")).toBe("Enlarge read output image 2 of 3");
+    expect(native.getAttribute("loading")).toBe("lazy");
+  });
+
   it("immediately assigns legacy inline images without changing the native element", async () => {
     const { image, presentation } = await mount();
     const native = nativeImage(presentation);

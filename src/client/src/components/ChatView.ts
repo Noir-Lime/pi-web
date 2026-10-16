@@ -8,7 +8,7 @@ import { queuedMessageAttachmentLabel, type QueuedMessageAction, type QueuedMess
 import type { DisplayedMessageActionAvailabilityContext, MessageActionAvailabilityContext, MessageActionFeedback, MessageActionResult } from "../../../plugin-api";
 import { displayedMessageActionMessage, messageActionMessage, MessageActionAvailabilityCache, type RegisteredMessageAction } from "../plugins/messageActions";
 import { machineSessionKey } from "../machineKeys";
-import { canonicalEntryActionHeaders, chatMessageHasHeader, groupChatMessages, summarizeChatGroup, type ChatGroup } from "../chatGroups";
+import { canonicalEntryActionHeaders, chatMessageHasHeader, groupChatMessages, groupConsecutiveImageOutputs, summarizeChatGroup, type ChatDisplayGroup, type ChatGroup } from "../chatGroups";
 import { openTranscriptQuestion, transcriptQuestionOutcomes } from "../chatQuestions";
 import { ChatScrollFlows } from "../ChatScrollFlows";
 import { ChatRenderKeys } from "../chatRenderKeys";
@@ -38,7 +38,7 @@ import { renderQueueIcon, renderSteerIcon } from "./promptEditorIcons";
 import "./AskUserCard";
 import "./ExtensionDialogCard";
 import type { ExtensionDialogAnswerCallback, ExtensionDialogCancelCallback, ExtensionDialogDismissCallback } from "./ExtensionDialogCard";
-import { registerRenderedModal, type RenderedModalRegistration } from "./modalLayerRegistry";
+import { deepActiveElement, registerRenderedModal, type RenderedModalRegistration } from "./modalLayerRegistry";
 import "./FormattedText";
 import type { MarkdownWorkspaceContext } from "../formatting/workspaceLinks";
 import "./ToolExecutionView";
@@ -250,7 +250,9 @@ export class ChatView extends LitElement {
   @query(".chat") private chat?: HTMLDivElement;
   @query("dialog.image-zoom") private imageZoomDialog?: HTMLDialogElement;
   @state() private followingLive = false;
-  @state() private zoomedImage: { src: string; alt: string } | undefined = undefined;
+  @state() private imageGallery: { images: readonly ImageOpenDetail[]; index: number } | undefined;
+  private imageGallerySwipe: { pointerId: number; x: number; y: number } | undefined;
+  private imageGalleryFocus: "previous" | "next" | undefined;
   @state() private expandedMetaKey: string | undefined;
   @state() private collapsedNotificationTargetKeys: ReadonlySet<string> = new Set();
   @state() private retainedEmptyNotificationTrayTargetKey: string | undefined;
@@ -310,10 +312,60 @@ export class ChatView extends LitElement {
   private readonly handleJumpTop = () => { this.scrollFlows.jumpToTop(); };
   private readonly handleJumpEnd = () => { this.scrollFlows.jumpToEnd(); };
   private readonly openImageZoom = (src: string, alt: string): void => {
-    this.zoomedImage = { src, alt };
+    this.imageGallery = { images: [{ src, alt }], index: 0 };
   };
+  private openToolImageGallery(images: readonly { part: ChatImagePart; description: string }[], selectedIndex: number): void {
+    if (!this.behaviors.loadImages) return;
+    const entries = images.flatMap((image, index) => {
+      const source = transcriptImageSource(image.part, this.transcriptSession(), this.machineId);
+      return source === undefined ? [] : [{ src: source.src, alt: image.description, partIndex: index }];
+    });
+    const index = entries.findIndex((entry) => entry.partIndex === selectedIndex);
+    if (index >= 0) this.imageGallery = { images: entries, index };
+  }
   private readonly closeImageZoom = (): void => {
-    if (this.zoomedImage !== undefined) this.zoomedImage = undefined;
+    this.imageGallerySwipe = undefined;
+    this.imageGalleryFocus = undefined;
+    if (this.imageGallery !== undefined) this.imageGallery = undefined;
+  };
+  private moveImageGallery(direction: -1 | 1): void {
+    const gallery = this.imageGallery;
+    if (gallery === undefined) return;
+    const index = gallery.index + direction;
+    if (index < 0 || index >= gallery.images.length) return;
+    const active = deepActiveElement(this.ownerDocument);
+    if (index === 0 && active === this.imageZoomDialog?.querySelector('[aria-label="Previous image"]')) this.imageGalleryFocus = "next";
+    else if (index === gallery.images.length - 1 && active === this.imageZoomDialog?.querySelector('[aria-label="Next image"]')) this.imageGalleryFocus = "previous";
+    this.imageGallery = { ...gallery, index };
+  }
+  private readonly onImageGalleryKeyDown = (event: KeyboardEvent): void => {
+    if (event.key === "Tab") {
+      const buttons = [...(this.imageZoomDialog?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? [])];
+      const activeIndex = buttons.findIndex((button) => button === deepActiveElement(this.ownerDocument));
+      if (activeIndex === -1 || (event.shiftKey ? activeIndex === 0 : activeIndex === buttons.length - 1)) {
+        event.preventDefault();
+        (event.shiftKey ? buttons.at(-1) : buttons[0])?.focus();
+      }
+      return;
+    }
+    if (event.isComposing || event.altKey || event.ctrlKey || event.metaKey || (event.key !== "ArrowLeft" && event.key !== "ArrowRight")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.moveImageGallery(event.key === "ArrowLeft" ? -1 : 1);
+  };
+  private readonly onImageGalleryPointerDown = (event: PointerEvent): void => {
+    if (event.pointerType !== "touch") return;
+    if (!event.isPrimary) { this.imageGallerySwipe = undefined; return; }
+    this.imageGallerySwipe = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+    if (event.currentTarget instanceof HTMLElement) event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  private readonly onImageGalleryPointerUp = (event: PointerEvent): void => {
+    const start = this.imageGallerySwipe;
+    if (start?.pointerId !== event.pointerId) return;
+    this.imageGallerySwipe = undefined;
+    const dx = event.clientX - start.x;
+    const dy = event.clientY - start.y;
+    if (Math.abs(dx) >= 48 && Math.abs(dx) > Math.abs(dy) * 1.5) this.moveImageGallery(dx > 0 ? -1 : 1);
   };
   private readonly onImageZoomDialogClick = (event: MouseEvent): void => {
     if (event.target === this.imageZoomDialog) this.closeImageZoom();
@@ -338,6 +390,7 @@ export class ChatView extends LitElement {
   override disconnectedCallback(): void {
     this.scrollFlows.dispose();
     this.releaseImageZoomModal();
+    this.closeImageZoom();
     this.messageActionGeneration += 1;
     this.clearMessageActionFeedback();
     window.removeEventListener("resize", this.onViewportResize);
@@ -358,6 +411,7 @@ export class ChatView extends LitElement {
       this.questionOutcomes = transcriptQuestionOutcomes(this.messages);
       this.questionIds = new Set(this.messages.flatMap((line) => line.parts.flatMap((part) => part.type === "askUserQuestion" ? [part.ask.askId] : [])));
     }
+    if (changed.has("sessionId") || changed.has("machineId") || (changed.has("behaviors") && !this.behaviors.loadImages)) this.closeImageZoom();
     if (changed.has("sessionId") || changed.has("machineId")) this.lastOpenQuestionId = undefined;
     if (changed.has("sessionId") || changed.has("machineId")) {
       this.messageActionGeneration += 1;
@@ -399,13 +453,13 @@ export class ChatView extends LitElement {
     });
     this.lastOpenQuestionId = openQuestionId;
     if (changed.has("notificationInbox") && this.pendingNotificationFocus !== undefined) this.focusPendingNotificationTarget();
-    if (changed.has("zoomedImage")) this.syncImageZoomDialog();
+    if (changed.has("imageGallery")) this.syncImageZoomDialog();
   }
 
   private syncImageZoomDialog(): void {
     const dialog = this.imageZoomDialog;
     if (dialog === undefined) return;
-    if (this.zoomedImage !== undefined) {
+    if (this.imageGallery !== undefined) {
       if (this.imageZoomModalRegistration === undefined) {
         const registration = registerRenderedModal({
           element: dialog,
@@ -418,13 +472,18 @@ export class ChatView extends LitElement {
         this.imageZoomModalRegistration = registration;
         try {
           if (!dialog.open) dialog.showModal();
+          registration.focus();
         } catch (error) {
           this.imageZoomModalRegistration = undefined;
           registration.unregister();
           throw error;
         }
       }
-      this.imageZoomModalRegistration.focus();
+      const navigationFocus = this.imageGalleryFocus;
+      this.imageGalleryFocus = undefined;
+      if (navigationFocus !== undefined) {
+        dialog.querySelector<HTMLButtonElement>(`[aria-label="${navigationFocus === "previous" ? "Previous image" : "Next image"}"]`)?.focus();
+      }
       return;
     }
     if (dialog.open) dialog.close();
@@ -446,16 +505,18 @@ export class ChatView extends LitElement {
   private readonly renderKeys = new ChatRenderKeys();
 
   override render() {
-    const groups = this.groupedMessages();
-    const entryActionHeaders = canonicalEntryActionHeaders(groups);
+    const sourceGroups = this.groupedMessages();
+    const entryActionHeaders = canonicalEntryActionHeaders(sourceGroups);
+    const groups = groupConsecutiveImageOutputs(sourceGroups);
     // Keep incremental updates within one transcript, but dispose the whole
     // repeat part when the transcript changes. Besides preventing cross-session
     // DOM reuse, clearing the part reclaims the end markers that the current Lit
     // build retains when repeat items are removed.
     const transcriptIdentity = machineSessionKey(this.machineId, this.sessionId);
     const keys = this.renderKeys.reconcile(transcriptIdentity, groups.map((group) => {
-      const index = group.kind === "group" ? group.startIndex : group.index;
-      const message = group.kind === "group" ? group.messages[0]?.message : group.message;
+      const source = group.kind === "tool-images" ? group.outputs[0] : group;
+      const index = source.kind === "group" ? source.startIndex : source.index;
+      const message = source.kind === "group" ? source.messages[0]?.message : source.message;
       const identity = chatLineScrollIdentity(message);
       return {
         slot: JSON.stringify([group.kind, index, message?.role]),
@@ -481,7 +542,7 @@ export class ChatView extends LitElement {
             (_group, index) => keys[index],
             (group, index) => {
               if (group.kind === "group") return this.renderMessageGroup(group, this.isLiveTailGroup(groups, index), entryActionHeaders);
-              if (group.kind === "tool-image") return this.renderToolImageOutput(group.message, group.index, entryActionHeaders, group.toolName);
+              if (group.kind === "tool-images") return this.renderToolImageOutputs(group, entryActionHeaders);
               return this.renderMessage(group.message, group.index, entryActionHeaders);
             },
           ))}
@@ -691,11 +752,25 @@ export class ChatView extends LitElement {
   }
 
   private renderImageZoom() {
+    const gallery = this.imageGallery;
+    const image = gallery?.images[gallery.index];
     return html`
-      <dialog class="image-zoom" @click=${this.onImageZoomDialogClick} @close=${this.closeImageZoom} @cancel=${this.closeImageZoom}>
-        ${this.zoomedImage === undefined ? null : html`
-          <button type="button" class="image-zoom-close" aria-label="Close image" @click=${this.closeImageZoom}>×</button>
-          <img class="image-zoom-full" src=${this.zoomedImage.src} alt=${this.zoomedImage.alt} />
+      <dialog class="image-zoom" aria-label="Image preview" aria-describedby="image-gallery-position"
+        @keydown=${this.onImageGalleryKeyDown} @click=${this.onImageZoomDialogClick} @close=${this.closeImageZoom} @cancel=${this.closeImageZoom}>
+        ${gallery === undefined || image === undefined ? null : html`
+          <div class="image-gallery-header ui-toolbar ui-toolbar--primary">
+            <span id="image-gallery-position" class="image-gallery-position ui-toolbar-title" role="status" aria-live="polite" aria-atomic="true">Image ${String(gallery.index + 1)} of ${String(gallery.images.length)}</span>
+            <div class="ui-toolbar-group"><button type="button" class="image-zoom-close ui-button ui-button--icon" aria-label="Close image" title="Close image" @click=${this.closeImageZoom}>×</button></div>
+          </div>
+          <div class="image-gallery-stage" @pointerdown=${this.onImageGalleryPointerDown} @pointerup=${this.onImageGalleryPointerUp} @pointercancel=${() => { this.imageGallerySwipe = undefined; }}>
+            <img class="image-zoom-full" src=${image.src} alt=${image.alt} decoding="async" draggable="false" />
+          </div>
+          ${gallery.images.length < 2 ? null : html`
+            <div class="image-gallery-navigation ui-toolbar ui-toolbar--primary">
+              <button type="button" class="ui-button" aria-label="Previous image" ?disabled=${gallery.index === 0} @click=${() => { this.moveImageGallery(-1); }}>Previous</button>
+              <button type="button" class="ui-button" aria-label="Next image" ?disabled=${gallery.index === gallery.images.length - 1} @click=${() => { this.moveImageGallery(1); }}>Next</button>
+            </div>
+          `}
         `}
       </dialog>
     `;
@@ -709,7 +784,7 @@ export class ChatView extends LitElement {
     return this.groupedMessagesCache;
   }
 
-  private isLiveTailGroup(groups: ChatGroup[], index: number): boolean {
+  private isLiveTailGroup(groups: readonly ChatDisplayGroup[], index: number): boolean {
     return index === groups.length - 1 && this.isSessionLive();
   }
 
@@ -913,12 +988,36 @@ export class ChatView extends LitElement {
     `;
   }
 
-  private renderToolImageOutput(message: ChatLine, index: number, entryActionHeaders: ReadonlySet<ChatLine>, toolName?: string) {
-    const label = chatToolOutputLabel(toolName);
+  private renderToolImageOutputs(group: Extract<ChatDisplayGroup, { kind: "tool-images" }>, entryActionHeaders: ReadonlySet<ChatLine>) {
+    const { outputs } = group;
+    const first = outputs[0];
+    const label = chatToolOutputLabel(outputs.every((output) => output.toolName === first.toolName) ? first.toolName : undefined);
+    const parts = outputs.flatMap((output, outputIndex) => output.message.parts.flatMap((part, partIndex) => part.type !== "image" ? [] : [{
+      part, output, anchor: outputIndex > 0 && partIndex === 0 ? chatMessageAnchorKey(output.index, output.message) : undefined,
+    }]));
+    const images = parts.map((image, imageIndex) => ({ ...image,
+      description: `${chatToolOutputLabel(image.output.toolName)} image ${String(imageIndex + 1)} of ${String(parts.length)}`,
+    }));
     return html`
-      <article class="msg tool-image-output conversation-message ui-transcript-surface" data-index=${index} data-scroll-anchor-id=${chatMessageAnchorKey(index, message) ?? nothing}>
-        ${this.renderMessageHeader(message, String(index), index, entryActionHeaders, label)}
-        ${message.parts.map((part, partIndex) => this.renderPart(part, message, index, partIndex))}
+      <article class="msg tool-image-output conversation-message ui-transcript-surface" data-index=${first.index} data-scroll-anchor-id=${chatMessageAnchorKey(first.index, first.message) ?? nothing}>
+        ${outputs.length === 1 ? this.renderMessageHeader(first.message, String(first.index), first.index, entryActionHeaders, label) : html`<div class="msg-header"><span class="label">${label}</span></div>`}
+        <div class="tool-image-thumbnails">
+          ${images.map((image, imageIndex) => html`
+            <pi-web-transcript-image .imagePart=${image.part} .thumbnail=${true} .description=${image.description}
+              data-index=${image.output.index} data-scroll-anchor-id=${image.anchor ?? nothing}
+              .loadingDisabled=${!this.behaviors.loadImages} .session=${this.transcriptSession()} .machineId=${this.machineId}
+              @image-open=${(event: CustomEvent<ImageOpenDetail>) => { event.stopPropagation(); this.openToolImageGallery(images, imageIndex); }}
+            ></pi-web-transcript-image>
+          `)}
+        </div>
+        ${outputs.length === 1 ? null : html`
+          <details class="image-output-sources">
+            <summary class="ui-transcript-disclosure">Sources (${String(outputs.length)})</summary>
+            ${outputs.map((output, outputIndex) => html`<section class="image-output-source" aria-label=${`Output ${String(outputIndex + 1)}`}>
+              ${this.renderMessageHeader(output.message, `image-source:${String(output.index)}`, output.index, entryActionHeaders, `${chatToolOutputLabel(output.toolName)} · ${String(outputIndex + 1)}`)}
+            </section>`)}
+          </details>
+        `}
       </article>
     `;
   }

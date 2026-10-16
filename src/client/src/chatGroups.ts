@@ -6,6 +6,22 @@ export type ChatGroup =
   // Members keep their source indexes even when invisible entries are skipped.
   | { kind: "group"; messages: { message: ChatLine; index: number }[]; startIndex: number; endIndex: number };
 
+export type ChatToolImageOutput = Extract<ChatGroup, { kind: "tool-image" }>;
+export type ChatDisplayGroup = Exclude<ChatGroup, ChatToolImageOutput>
+  | { kind: "tool-images"; outputs: [ChatToolImageOutput, ...ChatToolImageOutput[]] };
+
+/** Combine only adjoining image outputs; conversation and activity remain boundaries. */
+export function groupConsecutiveImageOutputs(groups: readonly ChatGroup[]): ChatDisplayGroup[] {
+  const result: ChatDisplayGroup[] = [];
+  for (const group of groups) {
+    if (group.kind !== "tool-image") { result.push(group); continue; }
+    const previous = result.at(-1);
+    if (previous?.kind === "tool-images") previous.outputs.push(group);
+    else result.push({ kind: "tool-images", outputs: [group] });
+  }
+  return result;
+}
+
 export function groupChatMessages(messages: ChatLine[], indexOffset = 0): ChatGroup[] {
   const groups: ChatGroup[] = [];
   let eventMessages: Extract<ChatGroup, { kind: "group" }>["messages"] = [];

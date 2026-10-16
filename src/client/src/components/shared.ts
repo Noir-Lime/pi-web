@@ -391,7 +391,7 @@ export const chatStyles = css`
   .chat > .msg.user { margin-top: 8px; }
   .chat > .msg.user:first-child { margin-top: 0; }
   .chat > .msg:last-child, .chat > .session-activity:last-child { margin-bottom: 0; }
-  .msg.conversation-message { --ui-transcript-bg: var(--pi-chat-conversation-bg); --formatted-link-color: color-mix(in srgb, var(--pi-accent) 45%, var(--pi-text) 55%); --formatted-muted-color: color-mix(in srgb, var(--pi-text-secondary) 80%, var(--pi-text) 20%); border-inline-start: 3px solid var(--pi-muted); padding-inline-start: 13px; }
+  .msg.conversation-message { --ui-transcript-bg: var(--pi-chat-conversation-bg); --formatted-link-color: color-mix(in srgb, var(--pi-accent) 45%, var(--pi-text) 55%); --formatted-muted-color: color-mix(in srgb, var(--pi-text-secondary) 80%, var(--pi-text) 20%); border-inline-start: 3px solid color-mix(in srgb, var(--pi-muted) 55%, var(--pi-border) 45%); padding-inline-start: 13px; }
   .msg.user { --ui-transcript-bg: color-mix(in srgb, var(--pi-accent) 6%, var(--pi-bg)); border-inline-start-color: color-mix(in srgb, var(--pi-accent) 55%, var(--pi-bg)); }
   .msg.conversation-message > .msg-header .msg-header-trailing { opacity: 1; }
   .msg.conversation-message > .msg-header .ui-button { color: var(--formatted-muted-color); }
@@ -400,7 +400,7 @@ export const chatStyles = css`
   .msg.tool-execution-shell, .msg.ask-user-record-shell { padding: 0; border: 0; background: transparent; color: var(--pi-text); }
   .msg.ask-user-record-shell ask-user-card { margin: 0 auto; }
   .msg.system { --ui-transcript-bg: color-mix(in srgb, var(--pi-surface) 40%, var(--pi-bg)); color: var(--pi-text-secondary); }
-  .msg.event-group { --ui-transcript-bg: var(--pi-bg); --ui-transcript-heading-bg: var(--pi-bg); padding: 0; color: var(--pi-text); }
+  .msg.event-group { --ui-activity-tone: var(--pi-border); --ui-transcript-bg: var(--pi-bg); --ui-transcript-heading-bg: var(--pi-bg); padding: 0; color: var(--pi-text); }
   .msg.event-group > summary { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 8px; padding-inline: 13px; }
   .msg.event-group > summary:hover { background: var(--pi-surface-hover); }
   .msg.event-group > summary .label { flex: 0 0 auto; margin: 0; color: inherit; font-weight: 600; }
@@ -409,13 +409,19 @@ export const chatStyles = css`
   .group-msg + .group-msg { border-block-start: 1px solid var(--pi-muted); }
   .group-msg.tool-execution-shell { padding: 0; }
   .chat-image { --pi-image-max-height: 320px; --pi-image-radius: 8px; display: block; max-width: 100%; margin: 8px 0 0; }
-  dialog.image-zoom { position: fixed; inset: 0; margin: auto; max-width: calc(96vw - env(safe-area-inset-left) - env(safe-area-inset-right)); max-height: calc(96vh - env(safe-area-inset-top) - env(safe-area-inset-bottom)); width: fit-content; height: fit-content; padding: 0; border: none; background: transparent; overflow: visible; }
-  dialog.image-zoom[open] { display: flex; }
-  dialog.image-zoom::backdrop { background: rgba(0, 0, 0, 0.8); }
-  .image-zoom-full { display: block; max-width: 100%; max-height: 100%; width: auto; height: auto; border-radius: 8px; object-fit: contain; cursor: zoom-out; }
-  .image-zoom-close { position: absolute; top: max(8px, env(safe-area-inset-top)); right: max(8px, env(safe-area-inset-right)); display: inline-grid; place-items: center; width: 28px; height: 28px; padding: 0; font: 16px/1 system-ui, sans-serif; color: var(--pi-muted); background: color-mix(in srgb, var(--pi-surface) 88%, transparent); border: 1px solid var(--pi-border); border-radius: 6px; cursor: pointer; }
-  .image-zoom-close:hover, .image-zoom-close:focus-visible { color: var(--pi-text-bright); border-color: var(--pi-accent); }
-  .image-zoom-close:focus-visible { outline: 1px solid var(--pi-border); outline-offset: 2px; }
+  .tool-image-thumbnails { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0; }
+  .image-output-sources { margin-top: 4px; }
+  .image-output-source { padding: 4px 12px; }
+  .image-output-source + .image-output-source { border-top: 1px solid var(--pi-border-muted); }
+  dialog.image-zoom { position: fixed; inset: 0; margin: auto; box-sizing: border-box; width: min(1100px, calc(100vw - 32px - env(safe-area-inset-left) - env(safe-area-inset-right))); height: min(900px, calc(100dvh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom))); max-width: none; max-height: none; padding: 0; border: 1px solid var(--pi-border); border-radius: 0; color: var(--pi-text); background: var(--pi-bg); overflow: hidden; }
+  dialog.image-zoom[open] { display: flex; flex-direction: column; }
+  dialog.image-zoom::backdrop { background: var(--pi-overlay); }
+  .image-gallery-header { border-bottom: 1px solid var(--pi-border); }
+  .image-gallery-position { padding-inline: 12px; }
+  .image-gallery-stage { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; background: var(--pi-surface); touch-action: pan-y pinch-zoom; }
+  .image-zoom-full { display: block; width: 100%; height: 100%; min-width: 0; min-height: 0; object-fit: contain; }
+  .image-gallery-navigation { border-top: 1px solid var(--pi-border); }
+  .image-gallery-navigation .ui-button { flex: 1 1 0; }
   .group-msg { display: flow-root; max-width: 100%; min-width: 0; padding: 8px 12px; color: var(--pi-text); overflow: visible; }
   .group-msg.system { color: var(--pi-text-secondary); }
   .history-boundary { position: relative; z-index: 5; display: grid; gap: 3px; justify-items: center; margin: 0 0 14px; color: var(--pi-muted); font-size: 12px; text-align: center; }
