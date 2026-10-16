@@ -1,3 +1,4 @@
+import { stylesheetIntegrationCapability } from "../plugins/styles";
 import { LitElement, css, html, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { ContentRendererContribution } from "../../../plugin-api";
@@ -18,6 +19,11 @@ function isTemplateResult(value: unknown): value is TemplateResult {
 /** Owns source access independently of the plugin's rendering success. */
 @customElement("pi-web-content-renderer")
 export class ContentRendererHost extends LitElement {
+  constructor() {
+    super();
+    stylesheetIntegrationCapability.createController(this);
+  }
+
   // Chat-private source controls; public plugin consumers retain legacy defaults.
   @property({ attribute: false }) codeBlocks: CodeBlockSourcePolicy | undefined;
   @property({ type: Boolean, reflect: true, attribute: "external-controls" }) externalControls = false;

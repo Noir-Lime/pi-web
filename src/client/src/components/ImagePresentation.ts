@@ -1,3 +1,4 @@
+import { stylesheetIntegrationCapability } from "../plugins/styles";
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { styleMap } from "lit/directives/style-map.js";
@@ -12,6 +13,11 @@ export interface ImageOpenDetail {
 /** The owner authorizes sources; the browser owns image loading and failure display. */
 @customElement("pi-web-image-presentation")
 export class ImagePresentation extends LitElement {
+  constructor() {
+    super();
+    stylesheetIntegrationCapability.createController(this);
+  }
+
   @property({ attribute: false }) source: string | undefined;
   @property({ type: Boolean, reflect: true }) thumbnail = false;
   @property({ attribute: false }) dimensions: ImageDimensions | undefined;

@@ -1,4 +1,4 @@
-import type { WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
+import type { StylesheetIntegrationCapabilityV1, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
 import { TASKS_CONFIG_PATH, type WorkspaceTask } from "./config.js";
 import { runWorkspaceTaskInTerminal } from "./taskRunner.js";
 import { loadWorkspaceTasksConfig, tasksConfigRefreshHint, tasksConfigUnavailableMessage, type WorkspaceTasksConfigLoadResult } from "./workspaceTasksClient.js";
@@ -29,6 +29,17 @@ export function tasksPanelBadge(context: WorkspacePanelContext): string | undefi
 }
 
 export class PiWebTasksPanel extends HTMLElement {
+  private integration: StylesheetIntegrationCapabilityV1 | undefined;
+  private releaseStyles: (() => void) | undefined;
+
+  set stylesheetIntegration(value: StylesheetIntegrationCapabilityV1 | undefined) {
+    if (value === this.integration) return;
+    this.releaseStyles?.();
+    this.releaseStyles = undefined;
+    this.integration = value;
+    if (this.isConnected) this.releaseStyles = value?.registerRoot(this.root);
+  }
+
   private contextValue: WorkspacePanelContext | undefined;
   private runningTaskId: string | undefined;
   private status: TaskStatus | undefined;
@@ -70,11 +81,14 @@ export class PiWebTasksPanel extends HTMLElement {
   }
 
   connectedCallback(): void {
+    this.releaseStyles ??= this.integration?.registerRoot(this.root);
     window.addEventListener(configChangedEvent, this.onConfigChanged);
     this.render();
   }
 
   disconnectedCallback(): void {
+    this.releaseStyles?.();
+    this.releaseStyles = undefined;
     window.removeEventListener(configChangedEvent, this.onConfigChanged);
   }
 

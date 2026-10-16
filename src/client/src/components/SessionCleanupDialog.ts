@@ -1,3 +1,4 @@
+import { stylesheetIntegrationCapability } from "../plugins/styles";
 import { LitElement, css, html, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { SessionCleanupExecuteResponse, SessionCleanupPreviewResponse, SessionCleanupProjectSummary, SessionCleanupRequest } from "../api";
@@ -6,6 +7,11 @@ import "./ModalSurface";
 
 @customElement("session-cleanup-dialog")
 export class SessionCleanupDialog extends LitElement {
+  constructor() {
+    super();
+    stylesheetIntegrationCapability.createController(this);
+  }
+
   @property({ attribute: false }) preview?: SessionCleanupPreviewResponse;
   @property({ attribute: false }) previewRequest?: SessionCleanupRequest;
   @property({ attribute: false }) result?: SessionCleanupExecuteResponse;

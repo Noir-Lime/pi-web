@@ -1,3 +1,4 @@
+import type { StylesheetIntegrationCapabilityV1 } from "@jmfederico/pi-web/plugin-api";
 import { css, html, LitElement } from "lit";
 import { property } from "lit/decorators.js";
 import { TERMINAL_SOFT_KEYS, terminalSoftKeySequence, type TerminalModesSnapshot, type TerminalSoftKeyDefinition } from "./terminalKeys";
@@ -10,6 +11,30 @@ export interface TerminalSoftKeyInputOptions {
 }
 
 export class TerminalSoftKeys extends LitElement {
+  private integration: StylesheetIntegrationCapabilityV1 | undefined;
+  private releaseStyles: (() => void) | undefined;
+
+  @property({ attribute: false })
+  get stylesheetIntegration(): StylesheetIntegrationCapabilityV1 | undefined { return this.integration; }
+  set stylesheetIntegration(value: StylesheetIntegrationCapabilityV1 | undefined) {
+    if (value === this.integration) return;
+    this.releaseStyles?.();
+    this.releaseStyles = undefined;
+    this.integration = value;
+    if (this.isConnected && this.renderRoot instanceof ShadowRoot) this.releaseStyles = value?.registerRoot(this.renderRoot);
+  }
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    if (this.renderRoot instanceof ShadowRoot) this.releaseStyles ??= this.integration?.registerRoot(this.renderRoot);
+  }
+
+  override disconnectedCallback(): void {
+    this.releaseStyles?.();
+    this.releaseStyles = undefined;
+    super.disconnectedCallback();
+  }
+
   @property({ attribute: false }) modes: TerminalModesSnapshot | undefined;
   @property({ type: Boolean }) refocusOnClick = true;
   @property({ attribute: false }) onInput: (data: string, options: TerminalSoftKeyInputOptions) => void = () => undefined;

@@ -1,3 +1,4 @@
+import { stylesheetIntegrationCapability } from "../../plugins/styles";
 import { LitElement, css, html, nothing, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { uiDialogStyles, uiSelectionStyles } from "../ui/dialogStyles";
@@ -9,6 +10,11 @@ import "../ModalSurface";
 
 @customElement("navigation-dialog")
 export class NavigationDialog extends LitElement {
+  constructor() {
+    super();
+    stylesheetIntegrationCapability.createController(this);
+  }
+
   @property({ attribute: false }) tabs: AppMobileMainTab[] = [];
   // Layout/search visibility must not narrow implicit-all pin edits.
   @property({ attribute: false }) pinUniverse?: readonly string[];

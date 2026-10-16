@@ -1,3 +1,4 @@
+import { stylesheetIntegrationCapability } from "../../plugins/styles";
 import { css, html, LitElement, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { PiPackageInfo, PiPackageInstallableSuggestion, PiPackageScope, PiPackagesResponse } from "../../api";
@@ -10,6 +11,11 @@ import { isPiPackageOperationPending, normalizePiPackageSource, piPackageFiltere
 
 @customElement("settings-packages-panel")
 export class SettingsPackagesPanel extends LitElement {
+  constructor() {
+    super();
+    stylesheetIntegrationCapability.createController(this);
+  }
+
   @property({ attribute: false }) packagesResponse: PiPackagesResponse | undefined;
   @property({ type: Boolean }) loading = false;
   @property({ attribute: false }) operation: PiPackageOperationState | undefined;

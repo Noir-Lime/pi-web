@@ -1,3 +1,4 @@
+import { stylesheetIntegrationCapability } from "../../plugins/styles";
 import { css, html, LitElement, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { DEFAULT_WORKSPACE_ATTACHMENTS_FOLDER, DEFAULT_WORKSPACE_UPLOADS_FOLDER, type PiWebConfigEnvOverrides, type PiWebConfigResponse, type PiWebConfigValues } from "../../api";
@@ -24,6 +25,11 @@ function generalDescription(targetLabel: string): TemplateResult {
 
 @customElement("settings-general-panel")
 export class SettingsGeneralPanel extends LitElement {
+  constructor() {
+    super();
+    stylesheetIntegrationCapability.createController(this);
+  }
+
   @property({ attribute: false }) configResponse: PiWebConfigResponse | undefined;
   @property({ attribute: false }) machineConfigResponse: PiWebConfigResponse | undefined;
   @property({ type: Boolean }) loading = false;

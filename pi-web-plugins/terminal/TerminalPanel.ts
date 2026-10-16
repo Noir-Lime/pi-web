@@ -5,7 +5,7 @@ import { styleMap, type StyleInfo } from "lit/directives/style-map.js";
 import { Terminal, type ITerminalOptions, type ITheme } from "@xterm/xterm";
 import { FitAddon, type ITerminalDimensions } from "@xterm/addon-fit";
 import xtermStyles from "@xterm/xterm/css/xterm.css?inline";
-import type { PluginPeerChannel, PluginPeerChannelClose, TerminalCommandRun, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
+import type { StylesheetIntegrationCapabilityV1, PluginPeerChannel, PluginPeerChannelClose, TerminalCommandRun, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
 import { writeClipboardText } from "./clipboard";
 import { selectFallbackTerminal, selectPreferredTerminal } from "./terminalSelection";
 import { TerminalPeerClient, terminalChannelFailureMessage, terminalInputFrames, type TerminalClientFrame, type TerminalInfo, type TerminalServerFrame, type TerminalSize } from "./terminalProtocol";
@@ -42,6 +42,19 @@ interface TerminalReplayInputSuppression {
 }
 
 export class TerminalPanel extends LitElement {
+  private integration: StylesheetIntegrationCapabilityV1 | undefined;
+  private releaseStyles: (() => void) | undefined;
+
+  @property({ attribute: false })
+  get stylesheetIntegration(): StylesheetIntegrationCapabilityV1 | undefined { return this.integration; }
+  set stylesheetIntegration(value: StylesheetIntegrationCapabilityV1 | undefined) {
+    if (value === this.integration) return;
+    this.releaseStyles?.();
+    this.releaseStyles = undefined;
+    this.integration = value;
+    if (this.isConnected && this.renderRoot instanceof ShadowRoot) this.releaseStyles = value?.registerRoot(this.renderRoot);
+  }
+
   @property({ attribute: false }) context: WorkspacePanelContext | undefined;
   @property({ attribute: false }) runtime: TerminalBrowserRuntime | undefined;
   @property({ attribute: false }) softKeysElementName = "pi-web-terminal-soft-keys-pi-web-terminal";
@@ -100,6 +113,7 @@ export class TerminalPanel extends LitElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
+    if (this.renderRoot instanceof ShadowRoot) this.releaseStyles ??= this.integration?.registerRoot(this.renderRoot);
     this.syncDefaultSoftKeysEnvironment();
     this.softKeysDefaultEnvironmentMedia?.addEventListener("change", this.onSoftKeysDefaultEnvironmentChange);
     this.themeObserver = new MutationObserver(() => { this.applyTerminalTheme(); });
@@ -129,6 +143,8 @@ export class TerminalPanel extends LitElement {
     this.continuingTerminalIds = [];
     this.updateCommandRunPolling(false);
     this.disposeTerminalView();
+    this.releaseStyles?.();
+    this.releaseStyles = undefined;
     super.disconnectedCallback();
   }
 
@@ -1033,6 +1049,7 @@ export class TerminalPanel extends LitElement {
     const softKeysTag = unsafeStatic(this.softKeysElementName);
     return staticHtml`
       <${softKeysTag}
+        .stylesheetIntegration=${this.stylesheetIntegration}
         class="terminal-soft-keys"
         .modes=${this.terminal?.modes}
         .refocusOnClick=${!this.defaultSoftKeysEnvironment}

@@ -20,6 +20,14 @@ describe("Terminal panel lifecycle", () => {
   it("renders the registered pi-web.terminal soft-key element from its default path", async () => {
     defineTerminalCustomElements();
     const panel = createTerminalPanel();
+    const roots = new Set<ShadowRoot>();
+    panel.stylesheetIntegration = {
+      registerRoot: (root) => {
+        roots.add(root);
+        return () => { roots.delete(root); };
+      },
+      createController: vi.fn(),
+    };
     document.body.append(panel);
     await panel.updateComplete;
 
@@ -31,6 +39,15 @@ describe("Terminal panel lifecycle", () => {
     expect(panel.shadowRoot?.querySelector(TERMINAL_SOFT_KEYS_ELEMENT)?.localName)
       .toBe(TERMINAL_SOFT_KEYS_ELEMENT);
     expect(panel.shadowRoot?.querySelector("pi-web-terminal-soft-keys-terminal")).toBeNull();
+    const keys = panel.shadowRoot?.querySelector(TERMINAL_SOFT_KEYS_ELEMENT);
+    expect(roots).toEqual(new Set([panel.shadowRoot, keys?.shadowRoot]));
+    panel.remove();
+    expect(roots.size).toBe(0);
+    document.body.append(panel);
+    // Reconnect re-applies the saved/default soft-key preference.
+    Reflect.set(panel, "softKeysEnabled", true);
+    await panel.updateComplete;
+    expect(roots.size).toBe(2);
   });
 
   it("closes the peer channel and cancels retries, requests, observers, timers, and Xterm on disconnect", () => {

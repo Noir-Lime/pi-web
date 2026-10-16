@@ -1,4 +1,4 @@
-import type { ContentRendererOption, ContentRenderingCapability, FileContentResponse } from "@jmfederico/pi-web/plugin-api";
+import type { StylesheetIntegrationCapabilityV1, ContentRendererOption, ContentRenderingCapability, FileContentResponse } from "@jmfederico/pi-web/plugin-api";
 import { css, html, LitElement, type PropertyValues, type TemplateResult } from "lit";
 import { property } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
@@ -33,6 +33,30 @@ export interface WorkspaceFileViewerIdentity {
 }
 
 export class WorkspaceFileViewer extends LitElement {
+  private integration: StylesheetIntegrationCapabilityV1 | undefined;
+  private releaseStyles: (() => void) | undefined;
+
+  @property({ attribute: false })
+  get stylesheetIntegration(): StylesheetIntegrationCapabilityV1 | undefined { return this.integration; }
+  set stylesheetIntegration(value: StylesheetIntegrationCapabilityV1 | undefined) {
+    if (value === this.integration) return;
+    this.releaseStyles?.();
+    this.releaseStyles = undefined;
+    this.integration = value;
+    if (this.isConnected && this.renderRoot instanceof ShadowRoot) this.releaseStyles = value?.registerRoot(this.renderRoot);
+  }
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    if (this.renderRoot instanceof ShadowRoot) this.releaseStyles ??= this.integration?.registerRoot(this.renderRoot);
+  }
+
+  override disconnectedCallback(): void {
+    this.releaseStyles?.();
+    this.releaseStyles = undefined;
+    super.disconnectedCallback();
+  }
+
   @property({ attribute: false }) machineId = "";
   @property({ attribute: false }) contentRendering: ContentRenderingCapability | undefined;
   @property({ attribute: false }) projectId = "";
@@ -198,7 +222,7 @@ export class WorkspaceFileViewer extends LitElement {
     if (file.size === 0) return this.renderStatus("This file is empty.");
     return html`
       ${file.truncated ? html`<p class="preview-note" role="status">Raw source is truncated. Use Download for the complete file.</p>` : null}
-      <pi-web-files-code-viewer .content=${file.content} .language=${file.language}></pi-web-files-code-viewer>
+      <pi-web-files-code-viewer .stylesheetIntegration=${this.stylesheetIntegration} .content=${file.content} .language=${file.language}></pi-web-files-code-viewer>
     `;
   }
 

@@ -1,3 +1,4 @@
+import { stylesheetIntegrationCapability } from "../plugins/styles";
 import { LitElement, css, html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { SessionTreeForkResult, SessionTreeNavigateResult, SessionTreeNodeKind, SessionTreeSnapshot, SessionTreeSummaryChoice } from "../api";
@@ -39,6 +40,11 @@ const SESSION_TREE_KIND_PRESENTATION = {
 
 @customElement("session-tree-navigator")
 export class SessionTreeNavigator extends LitElement {
+  constructor() {
+    super();
+    stylesheetIntegrationCapability.createController(this);
+  }
+
   @property({ attribute: false }) tree: SessionTreeSnapshot = EMPTY_TREE;
   @property({ attribute: false }) onNavigate?: (targetId: string, summaryChoice: SessionTreeSummaryChoice) => Promise<SessionTreeNavigateResult>;
   @property({ attribute: false }) onFork?: (entryId: string) => Promise<SessionTreeForkResult>;

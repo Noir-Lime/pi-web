@@ -1,7 +1,7 @@
 import type { StylesheetIntegrationCapabilityV1 } from "../../../plugin-api";
 import { createPluginStylesheetLoader } from "./styleLoader";
 import { PluginStyleRegistry, PluginStylesController, type ActivePluginStylesheet } from "./styleRegistry";
-import type { PluginCapability } from "./types";
+import type { PluginCapability } from "../../../shared/pluginApiTypes";
 
 // Shared by the application owner, host components and the public capability. No
 // network, DOM registration or stylesheet compilation occurs until explicitly used.

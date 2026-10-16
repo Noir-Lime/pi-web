@@ -1,3 +1,4 @@
+import { stylesheetIntegrationCapability } from "../plugins/styles";
 import { LitElement, css, html } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
 import "./ModalSurface";
@@ -11,6 +12,11 @@ export interface MachineDialogSubmit {
 
 @customElement("machine-dialog")
 export class MachineDialog extends LitElement {
+  constructor() {
+    super();
+    stylesheetIntegrationCapability.createController(this);
+  }
+
   @property({ attribute: false }) onSubmit?: (input: MachineDialogSubmit) => void | Promise<void>;
   @property({ attribute: false }) onCancel?: () => void;
   @property() error = "";

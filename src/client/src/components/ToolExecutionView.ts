@@ -1,3 +1,4 @@
+import { stylesheetIntegrationCapability } from "../plugins/styles";
 import { LitElement, css, html } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { writeClipboardText } from "../clipboard";
@@ -14,6 +15,11 @@ interface ToolTarget {
 
 @customElement("tool-execution-view")
 export class ToolExecutionView extends LitElement {
+  constructor() {
+    super();
+    stylesheetIntegrationCapability.createController(this);
+  }
+
   @property({ attribute: false }) execution: ToolExecutionPart | undefined;
   @state() private showFullDiff = false;
   @state() private copied = false;

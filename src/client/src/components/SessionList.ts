@@ -1,3 +1,4 @@
+import { stylesheetIntegrationCapability } from "../plugins/styles";
 import { LitElement, css, html, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
@@ -44,6 +45,11 @@ interface AgentAttention {
 
 @customElement("session-list")
 export class SessionList extends LitElement implements KeyboardNavigableSection {
+  constructor() {
+    super();
+    stylesheetIntegrationCapability.createController(this);
+  }
+
   @property({ attribute: false }) sessions: SessionInfo[] = [];
   @property({ attribute: false }) pinnedRootIds: string[] = [];
   @property({ attribute: false }) onPin?: (session: SessionInfo) => void;

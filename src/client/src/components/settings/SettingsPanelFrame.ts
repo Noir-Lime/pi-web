@@ -1,3 +1,4 @@
+import { stylesheetIntegrationCapability } from "../../plugins/styles";
 import { css, html, LitElement, nothing, type TemplateResult } from "lit";
 import { customElement, property } from "lit/decorators.js";
 
@@ -36,6 +37,11 @@ export function settingsNoticeTone(notice: SettingsNotice): SettingsNoticeTone {
 
 @customElement("settings-panel-frame")
 export class SettingsPanelFrame extends LitElement {
+  constructor() {
+    super();
+    stylesheetIntegrationCapability.createController(this);
+  }
+
   @property() heading = "";
   @property({ attribute: false }) description: SettingsNoticeContent = "";
   @property() actionLabel = "";

@@ -1,3 +1,4 @@
+import { stylesheetIntegrationCapability } from "../plugins/styles";
 import { LitElement, css, html, nothing, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { AppAction } from "../actions";
@@ -9,6 +10,11 @@ import { uiDialogStyles, uiSelectionStyles } from "./ui/dialogStyles";
 
 @customElement("action-palette")
 export class ActionPalette extends LitElement {
+  constructor() {
+    super();
+    stylesheetIntegrationCapability.createController(this);
+  }
+
   @property({ attribute: false }) actions: AppAction[] = [];
   @property({ attribute: false }) onRun?: (action: AppAction) => void;
   @property({ attribute: false }) onCancel?: () => void;

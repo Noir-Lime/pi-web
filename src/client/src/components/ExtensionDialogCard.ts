@@ -1,3 +1,4 @@
+import { stylesheetIntegrationCapability } from "../plugins/styles";
 import { LitElement, css, html, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { ifDefined } from "lit/directives/if-defined.js";
@@ -85,6 +86,11 @@ export function extensionDialogCountdownText(timeoutAt: string | undefined, nowM
  */
 @customElement("extension-dialog-card")
 export class ExtensionDialogCard extends LitElement {
+  constructor() {
+    super();
+    stylesheetIntegrationCapability.createController(this);
+  }
+
   @property({ attribute: false }) dialog?: PendingExtensionDialog;
   @property({ attribute: false }) outcome?: ClosedExtensionDialog;
   @property({ attribute: false }) onAnswer?: ExtensionDialogAnswerCallback;

@@ -1,3 +1,4 @@
+import { stylesheetIntegrationCapability } from "../plugins/styles";
 import { LitElement, html } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
 import { api, trustApi, type FileSuggestion } from "../api";
@@ -17,6 +18,11 @@ interface ProjectTrustState {
 
 @customElement("project-dialog")
 export class ProjectDialog extends LitElement {
+  constructor() {
+    super();
+    stylesheetIntegrationCapability.createController(this);
+  }
+
   @property({ attribute: false }) onSubmit?: (path: string, create: boolean, trust: ProjectTrustChoice | undefined) => void;
   @property({ attribute: false }) onCancel?: () => void;
   @property() machineId = "local";

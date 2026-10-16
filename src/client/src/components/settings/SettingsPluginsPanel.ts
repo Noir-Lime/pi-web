@@ -1,3 +1,4 @@
+import { stylesheetIntegrationCapability } from "../../plugins/styles";
 import { css, html, LitElement, nothing, type TemplateResult } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { live } from "lit/directives/live.js";
@@ -13,6 +14,11 @@ export type SettingsPluginRow = PiWebPluginInfo & { configOnly: boolean; editabl
 
 @customElement("settings-plugins-panel")
 export class SettingsPluginsPanel extends LitElement {
+  constructor() {
+    super();
+    stylesheetIntegrationCapability.createController(this);
+  }
+
   @property({ attribute: false }) pluginsResponse: PiWebPluginsResponse | undefined;
   @property({ attribute: false }) configResponse: PiWebConfigResponse | undefined;
   @property({ type: Boolean }) loading = false;
