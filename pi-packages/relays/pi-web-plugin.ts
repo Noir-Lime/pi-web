@@ -1,15 +1,30 @@
-import type { PiWebPlugin } from "@jmfederico/pi-web/plugin-api";
+import type { PiWebPlugin, PluginCapability, UiStylesCapabilityV1 } from "@jmfederico/pi-web/plugin-api";
 import { RELAYS_ROOT } from "./relayDiscovery.js";
 import { relayIdentityFromMetadata } from "./relayIdentity.js";
 import { defineRelaysPanelElement, RELAY_SELECTION_QUERY_KEY } from "./relaysPanelElement.js";
 
+const uiStylesCapability: PluginCapability<UiStylesCapabilityV1, 1> = {
+  pluginId: "pi-web", id: "ui-styles", version: 1,
+  parse: (value) => {
+    if (typeof value !== "object" || value === null || !("cssText" in value) || typeof value.cssText !== "string") {
+      throw new Error("PI WEB UI styles capability v1 requires cssText");
+    }
+    return { cssText: value.cssText };
+  },
+};
+
 const plugin = {
   apiVersion: 4,
   name: "Relays",
+  requires: [uiStylesCapability],
   activate: ({ runtimePluginId, html, svg }) => {
     defineRelaysPanelElement();
+    let uiCssText = "";
 
     return {
+      start: ({ capabilities }) => {
+        uiCssText = capabilities.resolve(uiStylesCapability).cssText;
+      },
       contributions: {
         actions: [
           {
@@ -64,7 +79,7 @@ const plugin = {
               </svg>
             `,
             order: 50,
-            render: (context) => html`<pi-web-relays-panel .context=${context}></pi-web-relays-panel>`,
+            render: (context) => html`<pi-web-relays-panel .uiCssText=${uiCssText} .context=${context}></pi-web-relays-panel>`,
           },
         ],
       },

@@ -7,6 +7,8 @@ import { selectedMachineId } from "../../controllers/types";
 import type { NavigationSection } from "../../appShell/navigationState";
 import { NAVIGATION_SECTION_ORDER } from "../../appShell/navigationState";
 import type { KeyboardNavigableSection } from "../navigationFocus";
+import { uiButtonStyles } from "../ui/controlStyles";
+import { renderPanelToggleButton } from "./panelToggleButton";
 import "../MachineList";
 import "../MachineSwitcher";
 import "../ProjectList";
@@ -20,7 +22,7 @@ export type NavigationFocusTarget = NavigationSection | "chat";
 export class AppNavigationPanel extends LitElement {
   @property({ attribute: false }) machines: Machine[] = [];
   @property({ attribute: false }) selectedMachine?: Machine;
-  /** PWA display mode: surfaces the single-machine identity bubble in the header. */
+  /** PWA display mode: surfaces the single-machine identity in the header. */
   @property({ type: Boolean }) locationIndicator = false;
   @property({ attribute: false }) machineStatuses: Record<string, MachineHealth> = {};
   @property({ attribute: false }) machineStatusSnapshots: Record<string, MachineStatusSnapshot> = {};
@@ -50,6 +52,7 @@ export class AppNavigationPanel extends LitElement {
   @property({ type: Number }) startingSessionCount = 0;
   @property({ type: Boolean }) canStartSession = false;
   @property({ attribute: false }) onShowActions?: () => void;
+  @property({ attribute: false }) onTogglePanel?: () => void;
   @property({ attribute: false }) onToggleMachines?: () => void;
   @property({ attribute: false }) onToggleProjects?: () => void;
   @property({ attribute: false }) onToggleWorkspaces?: () => void;
@@ -145,7 +148,7 @@ export class AppNavigationPanel extends LitElement {
   override render() {
     return html`
       <header>
-        <strong>PI WEB</strong>
+        ${renderPanelToggleButton("navigation", false, this.onTogglePanel)}
         <machine-switcher
           .machines=${this.machines}
           .selected=${this.selectedMachine}
@@ -159,7 +162,12 @@ export class AppNavigationPanel extends LitElement {
         ></machine-switcher>
         <div class="header-actions">
           ${this.refreshControl}
-          <button title="Show Actions" aria-label="Show Actions" @click=${() => { this.onShowActions?.(); }}>Actions</button>
+          <button type="button" class="ui-button actions-button" title="Show Actions" aria-label="Show Actions" @click=${() => { this.onShowActions?.(); }}>
+            <svg class="actions-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M13 2 4 14h7l-1 8 10-13h-7V2Z"></path>
+            </svg>
+            <span class="actions-label">Actions</span>
+          </button>
         </div>
       </header>
       ${this.compact && shouldShowMachinesSection(this.machines) ? html`
@@ -277,14 +285,20 @@ export class AppNavigationPanel extends LitElement {
     void this.onCancelKeyboardNavigation?.();
   }
 
-  static override styles = css`
-    :host { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  static override styles = [uiButtonStyles, css`
+    :host { display: flex; flex-direction: column; min-height: 0; overflow: hidden; container: navigation-panel / inline-size; }
     :host([compact]) { flex: 1 1 auto; }
-    header { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px; border-bottom: 1px solid var(--pi-border); }
-    header strong { flex: 0 0 auto; }
+    header { flex: 0 0 auto; display: flex; align-items: stretch; min-height: 44px; gap: 0; padding: 0; border-bottom: 1px solid var(--pi-border); }
     machine-switcher { flex: 1 1 auto; min-width: 0; }
     :host([compact]) header { display: none; }
-    .header-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
+    .header-actions { flex: 0 0 auto; display: flex; align-items: stretch; gap: 0; border-inline-start: 1px solid var(--pi-border-muted); }
+    .header-actions > * + * { border-inline-start: 1px solid var(--pi-border-muted); }
+    .panel-toggle { border-inline-end: 1px solid var(--pi-border-muted); }
+    .actions-icon { flex: 0 0 auto; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    @container navigation-panel (max-width: 400px) {
+      .actions-label { display: none; }
+      .actions-button { min-width: 44px; padding-inline: 0; }
+    }
     /* Expanded sections share the panel height equally, so collapsing one
        section distributes its space to every remaining section, not just the
        session list. Collapsed sections keep only their heading height. */
@@ -293,8 +307,7 @@ export class AppNavigationPanel extends LitElement {
     project-list[collapsed],
     workspace-list[collapsed],
     session-list[collapsed] { flex: 0 0 auto; min-height: auto; overflow: hidden; }
-    button { border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); color: var(--pi-text); padding: 7px 9px; cursor: pointer; }
-  `;
+  `];
 }
 
 export function shouldShowMachinesSection(machines: readonly Machine[]): boolean {
@@ -312,7 +325,7 @@ function nextVisibleNavigationTarget(section: NavigationSection, machines: reado
 }
 
 // Only a machine choice makes the machines section navigable: with a single
-// machine the switcher is a static bubble, and compact mode has no list.
+// machine the switcher is a static identity, and compact mode has no list.
 function visibleNavigationSections(machines: readonly Machine[]): NavigationSection[] {
   return NAVIGATION_SECTION_ORDER.filter((section) => section !== "machines" || shouldShowMachinesSection(machines));
 }

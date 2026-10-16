@@ -203,7 +203,8 @@ async function openImageZoom(app: PiWebApp): Promise<HTMLElement> {
   image.focus();
   image.click();
   await view.updateComplete;
-  const dialog = requiredElement(view.shadowRoot?.querySelector<HTMLDialogElement>("dialog.image-zoom"), "image zoom dialog");
+  const gallery = requiredElement(view.renderRoot.querySelector("pi-web-image-gallery-dialog"), "image gallery");
+  const dialog = requiredElement(gallery.shadowRoot?.querySelector<HTMLDialogElement>("dialog.image-zoom"), "image zoom dialog");
   expect(dialog.open).toBe(true);
   return requiredElement(dialog.querySelector<HTMLElement>(".image-zoom-close"), "image zoom close button");
 }

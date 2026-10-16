@@ -7,6 +7,7 @@ import { keyboardEventOriginatesFromNativeActivationControl } from "./keyboardEv
 import "./ModalSurface";
 import type { ModalSurface } from "./ModalSurface";
 import { scrollWhenSelected } from "./scrollWhenSelected";
+import { uiDialogStyles, uiFormStyles, uiSelectionStyles } from "./ui/dialogStyles";
 
 /** One keyboard-navigable choice on the option-list steps (method, providers, logout). */
 interface AuthDialogOption {
@@ -44,9 +45,9 @@ export class AuthDialog extends LitElement {
         .label=${this.dialogTitle(state)}
         @keydown=${(event: KeyboardEvent) => { this.handleKeyDown(event); }}
       >
-        <header>
-          <strong>${this.dialogTitle(state)}</strong>
-          <button title="Close" aria-label="Close" @click=${() => { this.cancel(); }}>×</button>
+        <header class="ui-dialog-header">
+          <strong class="ui-dialog-title">${this.dialogTitle(state)}</strong>
+          <button class="ui-button ui-button--icon" title="Close" aria-label="Close" @click=${() => { this.cancel(); }}>×</button>
         </header>
         ${this.renderBody(state)}
       </modal-surface>
@@ -157,21 +158,23 @@ export class AuthDialog extends LitElement {
     const visible = this.filteredOptions(options);
     return html`
       ${this.stepHasSearch(state) && options.length > 0 ? html`
-        <input aria-label="Search providers" placeholder="Search providers" .value=${this.query} @input=${(event: Event) => { this.handleSearchInput(event); }}>
+        <div class="ui-dialog-search-row">
+          <input class="ui-dialog-search" aria-label="Search providers" placeholder="Search providers" .value=${this.query} @input=${(event: Event) => { this.handleSearchInput(event); }}>
+        </div>
       ` : null}
-      <div class="options">
-        ${options.length === 0 ? html`<div class="empty">${state.step === "logout" ? "No stored credentials. Environment variables and models.json settings are unchanged." : "No providers available."}</div>`
-        : visible.length === 0 ? html`<div class="empty">No matching providers</div>`
+      <div class="options ui-selection-list">
+        ${options.length === 0 ? html`<div class="empty ui-dialog-empty">${state.step === "logout" ? "No stored credentials. Environment variables and models.json settings are unchanged." : "No providers available."}</div>`
+        : visible.length === 0 ? html`<div class="empty ui-dialog-empty">No matching providers</div>`
         : visible.map((option, index) => html`
           <button
-            class=${index === this.selectedIndex ? "selected" : ""}
+            class=${`ui-button ui-selection-option ${index === this.selectedIndex ? "selected" : ""}`}
             aria-current=${index === this.selectedIndex ? "true" : nothing}
             ${scrollWhenSelected(index === this.selectedIndex, option.key)}
             @focus=${() => { this.selectedIndex = index; }}
             @click=${() => { option.run(); }}
           >
             <span>${option.title}</span>
-            <small>${option.detail}</small>
+            <small class="ui-selection-detail">${option.detail}</small>
           </button>
         `)}
       </div>
@@ -189,7 +192,7 @@ export class AuthDialog extends LitElement {
       && flow.status === "running"
       && prompt?.promptType === "manual_code";
     return html`
-      <div class="form">
+      <div class="form ui-dialog-body ui-form-body">
         ${flow.auth !== undefined ? html`
           <p>Open this authorization link:</p>
           <p><a href=${flow.auth.url} target="_blank" rel="noreferrer">${flow.auth.url}</a></p>
@@ -205,22 +208,24 @@ export class AuthDialog extends LitElement {
           </div>
         `) ?? null}
         ${prompt !== undefined ? html`
-          <label>${prompt.message}</label>
-          <input type=${promptInputType} autocomplete=${promptInputType === "password" ? "off" : "on"} .value=${state.inputValue ?? ""} placeholder=${prompt.placeholder ?? ""} @input=${(event: Event) => { if (event.target instanceof HTMLInputElement) this.onOAuthInput?.(event.target.value); }}>
-          <div class="actions"><button @click=${() => { this.onOAuthCancel?.(); }}>Cancel</button><button class="primary" ?disabled=${state.responding === true} @click=${() => { this.onOAuthRespond?.(); }}>Submit</button></div>
+          <label class="ui-form-field" for="oauth-prompt">
+            ${prompt.message}
+            <input class="ui-input" id="oauth-prompt" type=${promptInputType} autocomplete=${promptInputType === "password" ? "off" : "on"} .value=${state.inputValue ?? ""} placeholder=${prompt.placeholder ?? ""} @input=${(event: Event) => { if (event.target instanceof HTMLInputElement) this.onOAuthInput?.(event.target.value); }}>
+          </label>
+          <div class="actions ui-form-actions"><button class="ui-button" @click=${() => { this.onOAuthCancel?.(); }}>Cancel</button><button class="ui-button ui-button--primary" ?disabled=${state.responding === true} @click=${() => { this.onOAuthRespond?.(); }}>Submit</button></div>
         ` : null}
         ${select !== undefined ? html`
           <p>${select.message}</p>
-          <div class="inline-options">${select.options.map((option) => html`
-            <button @click=${() => { this.onOAuthRespond?.(option.value); }}>
+          <div class="inline-options ui-selection-list">${select.options.map((option) => html`
+            <button class="ui-button ui-selection-option" @click=${() => { this.onOAuthRespond?.(option.value); }}>
               <span>${option.label}</span>
-              ${option.description === undefined ? null : html`<small>${option.description}</small>`}
+              ${option.description === undefined ? null : html`<small class="ui-selection-detail">${option.description}</small>`}
             </button>
           `)}</div>
         ` : null}
-        ${state.error !== undefined && state.error !== "" ? html`<div class="error-text">${state.error}</div>` : null}
-        ${flow.status === "error" || flow.status === "cancelled" ? html`<div class="error-text">${flow.error ?? flow.status}</div><div class="actions"><button @click=${() => { this.cancel(); }}>Close</button></div>` : null}
-        ${prompt === undefined && select === undefined && flow.status === "running" ? html`<div class="actions"><button @click=${() => { this.onOAuthCancel?.(); }}>Cancel</button></div>` : null}
+        ${state.error !== undefined && state.error !== "" ? html`<div class="error-text ui-form-error">${state.error}</div>` : null}
+        ${flow.status === "error" || flow.status === "cancelled" ? html`<div class="error-text ui-form-error">${flow.error ?? flow.status}</div><div class="actions ui-form-actions"><button class="ui-button" @click=${() => { this.cancel(); }}>Close</button></div>` : null}
+        ${prompt === undefined && select === undefined && flow.status === "running" ? html`<div class="actions ui-form-actions"><button class="ui-button" @click=${() => { this.onOAuthCancel?.(); }}>Cancel</button></div>` : null}
       </div>
     `;
   }
@@ -258,36 +263,13 @@ export class AuthDialog extends LitElement {
     else this.onCancel?.();
   }
 
-  static override styles = [css`
-    :host { position: fixed; inset: 0; z-index: 10; color: var(--pi-text); font: 14px system-ui, sans-serif; }
-    modal-surface { --modal-surface-width: min(720px, calc(100vw - 40px)); --modal-surface-max-height: min(640px, calc(100% - 40px)); }
-    header { display: flex; align-items: center; justify-content: space-between; padding: 12px; border-bottom: 1px solid var(--pi-border); }
-    .options { min-height: 0; overflow: auto; outline: none; }
-    button { border: 0; background: transparent; color: var(--pi-text); cursor: pointer; }
-    header button { font-size: 20px; color: var(--pi-muted); }
-    input { margin: 10px 12px; border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-bg); color: var(--pi-text); font: var(--pi-control-font-size, 16px) var(--pi-control-font-family, system-ui, sans-serif); padding: 8px 10px; outline: none; }
-    input:focus { border-color: var(--pi-accent); }
-    .options button { display: block; width: 100%; padding: 10px 12px; border-bottom: 1px solid var(--pi-border-muted); text-align: left; }
-    .options button.selected, .options button:hover { background: var(--pi-selection-bg); }
-    small { display: block; margin-top: 4px; color: var(--pi-muted); }
-    .empty { padding: 24px; color: var(--pi-muted); text-align: center; }
-  `, css`
-    .form { display: grid; gap: 12px; padding: 14px; overflow: auto; }
+  static override styles = [uiDialogStyles, uiFormStyles, uiSelectionStyles, css`
     .form p { margin: 0; color: var(--pi-text-secondary); overflow-wrap: anywhere; }
     .form a { color: var(--pi-accent); overflow-wrap: anywhere; }
     .form code { border: 1px solid var(--pi-border); border-radius: 4px; background: var(--pi-surface); padding: 1px 4px; }
-    label { color: var(--pi-muted); }
-    .actions { display: flex; justify-content: flex-end; gap: 8px; }
-    .actions button, .inline-options button { border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); color: var(--pi-text); padding: 7px 9px; }
-    .actions button.primary { border-color: var(--pi-success-border); background: var(--pi-success-surface); color: var(--pi-success); }
-    .actions button:disabled { opacity: .6; cursor: wait; }
     .warning { color: var(--pi-warning); }
-    .error-text { color: var(--pi-danger); }
     .progress { margin: 0; padding-left: 18px; color: var(--pi-muted); }
     .info-links { display: flex; flex-wrap: wrap; gap: 8px 12px; }
-    .inline-options { display: grid; gap: 8px; }
-    .inline-options button { display: grid; gap: 2px; text-align: left; }
-    .inline-options small { color: var(--pi-muted); }
     em { color: var(--pi-success); font-style: normal; font-size: 12px; }
   `];
 }

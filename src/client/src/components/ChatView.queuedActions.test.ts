@@ -69,12 +69,38 @@ describe("queued message actions", () => {
     expect(view.onQueuedMessageAction).toHaveBeenCalledWith({ machineId: "remote", sessionId: "session", action: "toggle", index: 2, expectedQueue: messages });
   });
 
-  it("copies text without mutating the queue and reports the outcome", async () => {
+  it("copies text without mutating the queue or adding success feedback", async () => {
     const view = await queuedView();
     button(view, '[aria-label="Copy queued message"]').click();
-    await vi.waitFor(() => { expect(view.shadowRoot?.textContent).toContain("Copied"); });
+    await Promise.resolve();
+    await view.updateComplete;
+    expect(view.shadowRoot?.textContent).not.toContain("Copied");
+    expect(view.shadowRoot?.querySelector('[role="status"]')).toBeNull();
     expect(writeClipboardText).toHaveBeenCalledWith("adjust");
     expect(view.onQueuedMessageAction).not.toHaveBeenCalled();
+  });
+
+  it("reports copy failure and clears the error after a successful retry", async () => {
+    vi.mocked(writeClipboardText).mockResolvedValueOnce(false);
+    const view = await queuedView();
+    button(view, '[aria-label="Copy queued message"]').click();
+    await vi.waitFor(() => { expect(view.shadowRoot?.textContent).toContain("Could not copy message"); });
+    button(view, '[aria-label="Copy queued message"]').click();
+    await vi.waitFor(() => { expect(view.shadowRoot?.querySelector('[role="status"]')).toBeNull(); });
+    expect(view.shadowRoot?.textContent).not.toContain("Copied");
+  });
+
+  it("does not show copy feedback in a different session", async () => {
+    let finishCopy: ((copied: boolean) => void) | undefined;
+    vi.mocked(writeClipboardText).mockImplementationOnce(() => new Promise<boolean>((resolve) => { finishCopy = resolve; }));
+    const view = await queuedView();
+    button(view, '[aria-label="Copy queued message"]').click();
+    view.sessionId = "another-session";
+    await view.updateComplete;
+    finishCopy?.(false);
+    await Promise.resolve();
+    await view.updateComplete;
+    expect(view.shadowRoot?.textContent).not.toContain("Could not copy message");
   });
 
   it.each([['[aria-label="Switch to Queue"]', "toggle"], ['[title^="Recall this message"]', "edit"], ['[aria-label="Remove queued message"]', "remove"]])("wires %s to its queue snapshot", async (selector, action) => {

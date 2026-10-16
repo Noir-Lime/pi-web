@@ -147,20 +147,24 @@ export class PromptEditor extends LitElement {
     return html`
       <footer class=${shellMode ? "shell-mode" : ""} @paste=${(event: ClipboardEvent) => { void this.handlePaste(event); }} @dragover=${(event: DragEvent) => { this.handleDragOver(event); }} @drop=${(event: DragEvent) => { void this.handleDrop(event); }}>
         <div class="editor-wrap">
-          <div class=${`markdown-editor${this.disabled ? " markdown-editor-disabled" : ""}`} aria-label="Message pi" aria-disabled=${this.disabled ? "true" : "false"}></div>
-          <input class="attachment-input" type="file" multiple hidden @change=${(event: Event) => { void this.handleFileInput(event); }} />
-          <button class="editor-attach icon-button" ?disabled=${busy} title="Attach files" aria-label="Attach files" @click=${() => { this.attachmentInput?.click(); }}>${renderAttachIcon()}</button>
-          ${shellMode ? html`<div class="mode-hint">Shell command${shellInputMode.excludeFromContext ? " · excluded from context" : ""}</div>` : null}
-          ${this.isCompacting && !shellMode ? html`<div class="mode-hint">Compacting history · message will be queued</div>` : null}
+          <div class="editor-input">
+            <div class=${`markdown-editor${this.disabled ? " markdown-editor-disabled" : ""}`} aria-label="Message pi" aria-disabled=${this.disabled ? "true" : "false"}></div>
+            <input class="attachment-input" type="file" multiple hidden @change=${(event: Event) => { void this.handleFileInput(event); }} />
+            <button type="button" class="editor-attach icon-button ui-button ui-button--icon" ?disabled=${busy} title="Attach files" aria-label="Attach files" @click=${() => { this.attachmentInput?.click(); }}>${renderAttachIcon()}</button>
+            ${shellMode ? html`<div class="mode-hint">Shell command${shellInputMode.excludeFromContext ? " · excluded from context" : ""}</div>` : null}
+            ${this.isCompacting && !shellMode ? html`<div class="mode-hint">Compacting history · message will be queued</div>` : null}
+          </div>
           ${this.renderPromptChips()}
           ${this.renderAttachments()}
           <autocomplete-menu .items=${this.completions} .selectedIndex=${this.selectedIndex} .onPick=${(item: CompletionItem) => { this.pick(item); }}></autocomplete-menu>
         </div>
-        <div class="actions">
+        <div class="actions ui-toolbar ui-toolbar--primary">
           ${this.renderCompactStatus()}
-          <button class="icon-button send-button ${keyboardSteers ? "" : "default-send-action"}" ?disabled=${busy} title=${queuesInput ? "Queue until the current activity finishes" : "Send message"} aria-label=${queuesInput ? "Queue message" : "Send message"} @click=${() => { this.send("followUp"); }}>${queuesInput ? renderQueueIcon() : renderSendIcon()}</button>
-          ${this.canSteer && !this.isCompacting ? html`<button class="icon-button steer-button ${keyboardSteers ? "default-send-action" : ""}" ?disabled=${busy} title="Steer the current response before the next model call" aria-label="Steer current response" @click=${() => { this.send("steer"); }}>${renderSteerIcon()}</button>` : null}
-          <button class="icon-button stop-button" ?disabled=${this.disabled || !this.canStop} title=${this.canStop ? "Stop current work and clear queued messages" : "Nothing running"} aria-label="Stop current work" @click=${() => this.onStop?.()}>${renderStopIcon()}</button>
+          <div class="ui-toolbar-group">
+            <button class="ui-button ui-button--icon icon-button send-button ${keyboardSteers ? "" : "default-send-action"}" ?disabled=${busy} title=${queuesInput ? "Queue until the current activity finishes" : "Send message"} aria-label=${queuesInput ? "Queue message" : "Send message"} @click=${() => { this.send("followUp"); }}>${queuesInput ? renderQueueIcon() : renderSendIcon()}</button>
+            ${this.canSteer && !this.isCompacting ? html`<button class="ui-button ui-button--icon icon-button steer-button ${keyboardSteers ? "default-send-action" : ""}" ?disabled=${busy} title="Steer the current response before the next model call" aria-label="Steer current response" @click=${() => { this.send("steer"); }}>${renderSteerIcon()}</button>` : null}
+            <button class="ui-button ui-button--icon icon-button stop-button" ?disabled=${this.disabled || !this.canStop} title=${this.canStop ? "Stop current work and clear queued messages" : "Nothing running"} aria-label="Stop current work" @click=${() => this.onStop?.()}>${renderStopIcon()}</button>
+          </div>
         </div>
       </footer>
     `;
@@ -204,8 +208,10 @@ export class PromptEditor extends LitElement {
     const provider = status.model?.provider !== undefined && status.model.provider !== "" ? `${status.model.provider}/` : "";
     return html`
       <div class="compact-status" aria-label="Session status">
-        <button class="select-model" title="Select model" @click=${() => this.onSelectModel?.()}>${provider}${model}</button>
-        <button class="select-thinking icon-button" title=${`Thinking level: ${thinkingLevelLabel(status.thinkingLevel)}`} aria-label=${`Thinking level: ${thinkingLevelLabel(status.thinkingLevel)}`} @click=${() => this.onSelectThinking?.()}>${renderThinkingGauge(thinkingGauge(status.thinkingLevel, this.availableThinkingLevels))}</button>
+        <div class="ui-toolbar-group ui-toolbar-group--bounded">
+          <button class="ui-button select-model" title="Select model" @click=${() => this.onSelectModel?.()}>${provider}${model}</button>
+          <button class="ui-button ui-button--icon select-thinking icon-button" title=${`Thinking level: ${thinkingLevelLabel(status.thinkingLevel)}`} aria-label=${`Thinking level: ${thinkingLevelLabel(status.thinkingLevel)}`} @click=${() => this.onSelectThinking?.()}>${renderThinkingGauge(thinkingGauge(status.thinkingLevel, this.availableThinkingLevels))}</button>
+        </div>
       </div>
     `;
   }
@@ -217,7 +223,7 @@ export class PromptEditor extends LitElement {
         ${this.promptChips.map((chip) => html`
           <div class="prompt-chip" title=${chip.text}>
             <span>${chip.label}</span>
-            <button type="button" aria-label=${`Remove ${chip.label}`} ?disabled=${this.disabled} @click=${() => this.onRemoveChip?.(chip)}>×</button>
+            <button type="button" class="ui-button ui-button--compact ui-button--icon" aria-label=${`Remove ${chip.label}`} ?disabled=${this.disabled} @click=${() => this.onRemoveChip?.(chip)}>×</button>
           </div>
         `)}
         ${this.chipError === undefined ? null : html`<div class="chip-error" role="alert">${this.chipError}</div>`}
@@ -234,12 +240,12 @@ export class PromptEditor extends LitElement {
         ${this.attachments.map((attachment) => html`
           <div class=${`attachment-chip ${isInlinePromptAttachment(attachment) ? "attachment-chip-image" : "attachment-chip-file"}`} title=${attachment.name}>
             ${this.renderAttachmentPreview(attachment)}
-            <button type="button" class="attachment-remove" title="Remove attachment" aria-label=${`Remove ${attachment.name}`} @click=${() => { this.removeAttachment(attachment.id); }}>×</button>
+            <button type="button" class="ui-button ui-button--compact ui-button--icon attachment-remove" title="Remove attachment" aria-label=${`Remove ${attachment.name}`} @click=${() => { this.removeAttachment(attachment.id); }}>×</button>
           </div>
         `)}
         ${this.attachments.length > 0 ? html`
           <label class="attachment-delivery" title=${canUseInlineDelivery ? "How attachments are delivered to the agent" : "General files are saved and mentioned from the workspace"}>
-            <select .value=${delivery} @change=${(event: Event) => { this.changeDelivery(event); }}>
+            <select class="ui-select" aria-label="Attachment delivery" .value=${delivery} @change=${(event: Event) => { this.changeDelivery(event); }}>
               <option value="inline" ?disabled=${!canUseInlineDelivery}>Attach to message${canUseInlineDelivery ? "" : " (images only)"}</option>
               <option value="folder">${attachmentFolderDeliveryLabel(this.attachmentsFolder)}</option>
             </select>

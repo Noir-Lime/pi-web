@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canonicalEntryActionHeaders, groupChatMessages, summarizeChatGroup, type ChatGroup } from "./chatGroups";
+import { canonicalEntryActionHeaders, groupChatMessages, groupConsecutiveImageOutputs, summarizeChatGroup, type ChatGroup } from "./chatGroups";
 import type { ChatLine } from "./components/shared";
 
 const text = (role: ChatLine["role"], value: string): ChatLine => ({ role, parts: [{ type: "text", text: value }] });
@@ -43,15 +43,19 @@ describe("groupChatMessages", () => {
     ]);
   });
 
-  it("keeps skill reads out of event groups", () => {
+  it("groups agent skill loading with the work leading to an answer", () => {
     const messages: ChatLine[] = [
       { role: "assistant", parts: [{ type: "thinking", text: "plan" }, { type: "skillRead", name: "playwright", path: "/skills/playwright/SKILL.md" }] },
     ];
 
     expect(groupChatMessages(messages)).toEqual([
-      { kind: "group", startIndex: 0, endIndex: 0, messages: [{ index: 0, message: { role: "assistant", parts: [{ type: "thinking", text: "plan" }] } }] },
-      { kind: "message", index: 0, message: { role: "skill", parts: [{ type: "skillRead", name: "playwright", path: "/skills/playwright/SKILL.md" }] } },
+      { kind: "group", startIndex: 0, endIndex: 0, messages: [{ index: 0, message: messages[0] }] },
     ]);
+  });
+
+  it("keeps user-invoked skill content with the request rather than agent activity", () => {
+    const invocation: ChatLine = { role: "user", parts: [{ type: "skillInvocation", name: "ux-writing", location: "/skills/ux-writing", content: "Instructions" }] };
+    expect(groupChatMessages([invocation])).toEqual([{ kind: "message", index: 0, message: invocation }]);
   });
 
   it("keeps image content visible outside collapsed event groups", () => {
@@ -121,6 +125,40 @@ describe("groupChatMessages", () => {
   });
 });
 
+describe("groupConsecutiveImageOutputs", () => {
+  const image = { type: "image" as const, mimeType: "image/png", data: "QUJD" };
+
+  it("combines adjoining image outputs without losing source identities, metadata or absolute indexes", () => {
+    const messages: ChatLine[] = [
+      { role: "tool", entryId: "first", parts: [image, image], meta: { model: { id: "first-model" } } },
+      { role: "tool", entryId: "second", parts: [image], meta: { model: { id: "second-model" } } },
+      { role: "tool", entryId: "third", parts: [image] },
+    ];
+    const sourceGroups = groupChatMessages(messages, 20);
+    const displayGroups = groupConsecutiveImageOutputs(sourceGroups);
+    expect(displayGroups).toHaveLength(1);
+    const gallery = displayGroups[0];
+    if (gallery?.kind !== "tool-images") throw new Error("Expected combined image outputs");
+    expect(gallery.outputs).toEqual(sourceGroups);
+    expect(gallery.outputs.map((output) => output.index)).toEqual([20, 21, 22]);
+    expect(gallery.outputs.map((output) => output.message.entryId)).toEqual(["first", "second", "third"]);
+    expect(gallery.outputs[1]?.message.meta).toBe(messages[1]?.meta);
+    expect(sourceGroups).toHaveLength(3);
+    expect(sourceGroups[0]).toBe(gallery.outputs[0]);
+  });
+
+  it.each(["user", "assistant", "activity"] as const)("does not combine images across a %s boundary", (boundary) => {
+    const between: ChatLine = boundary === "activity"
+      ? { role: "assistant", parts: [{ type: "thinking", text: "Inspect another image" }] }
+      : { role: boundary, parts: [image] };
+    const displayGroups = groupConsecutiveImageOutputs(groupChatMessages([
+      { role: "tool", entryId: "before", parts: [image] }, between,
+      { role: "tool", entryId: "after", parts: [image] },
+    ]));
+    expect(displayGroups.map((group) => group.kind)).toEqual(["tool-images", boundary === "activity" ? "group" : "message", "tool-images"]);
+  });
+});
+
 function renderedMessages(groups: readonly ChatGroup[]): ChatLine[] {
   return groups.flatMap((group) => group.kind === "group" ? group.messages.map((event) => event.message) : [group.message]);
 }
@@ -172,7 +210,11 @@ describe("canonicalEntryActionHeaders", () => {
     ]);
     const slices = renderedMessages(groups);
 
-    expect([...canonicalEntryActionHeaders(groups)]).toEqual([slices[2], slices[5], slices[7]]);
+    expect([...canonicalEntryActionHeaders(groups)]).toEqual([
+      slices.find((message) => message.parts.some((part) => part.type === "text" && part.text === "reply")),
+      slices.find((message) => message.parts.some((part) => part.type === "text" && part.text === "request")),
+      slices.find((message) => message.entryId === "skill-only"),
+    ]);
   });
 
   it("selects the rendered tool-image header over its technical result", () => {

@@ -19,7 +19,7 @@ function markdownRenderer(codeBlocks: CodeBlockPolicy): Renderer {
     const language = token.lang?.trim().split(/\s/u)[0] ?? "";
     const label = language === "" ? "" : `<span class="code-block-label">${escapeHtml(language)}</span>`;
     const copy = codeBlocks.copy
-      ? '<button type="button" class="code-copy-button code-block-copy" title="Copy code block" aria-label="Copy code block"><span aria-hidden="true">⧉</span></button>'
+      ? '<button type="button" class="code-copy-button code-block-copy ui-button ui-button--icon ui-button--compact" title="Copy code block" aria-label="Copy code block"><span aria-hidden="true">⧉</span></button>'
       : "";
     // Generate the normal-flow header before mounting; never reparent source DOM.
     const header = label === "" && copy === "" ? "" : `<div class="code-block-header" role="group" aria-label="Code block controls">${label}${copy}</div>`;

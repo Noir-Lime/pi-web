@@ -4,6 +4,7 @@ import { api, trustApi, type FileSuggestion } from "../api";
 import type { ProjectTrustChoice } from "../controllers/projectController";
 import { css } from "lit";
 import "./ModalSurface";
+import { uiDialogStyles, uiFormStyles, uiSelectionStyles } from "./ui/dialogStyles";
 
 /** Server-resolved trust state for the entered path, keyed on the decided path. */
 interface ProjectTrustState {
@@ -124,7 +125,7 @@ export class ProjectDialog extends LitElement {
   private renderTrustChoice() {
     const unavailable = this.trust === undefined || this.trust.loading || this.trust.error !== undefined;
     return html`
-      <label class="check">
+      <label class="check ui-checkbox-field">
         <input type="checkbox" aria-describedby=${this.trust?.error === undefined ? "project-trust-help" : "project-trust-help project-trust-error"} .checked=${this.trust?.trusted ?? false} ?disabled=${unavailable} @change=${(event: InputEvent) => { if (event.target instanceof HTMLInputElement) this.onTrustChange(event.target.checked); }} />
         <span>Trust this project</span>
       </label>
@@ -134,8 +135,8 @@ export class ProjectDialog extends LitElement {
         <a href="https://pi.dev/docs/latest/security" target="_blank" rel="noreferrer">Learn about project trust</a>
       </small>
       ${this.trust?.error === undefined ? null : html`
-        <small id="project-trust-error" class="trust-error" role="alert">Could not check project trust: ${this.trust.error}. Retry to load the existing trust decision.</small>
-        <button type="button" @click=${() => { void this.loadTrust(); }}>Retry trust check</button>
+        <small id="project-trust-error" class="trust-error ui-form-error" role="alert">Could not check project trust: ${this.trust.error}. Retry to load the existing trust decision.</small>
+        <button class="ui-button" type="button" @click=${() => { void this.loadTrust(); }}>Retry trust check</button>
       `}
     `;
   }
@@ -171,62 +172,52 @@ export class ProjectDialog extends LitElement {
         .label=${"Add project"}
         @keydown=${(event: KeyboardEvent) => { this.onKeyDown(event); }}
       >
-        <header>
-          <strong>Add project</strong>
-          <button @click=${() => { this.onCancel?.(); }} aria-label="Close add project">×</button>
+        <form class="ui-form" @submit=${(event: SubmitEvent) => { event.preventDefault(); }}>
+        <header class="ui-dialog-header">
+          <strong class="ui-dialog-title">Add project</strong>
+          <button class="ui-button ui-button--icon" type="button" @click=${() => { this.onCancel?.(); }} aria-label="Close add project">×</button>
         </header>
-        <div class="body">
+        <div class="body ui-dialog-body ui-form-body">
           <small id="project-machine-help" class="machine-hint">${this.machineId === "local" ? "Folders on the local machine (where PI WEB runs)." : `Folders on remote machine: ${this.machineId}.`} Paths are on this machine, not your browser's device.</small>
-          <label>
+          <label class="ui-form-field">
             Project folder
-            <input aria-describedby=${this.suggestionError ? "project-machine-help project-folder-error" : "project-machine-help project-folder-status"} .value=${this.path} @input=${(event: InputEvent) => { this.onPathInput(event); }} placeholder="/path/to/project or ~/code/project" />
+            <input class="ui-input" aria-describedby=${this.suggestionError ? "project-machine-help project-folder-error" : "project-machine-help project-folder-status"} .value=${this.path} @input=${(event: InputEvent) => { this.onPathInput(event); }} placeholder="/path/to/project or ~/code/project" />
           </label>
           ${this.suggestionError ? html`
-            <div id="project-folder-error" class="trust-error" role="alert">Could not load folders on this machine. Check the connection and retry, or enter a folder path.</div>
-            <button type="button" @click=${() => { void this.loadSuggestions(); }}>Retry folder lookup</button>
+            <div id="project-folder-error" class="trust-error ui-form-error" role="alert">Could not load folders on this machine. Check the connection and retry, or enter a folder path.</div>
+            <button class="ui-button" type="button" @click=${() => { void this.loadSuggestions(); }}>Retry folder lookup</button>
           ` : null}
-          <div id="project-folder-status" class="suggestions" aria-live="polite">
+          <div id="project-folder-status" class="suggestions ui-selection-list" aria-live="polite">
             ${this.loading ? html`<div class="hint">Loading folders…</div>` : null}
             ${this.suggestions.map((suggestion, index) => html`
-              <button class=${index === this.selected ? "selected" : ""} @click=${() => { this.pick(suggestion); }}>
+              <button type="button" class=${`ui-button ui-selection-option ${index === this.selected ? "selected" : ""}`} @click=${() => { this.pick(suggestion); }}>
                 ${suggestion.path}
               </button>
             `)}
             ${!this.loading && !this.suggestionError && this.suggestions.length === 0 ? html`<div class="hint">No matching folders. Enter a new path to create it.</div>` : null}
           </div>
-          <label class="check">
+          <label class="check ui-checkbox-field">
             <input type="checkbox" .checked=${this.createMissing} @change=${(event: InputEvent) => { this.onCreateMissingChange(event); }} />
             Create the folder if it does not exist
           </label>
           ${this.renderTrustChoice()}
         </div>
-        <footer>
-          <button @click=${() => { this.onCancel?.(); }}>Cancel</button>
-          <button class="primary" ?disabled=${this.path.trim() === ""} @click=${() => { this.submit(); }}>Add project</button>
+        <footer class="ui-dialog-footer">
+          <button class="ui-button" type="button" @click=${() => { this.onCancel?.(); }}>Cancel</button>
+          <button class="ui-button ui-button--primary" type="button" ?disabled=${this.path.trim() === ""} @click=${() => { this.submit(); }}>Add project</button>
         </footer>
+        </form>
       </modal-surface>
     `;
   }
 
-  static override styles = css`
-    :host { position: fixed; inset: 0; z-index: 30; color: var(--pi-text); font: 14px system-ui, sans-serif; }
-    modal-surface { --modal-surface-place-items: start center; --modal-surface-backdrop-padding: min(12dvh, 90px) 0 max(20px, env(safe-area-inset-bottom)); --modal-surface-width: min(720px, calc(100vw - 40px)); --modal-surface-max-height: min(700px, 100%); }
-    header, footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px; border-bottom: 1px solid var(--pi-border); }
-    footer { border-top: 1px solid var(--pi-border); border-bottom: 0; justify-content: end; }
-    .body { display: grid; gap: 12px; padding: 12px; min-height: 0; overflow: auto; }
-    label { display: grid; gap: 6px; color: var(--pi-muted); }
-    input[type="text"], input:not([type]) { box-sizing: border-box; width: 100%; border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-bg); color: var(--pi-text); padding: 9px; font: var(--pi-control-font-size, 16px) var(--pi-control-monospace-font-family, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); }
-    .check { display: flex; grid-template-columns: auto 1fr; align-items: center; color: var(--pi-text); }
-    .suggestions { min-height: 90px; max-height: 320px; overflow: auto; border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); }
-    .suggestions button { display: block; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 0; border-bottom: 1px solid var(--pi-border); border-radius: 0; background: transparent; color: var(--pi-text); padding: 8px 10px; text-align: left; font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-    .suggestions button.selected, .suggestions button:hover { background: var(--pi-selection-bg); }
+  static override styles = [uiDialogStyles, uiFormStyles, uiSelectionStyles, css`
+    :host { --ui-dialog-max-height: 700px; --ui-input-font-family: var(--pi-control-monospace-font-family, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); }
+    .suggestions { min-height: 90px; max-height: 320px; }
+    .suggestions button { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
     .hint { padding: 12px; color: var(--pi-muted); }
     .trust-error { color: var(--pi-danger, #c0392b); }
     .trust-hint, .machine-hint { color: var(--pi-muted); line-height: 1.3; }
     .trust-hint a { color: var(--pi-accent); }
-    button { border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); color: var(--pi-text); padding: 7px 9px; cursor: pointer; }
-    header button { border: 0; background: transparent; color: var(--pi-muted); font-size: 22px; padding: 0 8px; }
-    .primary { border-color: var(--pi-success-border); background: var(--pi-success-border); }
-    button:disabled { opacity: .5; cursor: not-allowed; }
-  `;
+  `];
 }

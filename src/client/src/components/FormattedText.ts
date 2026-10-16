@@ -7,7 +7,7 @@ import { toSafeMarkdownHtml } from "../formatting/markdown";
 import { DEFAULT_CODE_BLOCK_POLICY, type CodeBlockPolicy } from "../formatting/codeBlockPolicy";
 import { rememberExternalMarkdownImageDimensions, restoreExternalMarkdownImageDimensions } from "../formatting/externalMarkdownImages";
 import type { MarkdownWorkspaceContext, WorkspaceFileOpenRequest } from "../formatting/workspaceLinks";
-import { formattedTextStyles } from "./shared";
+import { formattedTextStyles } from "./formattedTextStyles";
 import { codeBlockFrameStyles } from "./codeBlockFrameStyles";
 
 @customElement("formatted-text")

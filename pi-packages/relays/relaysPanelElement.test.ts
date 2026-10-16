@@ -11,6 +11,7 @@ import {
 
 interface RelaysPanelTestElement extends HTMLElement {
   context: WorkspacePanelContext | undefined;
+  uiCssText: string;
 }
 
 declare global {
@@ -22,6 +23,39 @@ declare global {
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
+});
+
+describe("host UI styles", () => {
+  it("adopts initial and updated CSS as text without replacing regions or controls", async () => {
+    defineRelaysPanelElement();
+    const panel = document.createElement(relaysPanelTagName);
+    const cssText = '.ui-button { color: red; } /* </style><div id="injected"></div> */';
+    panel.uiCssText = cssText;
+    document.body.append(panel);
+    panel.context = panelContext(twoRelays());
+    await flushAsync();
+
+    const root = shadow(panel);
+    const style = root.querySelector("style[data-ui-styles]");
+    expect(style?.textContent).toBe(cssText);
+    expect(root.querySelector("#injected")).toBeNull();
+    const regions = [root.querySelector(".toolbar"), root.querySelector(".document-tabs"), root.querySelector(".viewer")];
+    const tab = activeTab(panel);
+    panel.uiCssText = ".ui-tab { color: blue; }";
+
+    expect(root.querySelector("style[data-ui-styles]")).toBe(style);
+    expect(style?.textContent).toBe(".ui-tab { color: blue; }");
+    expect(root.querySelectorAll("style[data-ui-styles]")).toHaveLength(1);
+    expect(root.querySelector(".toolbar")).toBe(regions[0]);
+    expect(root.querySelector(".document-tabs")).toBe(regions[1]);
+    expect(root.querySelector(".viewer")).toBe(regions[2]);
+    expect(activeTab(panel)).toBe(tab);
+    expect(root.querySelector(".toolbar")?.classList.contains("ui-toolbar")).toBe(true);
+    expect(root.querySelector("[data-refresh]")?.classList.contains("ui-button--icon")).toBe(true);
+    expect(picker(panel)?.classList.contains("ui-select")).toBe(true);
+    expect(root.querySelector(".document-tabs")?.classList.contains("ui-tabs")).toBe(true);
+    expect(tab?.matches("button.ui-button.ui-tab[aria-current='page']")).toBe(true);
+  });
 });
 
 describe("workspace states", () => {
@@ -997,7 +1031,7 @@ function tabNames(panel: RelaysPanelTestElement): string[] {
 }
 
 function activeTab(panel: RelaysPanelTestElement): Element | null {
-  return shadow(panel).querySelector("button[data-document-path].active");
+  return shadow(panel).querySelector("button[data-document-path].selected");
 }
 
 function tabNamed(panel: RelaysPanelTestElement, name: string): HTMLElement {

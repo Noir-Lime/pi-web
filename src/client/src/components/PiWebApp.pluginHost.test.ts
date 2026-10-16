@@ -27,7 +27,7 @@ import { PluginRegistry } from "../plugins/registry";
 import { adaptPublicPlugin } from "../plugins/publicContext";
 import type { PiWebPlugin, PiWebPluginRegistration, PiWebPluginRegistrationDeclaration, PluginCapability, PluginRuntimeContext, SessionLabelContext, WorkspaceInvalidation, WorkspacePanelContext, WorkspacePanelNavigationV1 } from "../plugins/types";
 import { PiWebApp } from "./PiWebApp";
-import { html, render } from "lit";
+import { html, LitElement, render } from "lit";
 import { WorkspacePanel } from "./WorkspacePanel";
 import { AppNavigationPanel } from "./appShell/AppNavigationPanel";
 import { SessionList } from "./SessionList";
@@ -170,6 +170,7 @@ describe("PiWebApp plugin host", () => {
     const shell: unknown = Reflect.get(app, "appShell");
     if (!(shell instanceof AppShellController)) throw new Error("App shell unavailable");
     shell.isMobileNavigationLayout = width <= 760;
+    shell.isDesktopSideBySideLayout = width > 1180;
     await markPluginLoadingReady(app);
     await appPluginRegistry(app).register({ id: "files", plugin: pluginWithPanel("Files", vi.fn()) });
     setAppState(app, {
@@ -194,7 +195,10 @@ describe("PiWebApp plugin host", () => {
     expect(warning?.querySelector("button")).toBeNull();
     expect(appState(app).browserErrors).toEqual({});
     expect(host.querySelector(".shell")?.classList.contains(width <= 760 ? "navigation-view" : "workspace-view")).toBe(true);
-    expect(panel.shadowRoot?.querySelector('button[aria-label="Files"]')?.getAttribute("aria-pressed")).toBe("true");
+    const toolTabs = panel.hideToolTabs ? host.querySelector("app-mobile-main-tabs") : panel;
+    if (!(toolTabs instanceof LitElement)) throw new Error("Tool tabs were not rendered");
+    await toolTabs.updateComplete;
+    expect(toolTabs.shadowRoot?.querySelector('button[aria-label="Files"]')?.getAttribute("aria-pressed")).toBe(String(width > 760));
     expect(panel.shadowRoot?.querySelector(".panel-content")?.textContent).toContain("Files");
     expect(panel.error).toBe("");
     expect(browser.url.href).toBe(originalUrl);
@@ -229,6 +233,7 @@ describe("PiWebApp plugin host", () => {
       const shell: unknown = Reflect.get(app, "appShell");
       if (!(shell instanceof AppShellController)) throw new Error("App shell unavailable");
       shell.isMobileNavigationLayout = mobile;
+      shell.isDesktopSideBySideLayout = !mobile;
       await markPluginLoadingReady(app);
       await appPluginRegistry(app).register({ id: "files", plugin: pluginWithPanel("Files", vi.fn()) });
       setAppState(app, {
@@ -249,14 +254,17 @@ describe("PiWebApp plugin host", () => {
       expect(host.querySelector(".shell")?.classList.contains(`${expectedView}-view`)).toBe(true);
       if (validView) expect(host.textContent).not.toContain("Unknown view:");
       else expect(host.querySelector('.error.warning[role="alert"]')?.textContent).toContain(`Unknown view: ${view}`);
-      expect(panel.shadowRoot?.querySelector('button[aria-label="Files"]')?.getAttribute("aria-pressed")).toBe(String(selected));
+      const toolTabs = mobile ? host.querySelector("app-mobile-main-tabs") : panel;
+      if (!(toolTabs instanceof LitElement)) throw new Error("Tool tabs were not rendered");
+      await toolTabs.updateComplete;
+      expect(toolTabs.shadowRoot?.querySelector('button[aria-label="Files"]')?.getAttribute("aria-pressed")).toBe(String(selected && (!mobile || expectedView === "workspace")));
       if (selected) {
         expect(appState(app).workspaceTool).toBe("files:workspace.panel");
         expect(panel.shadowRoot?.querySelector(".panel-content")?.textContent).toContain("Files");
       } else if (tool === undefined) {
         // Omission uses the default tool; the invalid view must not select Files.
         expect(appState(app).workspaceTool).toBe(TERMINAL_PANEL_ID);
-        expect(panel.shadowRoot?.querySelector('button[aria-label="Terminal"]')?.getAttribute("aria-pressed")).toBe("true");
+        expect(toolTabs.shadowRoot?.querySelector('button[aria-label="Terminal"]')?.getAttribute("aria-pressed")).toBe(String(!mobile || expectedView === "workspace"));
         expect(panel.shadowRoot?.querySelector(".panel-content")).not.toBeNull();
       } else {
         expect(panel.shadowRoot?.querySelector(".selected, [aria-pressed=true]")).toBeNull();
@@ -4469,6 +4477,10 @@ function createApp(): PiWebApp {
 
 function createDetachedApp(): PiWebApp {
   const app = new PiWebApp();
+  const shell: unknown = Reflect.get(app, "appShell");
+  if (!(shell instanceof AppShellController)) throw new Error("App shell unavailable");
+  // Detached fixtures do not receive browser media-query updates. Default to desktop tabs.
+  shell.isDesktopSideBySideLayout = true;
   testApps.add(app);
   return app;
 }

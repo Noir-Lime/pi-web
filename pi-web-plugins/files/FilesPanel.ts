@@ -1,5 +1,5 @@
 import type { ContentRenderingCapability, FileTreeEntry, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
-import { css, html, LitElement, type PropertyValues, type TemplateResult } from "lit";
+import { css, html, LitElement, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, query, state } from "lit/decorators.js";
 import {
   FilesRuntime,
@@ -21,6 +21,7 @@ export class WorkspaceFilesPanel extends LitElement {
   @property({ attribute: false }) context: WorkspacePanelContext | undefined;
   @property({ attribute: false }) runtime: FilesRuntime | undefined;
   @property({ attribute: false }) contentRendering: ContentRenderingCapability | undefined;
+  @property({ attribute: false }) uiCssText = "";
   @query("#workspace-upload-input") private uploadInput?: HTMLInputElement;
   @query("dialog.upload-dialog") private uploadDialog?: HTMLDialogElement;
   @state() private pendingUpload: PendingWorkspaceUploadReview | undefined;
@@ -100,6 +101,7 @@ export class WorkspaceFilesPanel extends LitElement {
       return options?.download === true ? files.downloadUrl(path, reference) : files.previewUrl(path, reference);
     };
     return html`
+      <style data-ui-styles>${this.uiCssText}</style>
       <section
         class=${this.dragActive ? "files-panel dragging" : "files-panel"}
         @dragenter=${this.handleDragEnter}
@@ -107,20 +109,20 @@ export class WorkspaceFilesPanel extends LitElement {
         @dragleave=${this.handleDragLeave}
         @drop=${this.handleDrop}
       >
-        <section class="toolbar">
-          <strong>Files</strong>
+        <section class="toolbar ui-toolbar">
+          <strong class="ui-toolbar-title">Files</strong>
           ${scope.treeLoading ? html`<span class="muted">loading…</span>` : null}
           ${scope.treeStale ? html`<span class="stale">stale</span>` : null}
-          <div class="toolbar-actions">
-            <button @click=${this.openFilePicker}>Upload</button>
-            <button @click=${() => { void runtime.refreshFiles(context); }}>Refresh</button>
+          <div class="toolbar-actions ui-toolbar-group">
+            <button class="ui-button" @click=${this.openFilePicker}>Upload</button>
+            <button class="ui-button" @click=${() => { void runtime.refreshFiles(context); }}>Refresh</button>
           </div>
           <input id="workspace-upload-input" class="visually-hidden" type="file" multiple @change=${this.handleFileInputChange} />
         </section>
         ${scope.error === undefined ? null : html`<p class="files-error" role="alert">${scope.error}</p>`}
         ${this.renderUploadProgress(context, runtime, scope)}
         <section class="split">
-          <div class="list tree">
+          <div class="list tree ui-file-list">
             ${scope.fileTree.length === 0 ? html`<p class="muted">No files loaded.</p>` : scope.fileTree.map((entry) => this.renderTreeEntry(context, runtime, scope, entry, 0))}
           </div>
           <div class="viewer">
@@ -185,12 +187,12 @@ export class WorkspaceFilesPanel extends LitElement {
     const hasChildren = children !== undefined;
     const selected = entry.type !== "directory" && scope.selectedFilePath === entry.path;
     return html`
-      <button class=${selected ? "row selected" : "row"} style=${`--depth:${String(depth)}`} @click=${() => {
+      <button type="button" class=${`row ui-button ui-file-row ${selected ? "selected" : ""}`} style=${`--depth:${String(depth)}`} title=${entry.path} aria-current=${selected ? "page" : nothing} aria-expanded=${entry.type === "directory" ? String(hasChildren) : nothing} @click=${() => {
         if (entry.type === "directory") void runtime.expandDir(context, entry.path);
         else void runtime.selectFile(context, entry.path);
       }}>
-        <span>${entry.type === "directory" ? (hasChildren ? "▾" : "▸") : "·"}</span>
-        <span>${entry.name}</span>
+        <span class="ui-file-leading" aria-hidden="true">${entry.type === "directory" ? (hasChildren ? "▾" : "▸") : html`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"></path><path d="M14 2v6h6"></path></svg>`}</span>
+        <span class="ui-file-label">${entry.name}</span>
       </button>
       ${hasChildren ? children.map((child) => this.renderTreeEntry(context, runtime, scope, child, depth + 1)) : null}
     `;
@@ -439,8 +441,10 @@ export class WorkspaceFilesPanel extends LitElement {
   static override styles = css`
     :host { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; color: var(--pi-text); background: var(--pi-bg); font: 13px system-ui, sans-serif; container-type: inline-size; }
     .files-panel { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
-    .toolbar { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 8px; border-bottom: 1px solid var(--pi-border-muted); }
-    .toolbar-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+    .toolbar { gap: 8px; padding-inline-start: 10px; }
+    .toolbar .ui-toolbar-title { flex: 0 0 auto; font-weight: 500; }
+    .toolbar > .muted, .toolbar > .stale { align-self: center; }
+    .toolbar-actions { margin-inline-start: auto; }
     button { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--pi-border); border-radius: 7px; background: var(--pi-surface); color: var(--pi-text); padding: 5px 7px; cursor: pointer; }
     button:focus-visible, input:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 1px; }
     .muted { color: var(--pi-muted); }
@@ -449,10 +453,7 @@ export class WorkspaceFilesPanel extends LitElement {
     .capability-error { box-sizing: border-box; width: min(100%, 420px); margin: auto; display: grid; gap: 8px; color: var(--pi-danger); padding: 24px; text-align: center; }
     .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
     .split { flex: 1 1 auto; min-height: 0; display: grid; grid-template-rows: minmax(160px, 34%) minmax(0, 1fr); }
-    .list { min-height: 0; overflow: auto; border-bottom: 1px solid var(--pi-border); padding: 6px; }
-    .row { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 4px; width: 100%; border: 0; border-radius: 5px; background: transparent; text-align: left; padding: 4px 6px 4px calc(6px + var(--depth, 0) * 14px); }
-    .row:hover, .row.selected { background: var(--pi-selection-bg); }
-    .row span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .list { border-bottom: 1px solid var(--pi-border); }
     .viewer { min-height: 0; overflow: auto; display: flex; flex-direction: column; }
     pi-web-files-viewer { flex: 1 1 auto; min-height: 0; }
     p { margin: 10px; }

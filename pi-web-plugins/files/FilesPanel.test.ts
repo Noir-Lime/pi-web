@@ -15,6 +15,19 @@ afterEach(() => {
 });
 
 describe("Files panel component boundary", () => {
+  it("adopts host styles as text without replacing file rows", async () => {
+    const context = createContext({ files: createFiles({ listFiles: () => Promise.resolve(treeResponse("", [{ name: "README.md", path: "README.md", type: "file" }])) }) });
+    const panel = await mountPanel(context);
+    await vi.waitFor(() => { expect(panel.shadowRoot?.querySelector(".ui-file-row")).not.toBeNull(); });
+    const row = panel.shadowRoot?.querySelector(".ui-file-row");
+    const cssText = '.ui-file-row { color: red; } /* </style><span id="injected"></span> */';
+    panel.uiCssText = cssText;
+    await panel.updateComplete;
+    expect(panel.shadowRoot?.querySelector("style[data-ui-styles]")?.textContent).toBe(cssText);
+    expect(panel.shadowRoot?.querySelector("#injected")).toBeNull();
+    expect(panel.shadowRoot?.querySelector(".ui-file-row")).toBe(row);
+  });
+
   it("loads and renders the tree, wires expansion/selection, and passes content to the viewer", async () => {
     const listFiles = vi.fn<WorkspaceFilesCapabilityV1["listFiles"]>((path) => Promise.resolve(path === ""
       ? treeResponse("", [{ name: "src", path: "src", type: "directory" }, { name: "README.md", path: "README.md", type: "file" }])
@@ -24,10 +37,13 @@ describe("Files panel component boundary", () => {
     const panel = await mountPanel(context);
 
     await vi.waitFor(() => { expect(panel.shadowRoot?.textContent).toContain("README.md"); });
+    expect(buttonWithText(panel.shadowRoot, "src").getAttribute("aria-expanded")).toBe("false");
     buttonWithText(panel.shadowRoot, "src").click();
     await vi.waitFor(() => { expect(buttonWithText(panel.shadowRoot, "main.ts")).toBeDefined(); });
+    expect(buttonWithText(panel.shadowRoot, "src").getAttribute("aria-expanded")).toBe("true");
     buttonWithText(panel.shadowRoot, "README.md").click();
     await vi.waitFor(() => {
+      expect(buttonWithText(panel.shadowRoot, "README.md").getAttribute("aria-current")).toBe("page");
       const viewer = requiredElement(panel.shadowRoot?.querySelector<HTMLElement & { selectedPath?: string; file?: FileContentResponse }>("pi-web-files-viewer"), "Files viewer");
       expect(viewer.selectedPath).toBe("README.md");
       expect(viewer.file?.content).toBe("contents:README.md");

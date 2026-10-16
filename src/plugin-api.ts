@@ -223,6 +223,16 @@ export interface ContentMarkdownRenderRequest {
   allowManualPreview?: boolean;
 }
 
+/**
+ * Host-owned native button/select/toolbar/tab and compact file/tree-row styles. Request the capability
+ * { pluginId: "pi-web", id: "ui-styles", version: 1, parse } during plugin start.
+ * Apply cssText with a style element inside the panel's own shadow root.
+ * Class, markup, and state contract: https://pi-web.dev/plugins#host-provided-ui-styles.
+ */
+export interface UiStylesCapabilityV1 {
+  readonly cssText: string;
+}
+
 /** Host capability token: { pluginId: "pi-web", id: "content-rendering", version: 1, parse }. */
 export interface ContentRenderingCapability {
   /** Eligible choices in source plugin ID order, then local contribution ID order. */
