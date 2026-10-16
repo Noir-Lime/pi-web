@@ -1,7 +1,7 @@
 import { LitElement, css, html } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { writeClipboardText } from "../clipboard";
-import type { ToolExecutionPart } from "./shared";
+import type { ToolExecutionPart } from "../chatTypes";
 import { uiButtonStyles } from "./ui/controlStyles";
 import { uiTranscriptStyles } from "./ui/transcriptStyles";
 

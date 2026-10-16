@@ -1,5 +1,5 @@
 import type { DisplayedMessageActionAvailabilityContext, DisplayedMessageActionMessage, MessageActionAvailabilityContext, MessageActionContribution, MessageActionMessage } from "../../../plugin-api";
-import type { ChatLine } from "../components/shared";
+import type { ChatLine } from "../chatTypes";
 import type { WorkspacePluginBinding } from "./types";
 
 export type RegisteredMessageAction = MessageActionContribution & {

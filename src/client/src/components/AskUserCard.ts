@@ -3,6 +3,8 @@ import { customElement, property, state } from "lit/decorators.js";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { uiButtonStyles } from "./ui/controlStyles";
 import { uiTranscriptStyles } from "./ui/transcriptStyles";
+import { uiTranscriptCardStyles } from "./ui/transcriptCardStyles";
+import { uiFormStyles } from "./ui/formStyles";
 import {
   ASK_USER_OTHER_TEXT_MAX_LENGTH,
   type AskUserOutcome,
@@ -74,9 +76,9 @@ export class AskUserCard extends LitElement {
     const unanswered = unansweredQuestions(ask.questions, this.answers);
     return html`
       <article class="ui-transcript-surface card open-card" aria-labelledby="ask-user-heading">
-        <header class="card-header">
+        <header class="ui-transcript-card-header card-header">
           <h2 id="ask-user-heading">Questions</h2>
-          <span class="header-status" role="status" aria-live="polite" aria-atomic="true">
+          <span class="ui-transcript-card-status header-status" role="status" aria-live="polite" aria-atomic="true">
             ${count} of ${ask.questions.length} answered
           </span>
         </header>
@@ -150,7 +152,7 @@ export class AskUserCard extends LitElement {
           ${customSelected ? html`
             <label class="other-answer" for=${this.otherInputId(index)}>
               <span>Custom answer</span>
-              <textarea
+              <textarea class="ui-input"
                 id=${this.otherInputId(index)}
                 rows="3"
                 maxlength=${String(ASK_USER_OTHER_TEXT_MAX_LENGTH)}
@@ -188,7 +190,7 @@ export class AskUserCard extends LitElement {
   private renderClosedAsk(ask: AskUserRequest): TemplateResult {
     return html`
       <details class="ui-transcript-surface card closed-card">
-        <summary class="ui-transcript-disclosure card-header"><h2><span class="disclosure-indicator" aria-hidden="true">▸</span> Questions</h2><span class="header-status">Closed · ${ask.questions.length} questions</span></summary>
+        <summary class="ui-transcript-disclosure ui-transcript-card-header card-header"><h2>Questions</h2><span class="ui-transcript-card-status header-status">Closed · ${ask.questions.length} questions</span></summary>
         ${this.outcomes.map((outcome) => html`<p class="record-summary">${outcome.summary}</p>`)}
         <div class="record-questions">
           ${ask.questions.map((question, index) => html`
@@ -224,9 +226,9 @@ export class AskUserCard extends LitElement {
         : "Cancelled";
     return html`
       <article class="ui-transcript-surface card record-card" aria-labelledby="ask-user-record-heading">
-        <header class="card-header">
+        <header class="ui-transcript-card-header card-header">
           <h2 id="ask-user-record-heading">${this.compact ? "Answers" : "Questions"}</h2>
-          <span class=${`header-status ${outcome.reason}`}>${recordLabel}</span>
+          <span class=${`ui-transcript-card-status header-status ${outcome.reason} ${outcome.reason === "submitted" ? "ui-transcript-card-status--success" : outcome.reason === "superseded" ? "ui-transcript-card-status--warning" : ""}`}>${recordLabel}</span>
         </header>
         <p class="record-summary">
           ${outcome.reason === "superseded"
@@ -435,7 +437,7 @@ export class AskUserCard extends LitElement {
     return `ask-user-record-question-${String(index)}`;
   }
 
-  static override styles = [uiButtonStyles, uiTranscriptStyles, css`
+  static override styles = [uiButtonStyles, uiFormStyles, uiTranscriptStyles, uiTranscriptCardStyles, css`
     :host {
       display: block;
       box-sizing: border-box;
@@ -449,17 +451,7 @@ export class AskUserCard extends LitElement {
       --question-number-column: 25px;
       --question-copy-gap: 5px;
     }
-    .card-header {
-      position: sticky;
-      top: var(--pi-chat-sticky-top, 0px);
-      z-index: 6;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      background: var(--pi-surface);
-    }
-    .card-header:not(.ui-transcript-disclosure) { min-height: 22px; padding: 7px 10px 6px; }
+    .card { --ui-transcript-card-header-padding: 7px 10px 6px; }
     h2, h3, p { margin-top: 0; }
     h2 {
       margin-bottom: 0;
@@ -468,9 +460,6 @@ export class AskUserCard extends LitElement {
       line-height: 1.3;
       text-transform: uppercase;
     }
-    .header-status { flex: 0 1 auto; color: var(--pi-muted); font-size: 11px; text-align: end; }
-    .header-status.submitted { color: var(--pi-success); }
-    .header-status.superseded { color: var(--pi-warning); }
     .questions { display: grid; padding-top: 8px; }
     fieldset.question {
       min-width: 0;
@@ -524,24 +513,13 @@ export class AskUserCard extends LitElement {
     .option:has(input:checked) { background: var(--pi-selection-bg); }
     .option:has(input:focus-visible) { outline: 2px solid var(--pi-accent); outline-offset: -2px; }
     input { margin: 2px 0 0; accent-color: var(--pi-accent); }
-    input:focus-visible, textarea:focus-visible, .question-jump:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 2px; }
+    input:focus-visible, .question-jump:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 2px; }
     .option-copy { min-width: 0; display: grid; gap: 2px; }
     .option-label { line-height: 1.35; }
     .option-detail { color: var(--pi-muted); font-size: 12px; line-height: 1.35; white-space: pre-wrap; overflow-wrap: anywhere; }
     .other-answer { display: grid; gap: 5px; color: var(--pi-muted); font-size: 12px; padding: 4px 8px 4px 32px; }
     .other-answer:only-child { padding-left: 0; padding-right: 0; }
-    textarea {
-      box-sizing: border-box;
-      width: 100%;
-      min-height: 68px;
-      resize: vertical;
-      border: 1px solid var(--pi-border);
-      border-radius: 8px;
-      background: var(--pi-bg);
-      color: var(--pi-text);
-      padding: 8px;
-      font: var(--pi-control-font-size, 16px)/1.4 var(--pi-control-font-family, system-ui, sans-serif);
-    }
+    textarea { min-height: 68px; resize: vertical; }
     .form-footer {
       display: flex;
       align-items: center;
@@ -566,8 +544,6 @@ export class AskUserCard extends LitElement {
     }
     .confirmation-actions { flex: 0 0 auto; display: flex; align-items: stretch; gap: 0; }
     .closed-card > summary { cursor: pointer; position: static; }
-    .disclosure-indicator { display: inline-block; }
-    .closed-card[open] .disclosure-indicator { transform: rotate(90deg); }
     .offered-options { display: grid; gap: 5px; margin: 0 0 12px; padding-left: 22px; color: var(--pi-muted); }
     .offered-options .option-detail { margin: 2px 0 0; }
     .record-summary { margin: 0; color: var(--pi-muted); padding: 12px 16px; font-size: 12px; }

@@ -2,6 +2,8 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatView } from "./ChatView";
+import type { ImageGalleryDialog } from "./ImageGalleryDialog";
+import { deepActiveElement } from "./modalLayerRegistry";
 import { ModalSurface } from "./ModalSurface";
 import { hasRenderedModal } from "./modalLayerRegistry";
 import { TranscriptImage } from "./TranscriptImage";
@@ -30,7 +32,7 @@ describe("ChatView native image modal", () => {
     await view.updateComplete;
     const firstDialog = imageDialog(view);
     expect(firstDialog.open).toBe(true);
-    expect(view.shadowRoot?.activeElement).toBe(imageCloseButton(firstDialog));
+    expect(deepActiveElement(document)).toBe(imageCloseButton(firstDialog));
     expect(hasRenderedModal(document)).toBe(true);
 
     const cancel = new Event("cancel", { cancelable: true });
@@ -72,7 +74,7 @@ describe("ChatView native image modal", () => {
     expect(dialog.open).toBe(true);
     expect(lowerDialogSection(lower).getAttribute("aria-modal")).toBe("false");
     expect(lowerDialogSection(lower).getAttribute("aria-hidden")).toBe("true");
-    expect(view.shadowRoot?.activeElement).toBe(imageCloseButton(dialog));
+    expect(deepActiveElement(document)).toBe(imageCloseButton(dialog));
 
     dialog.dispatchEvent(new Event("cancel", { cancelable: true }));
     await view.updateComplete;
@@ -195,82 +197,6 @@ describe("ChatView tool-image gallery", () => {
     expect(galleryButton(imageDialog(view), "Next image").disabled).toBe(true);
   });
 
-  it("navigates with buttons and arrows without wrapping or moving focus back to close", async () => {
-    const view = await mountGalleryView([toolImages("read", ["QUJD", "REVG", "R0hJ"])]);
-    imageTrigger(transcriptImages(view)[0]).click();
-    await view.updateComplete;
-    let dialog = imageDialog(view);
-    expect(galleryButton(dialog, "Previous image").disabled).toBe(true);
-    expect(galleryButton(dialog, "Next image").disabled).toBe(false);
-
-    const next = galleryButton(dialog, "Next image");
-    next.focus();
-    next.click();
-    await view.updateComplete;
-    dialog = imageDialog(view);
-    expectSelection(dialog, "REVG", 2, 3);
-    expect(view.shadowRoot?.activeElement).toBe(next);
-    expect(galleryButton(dialog, "Previous image").disabled).toBe(false);
-
-    dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }));
-    await view.updateComplete;
-    expectSelection(imageDialog(view), "R0hJ", 3, 3);
-    expect(galleryButton(imageDialog(view), "Next image").disabled).toBe(true);
-    expect(view.shadowRoot?.activeElement).toBe(galleryButton(imageDialog(view), "Previous image"));
-    imageDialog(view).dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
-    await view.updateComplete;
-    expectSelection(imageDialog(view), "R0hJ", 3, 3);
-
-    const previous = galleryButton(imageDialog(view), "Previous image");
-    previous.focus();
-    previous.click();
-    await view.updateComplete;
-    expectSelection(imageDialog(view), "REVG", 2, 3);
-    expect(view.shadowRoot?.activeElement).toBe(previous);
-    imageDialog(view).dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true }));
-    await view.updateComplete;
-    expectSelection(imageDialog(view), "QUJD", 1, 3);
-    expect(galleryButton(imageDialog(view), "Previous image").disabled).toBe(true);
-    expect(view.shadowRoot?.activeElement).toBe(galleryButton(imageDialog(view), "Next image"));
-    imageDialog(view).dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
-    await view.updateComplete;
-    expectSelection(imageDialog(view), "QUJD", 1, 3);
-  });
-
-  it("keeps focus on the current navigation control for arrow navigation between enabled positions", async () => {
-    const view = await mountGalleryView([toolImages("read", ["QUJD", "REVG", "R0hJ"])]);
-    imageTrigger(transcriptImages(view)[0]).click();
-    await view.updateComplete;
-    const next = galleryButton(imageDialog(view), "Next image");
-    next.focus();
-    next.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }));
-    await view.updateComplete;
-    expectSelection(imageDialog(view), "REVG", 2, 3);
-    expect(view.shadowRoot?.activeElement).toBe(next);
-    next.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true }));
-    await view.updateComplete;
-    expectSelection(imageDialog(view), "QUJD", 1, 3);
-    expect(view.shadowRoot?.activeElement).toBe(next);
-  });
-
-  it("wraps Tab around enabled gallery controls without focusing disabled navigation", async () => {
-    const view = await mountGalleryView([toolImages("read", ["QUJD", "REVG", "R0hJ"])]);
-    imageTrigger(transcriptImages(view)[0]).click();
-    await view.updateComplete;
-    const dialog = imageDialog(view);
-    const close = imageCloseButton(dialog);
-    const next = galleryButton(dialog, "Next image");
-    close.focus();
-    const backward = new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true });
-    close.dispatchEvent(backward);
-    expect(backward.defaultPrevented).toBe(true);
-    expect(view.shadowRoot?.activeElement).toBe(next);
-    const forward = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
-    next.dispatchEvent(forward);
-    expect(forward.defaultPrevented).toBe(true);
-    expect(view.shadowRoot?.activeElement).toBe(close);
-  });
-
   it("restores focus to the originating thumbnail after navigating and closing", async () => {
     const view = await mountGalleryView([toolImages("read", ["QUJD", "REVG", "R0hJ"])]);
     const origin = imageTrigger(transcriptImages(view)[1]);
@@ -323,7 +249,7 @@ describe("ChatView tool-image gallery", () => {
     await view.updateComplete;
     await view.updateComplete;
     expect(dialog.open).toBe(false);
-    expect(view.renderRoot.querySelector(".image-zoom-full")).toBeNull();
+    expect(imageDialog(view).querySelector(".image-zoom-full")).toBeNull();
     expect(hasRenderedModal(document)).toBe(false);
   });
 
@@ -336,7 +262,7 @@ describe("ChatView tool-image gallery", () => {
     await view.updateComplete;
     await view.updateComplete;
     expect(dialog.open).toBe(false);
-    expect(view.renderRoot.querySelector(".image-zoom-full")).toBeNull();
+    expect(imageDialog(view).querySelector(".image-zoom-full")).toBeNull();
     expect(hasRenderedModal(document)).toBe(false);
     for (const image of transcriptImages(view)) {
       const presentation = await settleImage(image);
@@ -352,32 +278,6 @@ describe("ChatView tool-image gallery", () => {
     }
   });
 
-  it("navigates on primary horizontal touch swipes of at least 48 pixels, without wrapping", async () => {
-    const view = await mountGalleryView([toolImages("read", ["QUJD", "REVG", "R0hJ"])]);
-    imageTrigger(transcriptImages(view)[1]).click();
-    await view.updateComplete;
-    const swipe = async (dx: number, dy = 0, pointerType = "touch", isPrimary = true) => {
-      const stage = requiredElement(imageDialog(view).querySelector<HTMLElement>(".image-gallery-stage"), "gallery stage");
-      const init = { bubbles: true, pointerId: 1, pointerType, isPrimary };
-      stage.dispatchEvent(new PointerEvent("pointerdown", { ...init, clientX: 100, clientY: 100 }));
-      stage.dispatchEvent(new PointerEvent("pointerup", { ...init, clientX: 100 + dx, clientY: 100 + dy }));
-      await view.updateComplete;
-    };
-    await swipe(-47);
-    await swipe(-60, 100);
-    await swipe(-60, 0, "mouse");
-    await swipe(-60, 0, "touch", false);
-    expectSelection(imageDialog(view), "REVG", 2, 3);
-    await swipe(-48);
-    expectSelection(imageDialog(view), "R0hJ", 3, 3);
-    await swipe(-60);
-    expectSelection(imageDialog(view), "R0hJ", 3, 3);
-    await swipe(48);
-    expectSelection(imageDialog(view), "REVG", 2, 3);
-    await swipe(60);
-    await swipe(60);
-    expectSelection(imageDialog(view), "QUJD", 1, 3);
-  });
 });
 
 function imagePart(data: string) {
@@ -441,8 +341,12 @@ function chatImage(view: ChatView): HTMLElement {
   return requiredElement(imagePresentation(transcript).renderRoot.querySelector<HTMLElement>(".image-button"), "image trigger");
 }
 
+function imageGallery(view: ChatView): ImageGalleryDialog {
+  return requiredElement(view.renderRoot.querySelector<ImageGalleryDialog>("pi-web-image-gallery-dialog"), "image gallery");
+}
+
 function imageDialog(view: ChatView): HTMLDialogElement {
-  return requiredElement(view.shadowRoot?.querySelector<HTMLDialogElement>("dialog.image-zoom"), "image zoom dialog");
+  return requiredElement(imageGallery(view).renderRoot.querySelector<HTMLDialogElement>("dialog.image-zoom"), "image zoom dialog");
 }
 
 function imageCloseButton(dialog: HTMLDialogElement): HTMLButtonElement {

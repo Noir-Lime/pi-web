@@ -3,7 +3,7 @@ import { customElement, property } from "lit/decorators.js";
 import type { SessionRef } from "../../../shared/apiTypes";
 import { isSessionMediaId, validImageDimensions } from "../../../shared/sessionMedia";
 import { sessionMediaUrl } from "../api/urls";
-import type { ChatImagePart } from "./shared";
+import type { ChatImagePart } from "../chatTypes";
 import "./ImagePresentation";
 
 export function transcriptImageSource(part: ChatImagePart, session?: SessionRef, machineId = "local"): { src: string; alt: string } | undefined {

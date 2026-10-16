@@ -77,6 +77,19 @@ describe("queued message actions", () => {
     expect(view.onQueuedMessageAction).not.toHaveBeenCalled();
   });
 
+  it("does not show copy feedback in a different session", async () => {
+    let finishCopy: ((copied: boolean) => void) | undefined;
+    vi.mocked(writeClipboardText).mockImplementationOnce(() => new Promise<boolean>((resolve) => { finishCopy = resolve; }));
+    const view = await queuedView();
+    button(view, '[aria-label="Copy queued message"]').click();
+    view.sessionId = "another-session";
+    await view.updateComplete;
+    finishCopy?.(true);
+    await Promise.resolve();
+    await view.updateComplete;
+    expect(view.shadowRoot?.textContent).not.toContain("Copied");
+  });
+
   it.each([['[aria-label="Switch to Queue"]', "toggle"], ['[title^="Recall this message"]', "edit"], ['[aria-label="Remove queued message"]', "remove"]])("wires %s to its queue snapshot", async (selector, action) => {
     const view = await queuedView();
     button(view, selector).click();

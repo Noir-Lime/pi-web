@@ -3,6 +3,8 @@ import { customElement, property, state } from "lit/decorators.js";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { uiButtonStyles } from "./ui/controlStyles";
 import { uiTranscriptStyles } from "./ui/transcriptStyles";
+import { uiTranscriptCardStyles } from "./ui/transcriptCardStyles";
+import { uiFormStyles } from "./ui/formStyles";
 import {
   EXTENSION_DIALOG_INPUT_MAX_LENGTH,
   type ExtensionDialogAnswer,
@@ -129,14 +131,14 @@ export class ExtensionDialogCard extends LitElement {
     const countdown = extensionDialogCountdownText(dialog.timeoutAt, this.countdownNow === 0 ? Date.now() : this.countdownNow);
     return html`
       <article class="ui-transcript-surface card open-card" aria-labelledby="extension-dialog-heading">
-        <header class="card-header">
+        <header class="ui-transcript-card-header card-header">
           <h2 id="extension-dialog-heading">${dialog.title}</h2>
           ${countdown === undefined
             ? null
             // Decorative only — no live region: a polite region would queue one
             // announcement per second. The daemon-owned dialog.closed event is
             // the real signal, and the settled card announces the outcome.
-            : html`<span class="header-status countdown">${countdown}</span>`}
+            : html`<span class="ui-transcript-card-status header-status countdown">${countdown}</span>`}
         </header>
         ${this.renderOpenBody(dialog)}
       </article>
@@ -177,7 +179,7 @@ export class ExtensionDialogCard extends LitElement {
     return html`
       <form class="dialog-input-form" @submit=${(event: SubmitEvent) => { this.submitInput(event, dialog); }}>
         <input
-          class="dialog-input"
+          class="ui-input dialog-input"
           type="text"
           name="dialog-answer"
           aria-label="Your answer"
@@ -198,9 +200,9 @@ export class ExtensionDialogCard extends LitElement {
   private renderClosed(closed: ClosedExtensionDialog): TemplateResult {
     return html`
       <article class="ui-transcript-surface card closed-card" aria-labelledby="extension-dialog-closed-heading">
-        <header class="card-header">
+        <header class="ui-transcript-card-header card-header">
           <h2 id="extension-dialog-closed-heading">${closed.dialog.title}</h2>
-          <span class=${`header-status ${closed.reason}`}>${extensionDialogCloseLabel(closed.reason)}</span>
+          <span class=${`ui-transcript-card-status header-status ${closed.reason} ${closed.reason === "answered" ? "ui-transcript-card-status--success" : closed.reason === "cancelled" ? "" : "ui-transcript-card-status--warning"}`}>${extensionDialogCloseLabel(closed.reason)}</span>
         </header>
         <p class="closed-summary">${extensionDialogCloseSummary(closed)}</p>
         <footer class="dialog-footer">
@@ -271,7 +273,7 @@ export class ExtensionDialogCard extends LitElement {
     this.countdownTimer = undefined;
   }
 
-  static override styles = [uiButtonStyles, uiTranscriptStyles, css`
+  static override styles = [uiButtonStyles, uiFormStyles, uiTranscriptStyles, uiTranscriptCardStyles, css`
     :host {
       display: block;
       box-sizing: border-box;
@@ -280,18 +282,6 @@ export class ExtensionDialogCard extends LitElement {
       color: var(--pi-text);
       font: 14px system-ui, sans-serif;
       container-type: inline-size;
-    }
-    .card-header {
-      position: sticky;
-      top: var(--pi-chat-sticky-top, 0px);
-      z-index: 6;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      min-height: 22px;
-      padding: 8px 16px 7px;
-      background: var(--pi-surface);
     }
     h2, p { margin-top: 0; }
     h2 {
@@ -302,9 +292,7 @@ export class ExtensionDialogCard extends LitElement {
       line-height: 1.35;
       overflow-wrap: anywhere;
     }
-    .header-status { flex: 0 0 auto; color: var(--pi-muted); font-size: 11px; text-align: end; }
-    .header-status.answered { color: var(--pi-success); }
-    .header-status.timeout, .header-status.aborted, .header-status.session-ended { color: var(--pi-warning); }
+    .header-status { flex-shrink: 0; }
     .dialog-message {
       margin: 0;
       padding: 12px 16px;
@@ -322,15 +310,8 @@ export class ExtensionDialogCard extends LitElement {
     }
     .dialog-input-form { display: grid; }
     .dialog-input {
-      box-sizing: border-box;
       width: calc(100% - 32px);
       margin: 12px 16px 0;
-      border: 1px solid var(--pi-border);
-      border-radius: 8px;
-      background: var(--pi-bg);
-      color: var(--pi-text);
-      padding: 8px;
-      font: var(--pi-control-font-size, 16px)/1.4 var(--pi-control-font-family, system-ui, sans-serif);
     }
     .dialog-footer {
       display: flex;
@@ -342,7 +323,6 @@ export class ExtensionDialogCard extends LitElement {
       padding: 12px 16px;
     }
     .dialog-message + .dialog-footer, .dialog-options + .dialog-footer { border-top: 0; }
-    .dialog-input:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 2px; }
     .closed-summary {
       margin: 0;
       padding: 12px 16px;

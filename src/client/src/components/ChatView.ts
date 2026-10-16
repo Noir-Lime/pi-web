@@ -2,44 +2,36 @@ import { LitElement, html, nothing } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import { keyed } from "lit/directives/keyed.js";
-import { live } from "lit/directives/live.js";
+import { ChatMessageActionController } from "./ChatMessageActionController";
+import * as transcript from "./chatTranscriptTemplates";
+import type { TranscriptRenderContext } from "./chatTranscriptTemplates";
 import { ChatDisclosureController } from "../chatDisclosure";
 import { writeClipboardText } from "../clipboard";
-import { queuedMessageAttachmentLabel, type QueuedMessageAction, type QueuedMessageActionTarget } from "../queuedMessageActions";
-import type { DisplayedMessageActionAvailabilityContext, MessageActionAvailabilityContext, MessageActionFeedback, MessageActionResult } from "../../../plugin-api";
-import { displayedMessageActionMessage, messageActionMessage, MessageActionAvailabilityCache, type RegisteredMessageAction } from "../plugins/messageActions";
+import { renderSuggestedInput } from "./chat/SuggestedInput";
+import { chatSessionWarningRows, renderSessionWarnings } from "./chat/SessionWarnings";
+export { chatSessionWarningRows, type ChatSessionWarningRow } from "./chat/SessionWarnings";
+import { type QueuedMessageAction, type QueuedMessageActionTarget } from "../queuedMessageActions";
+import { chatQueuedMessageSections, renderQueuedMessageSection, type QueuedMessageSection } from "./chat/QueuedMessages";
+export { chatQueuedMessageSections, chatQueuedSectionShowsClearAction, type QueuedMessageSection } from "./chat/QueuedMessages";
+import type { DisplayedMessageActionAvailabilityContext, MessageActionAvailabilityContext, MessageActionResult } from "../../../plugin-api";
+import type { RegisteredMessageAction } from "../plugins/messageActions";
 import { machineSessionKey } from "../machineKeys";
-import { canonicalEntryActionHeaders, chatMessageHasHeader, groupChatMessages, groupConsecutiveImageOutputs, summarizeChatGroup, type ChatDisplayGroup, type ChatGroup } from "../chatGroups";
+import { canonicalEntryActionHeaders, groupChatMessages, groupConsecutiveImageOutputs, type ChatDisplayGroup, type ChatGroup } from "../chatGroups";
 import { openTranscriptQuestion, transcriptQuestionOutcomes } from "../chatQuestions";
 import { ChatScrollFlows } from "../ChatScrollFlows";
 import { ChatRenderKeys } from "../chatRenderKeys";
 import { DEFAULT_CHAT_BEHAVIORS, type ChatBehaviors } from "../chatBehaviors";
-import type { AskUserSubmission, PendingExtensionDialog, QueuedSessionMessage, SessionActivity, SessionRef, SessionStatus, SessionWarningSeverity } from "../api";
+import type { AskUserSubmission, PendingExtensionDialog, QueuedSessionMessage, SessionActivity, SessionRef, SessionStatus } from "../api";
 import type { ClosedExtensionDialog } from "../appState";
-import {
-  notificationAnnouncementLabel,
-  notificationDismissLabel,
-  notificationFocusTargetAfterDismiss,
-  notificationInboxOverflowLabel,
-  notificationInboxTotalCount,
-  notificationMessageTruncationLabel,
-  notificationSeverityLabel,
-  notificationTargetKey,
-  notificationTrayHeading,
-  notificationTrayIsCollapsed,
-  setNotificationTrayCollapsed,
-  type NotificationFocusTarget,
-  type SelectedSessionNotificationView,
-  type SessionNotificationTarget,
-} from "../sessionNotifications";
-import type { ChatLine, ChatPart } from "./shared";
-import { chatStyles, renderSessionWarningIcon } from "./shared";
-import { renderCopyIcon, renderGoBackIcon, renderTrashIcon } from "./messageActionIcons";
-import { renderQueueIcon, renderSteerIcon } from "./promptEditorIcons";
+import type { SelectedSessionNotificationView } from "../sessionNotifications";
+import "./SessionNotificationTray";
+import type { ChatLine, ChatPart } from "../chatTypes";
+import { chatStyles } from "./chat/chatStyles";
 import "./AskUserCard";
 import "./ExtensionDialogCard";
 import type { ExtensionDialogAnswerCallback, ExtensionDialogCancelCallback, ExtensionDialogDismissCallback } from "./ExtensionDialogCard";
-import { deepActiveElement, registerRenderedModal, type RenderedModalRegistration } from "./modalLayerRegistry";
+import "./ImageGalleryDialog";
+import type { ImageGalleryDialog } from "./ImageGalleryDialog";
 import "./FormattedText";
 import type { MarkdownWorkspaceContext } from "../formatting/workspaceLinks";
 import "./ToolExecutionView";
@@ -47,51 +39,6 @@ import { transcriptImageSource } from "./TranscriptImage";
 import type { ImageOpenDetail } from "./ImagePresentation";
 
 const messageTimestampFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "medium" });
-const notificationTimestampFormatter = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
-
-function renderNotificationDisclosureIcon(collapsed: boolean) {
-  return html`
-    <svg class=${`notification-icon notification-disclosure-icon${collapsed ? "" : " expanded"}`} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path d="m9 18 6-6-6-6"></path>
-    </svg>
-  `;
-}
-
-function renderNotificationCloseIcon() {
-  return html`
-    <svg class="notification-icon notification-close-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path d="M6 6l12 12"></path>
-      <path d="M18 6 6 18"></path>
-    </svg>
-  `;
-}
-
-function isSessionNotificationTarget(value: unknown): value is SessionNotificationTarget {
-  return typeof value === "object"
-    && value !== null
-    && typeof Reflect.get(value, "machineId") === "string"
-    && typeof Reflect.get(value, "cwd") === "string"
-    && typeof Reflect.get(value, "sessionId") === "string";
-}
-
-interface PendingNotificationFocus {
-  chatKey: string;
-  focusTarget: NotificationFocusTarget;
-}
-
-export interface QueuedMessageSection {
-  source: "client" | "server";
-  heading: string;
-  detail: string;
-  messages: QueuedSessionMessage[];
-}
-
-export function chatQueuedMessageSections(clientQueued: QueuedSessionMessage[], serverQueued: QueuedSessionMessage[]): QueuedMessageSection[] {
-  return [
-    clientQueued.length === 0 ? undefined : { source: "client", heading: "Queued until session starts", detail: "Will send once the backend session is ready", messages: clientQueued },
-    serverQueued.length === 0 ? undefined : { source: "server", heading: "Queued messages", detail: `${String(serverQueued.length)} pending`, messages: serverQueued },
-  ].filter((section): section is QueuedMessageSection => section !== undefined);
-}
 
 export type ChatImagePart = Extract<ChatPart, { type: "image" }>;
 
@@ -100,10 +47,7 @@ export function chatImagePartSource(part: ChatImagePart, session?: SessionRef, m
   return transcriptImageSource(part, session, machineId);
 }
 
-/** The message-header label used when a tool message renders as an image output. */
-export function chatToolOutputLabel(toolName?: string): string {
-  return toolName === undefined || toolName === "" ? "tool output" : `${toolName} output`;
-}
+export { chatToolOutputLabel, chatMessageGroupClassName, chatMessageGroupLabel } from "./chat/transcriptLabels";
 
 function chatLineIdentity(index: number, message?: ChatLine): string {
   return chatLineScrollIdentity(message) ?? String(index);
@@ -133,43 +77,6 @@ export function chatGroupAnchorKey(_startIndex: number, message?: ChatLine): str
 export function chatEventAnchorKey(_index: number, message?: ChatLine): string | undefined {
   const identity = chatLineScrollIdentity(message);
   return identity === undefined ? undefined : `e:${identity}`;
-}
-
-/** The CSS class list for an event-group `<details>`, distinguishing the live tail. */
-export function chatMessageGroupClassName(defaultOpen: boolean): string {
-  return defaultOpen ? "msg event-group live" : "msg event-group";
-}
-
-/** The disclosure summary label for an event group, distinguishing the live tail. */
-export function chatMessageGroupLabel(defaultOpen: boolean): string {
-  return defaultOpen ? "live events" : "events";
-}
-
-/** Whether a queued-message section shows the server clear-queue action. */
-export function chatQueuedSectionShowsClearAction(section: QueuedMessageSection, hasClearHandler: boolean): boolean {
-  return section.source === "server" && hasClearHandler;
-}
-
-/** A rendered session-warning row derived from live status warnings. */
-export interface ChatSessionWarningRow {
-  severity: SessionWarningSeverity;
-  severityClass: string;
-  message: string;
-  source?: string;
-  path?: string;
-  dismissId?: string;
-}
-
-/** Derive one severity-tagged warning row per live status warning, in order. */
-export function chatSessionWarningRows(status: SessionStatus | undefined): ChatSessionWarningRow[] {
-  return (status?.warnings ?? []).map((warning) => ({
-    severity: warning.severity,
-    severityClass: `session-warning ${warning.severity}`,
-    message: warning.message,
-    ...(warning.source === undefined ? {} : { source: warning.source }),
-    ...(warning.path === undefined ? {} : { path: warning.path }),
-    ...(warning.dismiss === undefined ? {} : { dismissId: warning.dismiss.id }),
-  }));
 }
 
 export function chatMessageMetadataLabel(message: ChatLine): string {
@@ -206,13 +113,15 @@ export class ChatView extends LitElement {
   @property({ attribute: false }) messageActionContext?: Omit<MessageActionAvailabilityContext, "message">;
   @property({ attribute: false }) onMessageAction?: (input: MessageActionAvailabilityContext, actionId: string) => Promise<MessageActionResult>;
   @property({ attribute: false }) onDisplayedMessageAction?: (input: DisplayedMessageActionAvailabilityContext, actionId: string) => Promise<MessageActionResult>;
-  private readonly messageActionAvailability = new MessageActionAvailabilityCache();
-  @state() private messageActionPending = false;
-  @state() private displayedMessageActionsPending: ReadonlySet<string> = new Set();
-  @state() private messageActionError: { machineId: string; sessionId: string; key: string; message: string } | undefined;
-  @state() private messageActionFeedback: { machineId: string; sessionId: string; key: string; actionId: string; presentation: MessageActionFeedback } | undefined;
-  private messageActionFeedbackTimer: number | undefined;
-  private messageActionGeneration = 0;
+  private readonly messageActionController = new ChatMessageActionController(() => ({
+    machineId: this.machineId,
+    sessionId: this.sessionId,
+    connected: this.isConnected,
+    actions: this.messageActions,
+    availability: this.messageActionContext,
+    onEntry: this.onMessageAction,
+    onDisplay: this.onDisplayedMessageAction,
+  }), () => { this.requestUpdate(); });
   @property({ type: Number }) messageStart = 0;
   @property({ type: Number }) messageEnd = 0;
   @property({ type: Number }) messageTotal = 0;
@@ -249,16 +158,9 @@ export class ChatView extends LitElement {
   @property({ attribute: false }) onLoadMore?: () => void;
   @property({ attribute: false }) behaviors: ChatBehaviors = DEFAULT_CHAT_BEHAVIORS;
   @query(".chat") private chat?: HTMLDivElement;
-  @query("dialog.image-zoom") private imageZoomDialog?: HTMLDialogElement;
+  @query("pi-web-image-gallery-dialog") private imageGalleryDialog?: ImageGalleryDialog;
   @state() private followingLive = false;
-  @state() private imageGallery: { images: readonly ImageOpenDetail[]; index: number } | undefined;
-  private imageGallerySwipe: { pointerId: number; x: number; y: number } | undefined;
-  private imageGalleryFocus: "previous" | "next" | undefined;
   @state() private expandedMetaKey: string | undefined;
-  @state() private collapsedNotificationTargetKeys: ReadonlySet<string> = new Set();
-  @state() private retainedEmptyNotificationTrayTargetKey: string | undefined;
-  private pendingNotificationFocus: PendingNotificationFocus | undefined;
-  private imageZoomModalRegistration: RenderedModalRegistration | undefined;
   private readonly disclosures = new ChatDisclosureController();
   private readonly scrollFlows = new ChatScrollFlows({
     getScroller: () => this.chat ?? undefined,
@@ -313,7 +215,7 @@ export class ChatView extends LitElement {
   private readonly handleJumpTop = () => { this.scrollFlows.jumpToTop(); };
   private readonly handleJumpEnd = () => { this.scrollFlows.jumpToEnd(); };
   private readonly openImageZoom = (src: string, alt: string): void => {
-    this.imageGallery = { images: [{ src, alt }], index: 0 };
+    if (this.behaviors.loadImages) this.imageGalleryDialog?.show([{ src, alt }]);
   };
   private openToolImageGallery(images: readonly { part: ChatImagePart; description: string }[], selectedIndex: number): void {
     if (!this.behaviors.loadImages) return;
@@ -322,55 +224,8 @@ export class ChatView extends LitElement {
       return source === undefined ? [] : [{ src: source.src, alt: image.description, partIndex: index }];
     });
     const index = entries.findIndex((entry) => entry.partIndex === selectedIndex);
-    if (index >= 0) this.imageGallery = { images: entries, index };
+    if (index >= 0) this.imageGalleryDialog?.show(entries, index);
   }
-  private readonly closeImageZoom = (): void => {
-    this.imageGallerySwipe = undefined;
-    this.imageGalleryFocus = undefined;
-    if (this.imageGallery !== undefined) this.imageGallery = undefined;
-  };
-  private moveImageGallery(direction: -1 | 1): void {
-    const gallery = this.imageGallery;
-    if (gallery === undefined) return;
-    const index = gallery.index + direction;
-    if (index < 0 || index >= gallery.images.length) return;
-    const active = deepActiveElement(this.ownerDocument);
-    if (index === 0 && active === this.imageZoomDialog?.querySelector('[aria-label="Previous image"]')) this.imageGalleryFocus = "next";
-    else if (index === gallery.images.length - 1 && active === this.imageZoomDialog?.querySelector('[aria-label="Next image"]')) this.imageGalleryFocus = "previous";
-    this.imageGallery = { ...gallery, index };
-  }
-  private readonly onImageGalleryKeyDown = (event: KeyboardEvent): void => {
-    if (event.key === "Tab") {
-      const buttons = [...(this.imageZoomDialog?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? [])];
-      const activeIndex = buttons.findIndex((button) => button === deepActiveElement(this.ownerDocument));
-      if (activeIndex === -1 || (event.shiftKey ? activeIndex === 0 : activeIndex === buttons.length - 1)) {
-        event.preventDefault();
-        (event.shiftKey ? buttons.at(-1) : buttons[0])?.focus();
-      }
-      return;
-    }
-    if (event.isComposing || event.altKey || event.ctrlKey || event.metaKey || (event.key !== "ArrowLeft" && event.key !== "ArrowRight")) return;
-    event.preventDefault();
-    event.stopPropagation();
-    this.moveImageGallery(event.key === "ArrowLeft" ? -1 : 1);
-  };
-  private readonly onImageGalleryPointerDown = (event: PointerEvent): void => {
-    if (event.pointerType !== "touch") return;
-    if (!event.isPrimary) { this.imageGallerySwipe = undefined; return; }
-    this.imageGallerySwipe = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
-    if (event.currentTarget instanceof HTMLElement) event.currentTarget.setPointerCapture(event.pointerId);
-  };
-  private readonly onImageGalleryPointerUp = (event: PointerEvent): void => {
-    const start = this.imageGallerySwipe;
-    if (start?.pointerId !== event.pointerId) return;
-    this.imageGallerySwipe = undefined;
-    const dx = event.clientX - start.x;
-    const dy = event.clientY - start.y;
-    if (Math.abs(dx) >= 48 && Math.abs(dx) > Math.abs(dy) * 1.5) this.moveImageGallery(dx > 0 ? -1 : 1);
-  };
-  private readonly onImageZoomDialogClick = (event: MouseEvent): void => {
-    if (event.target === this.imageZoomDialog) this.closeImageZoom();
-  };
   private readonly onPageHide = () => {
     this.saveScrollPosition();
   };
@@ -390,10 +245,7 @@ export class ChatView extends LitElement {
 
   override disconnectedCallback(): void {
     this.scrollFlows.dispose();
-    this.releaseImageZoomModal();
-    this.closeImageZoom();
-    this.messageActionGeneration += 1;
-    this.clearMessageActionFeedback();
+    this.messageActionController.reset();
     window.removeEventListener("resize", this.onViewportResize);
     window.removeEventListener("pagehide", this.onPageHide);
     window.visualViewport?.removeEventListener("resize", this.onViewportResize);
@@ -402,8 +254,6 @@ export class ChatView extends LitElement {
 
   private prepareSessionUiState(): void {
     if (this.behaviors.rememberDisclosures) this.disclosures.syncSession(this.sessionId);
-    this.pendingNotificationFocus = undefined;
-    this.retainedEmptyNotificationTrayTargetKey = undefined;
     this.loadMoreRequested = false;
   }
 
@@ -412,18 +262,16 @@ export class ChatView extends LitElement {
       this.questionOutcomes = transcriptQuestionOutcomes(this.messages);
       this.questionIds = new Set(this.messages.flatMap((line) => line.parts.flatMap((part) => part.type === "askUserQuestion" ? [part.ask.askId] : [])));
     }
-    if (changed.has("sessionId") || changed.has("machineId") || (changed.has("behaviors") && !this.behaviors.loadImages)) this.closeImageZoom();
-    if (changed.has("sessionId") || changed.has("machineId")) this.lastOpenQuestionId = undefined;
+    if (changed.has("sessionId") || changed.has("machineId") || (changed.has("behaviors") && !this.behaviors.loadImages)) this.imageGalleryDialog?.close();
     if (changed.has("sessionId") || changed.has("machineId")) {
-      this.messageActionGeneration += 1;
-      this.clearMessageActionFeedback();
-      this.messageActionError = undefined;
+      this.lastOpenQuestionId = undefined;
+      this.queuedCopyFeedback = "";
+    }
+    if (changed.has("sessionId") || changed.has("machineId")) {
+      this.messageActionController.reset();
     }
     if (changed.has("sessionId")) {
       this.prepareSessionUiState();
-    } else if (changed.has("notificationInbox") && this.notificationTargetChanged(changed.get("notificationInbox"))) {
-      this.pendingNotificationFocus = undefined;
-      this.retainedEmptyNotificationTrayTargetKey = undefined;
     }
     if (changed.has("behaviors")) {
       this.scrollFlows.configure();
@@ -453,54 +301,6 @@ export class ChatView extends LitElement {
         : openQuestionId !== undefined && openQuestionId !== this.lastOpenQuestionId ? "ask" : false,
     });
     this.lastOpenQuestionId = openQuestionId;
-    if (changed.has("notificationInbox") && this.pendingNotificationFocus !== undefined) this.focusPendingNotificationTarget();
-    if (changed.has("imageGallery")) this.syncImageZoomDialog();
-  }
-
-  private syncImageZoomDialog(): void {
-    const dialog = this.imageZoomDialog;
-    if (dialog === undefined) return;
-    if (this.imageGallery !== undefined) {
-      if (this.imageZoomModalRegistration === undefined) {
-        const registration = registerRenderedModal({
-          element: dialog,
-          nativeTopLayer: true,
-          focus: () => {
-            const close = this.renderRoot.querySelector<HTMLElement>(".image-zoom-close");
-            (close ?? dialog).focus();
-          },
-        });
-        this.imageZoomModalRegistration = registration;
-        try {
-          if (!dialog.open) dialog.showModal();
-          registration.focus();
-        } catch (error) {
-          this.imageZoomModalRegistration = undefined;
-          registration.unregister();
-          throw error;
-        }
-      }
-      const navigationFocus = this.imageGalleryFocus;
-      this.imageGalleryFocus = undefined;
-      if (navigationFocus !== undefined) {
-        dialog.querySelector<HTMLButtonElement>(`[aria-label="${navigationFocus === "previous" ? "Previous image" : "Next image"}"]`)?.focus();
-      }
-      return;
-    }
-    if (dialog.open) dialog.close();
-    this.releaseImageZoomModal();
-  }
-
-  private releaseImageZoomModal(): void {
-    const registration = this.imageZoomModalRegistration;
-    this.imageZoomModalRegistration = undefined;
-    registration?.unregister();
-  }
-
-  private notificationTargetChanged(previous: unknown): boolean {
-    const currentInbox = this.notificationInbox;
-    if (!isSessionNotificationTarget(previous) || currentInbox === undefined) return previous !== currentInbox;
-    return notificationTargetKey(previous) !== notificationTargetKey(currentInbox);
   }
 
   private readonly renderKeys = new ChatRenderKeys();
@@ -527,7 +327,6 @@ export class ChatView extends LitElement {
     const following = this.behaviors.followTail && this.followingLive;
     return html`
       ${this.renderTopNotices()}
-      ${this.renderNotificationLiveRegions()}
       <div class=${this.behaviors.visualEffects ? "chat-wrap" : "chat-wrap plain"}>
         <div class="chat" @image-open=${(event: CustomEvent<ImageOpenDetail>) => { this.openImageZoom(event.detail.src, event.detail.alt); }}
           @scroll=${this.behaviors.rememberPosition || this.behaviors.followTail || this.behaviors.automaticHistory ? this.handleScroll : undefined}
@@ -561,220 +360,29 @@ export class ChatView extends LitElement {
           <span id="chat-follow-state" class="visually-hidden">${!this.behaviors.followTail ? "Automatic following disabled" : following ? "Following live" : "Live following paused"}</span>
         </nav>
       </div>
-      ${this.renderImageZoom()}
+      <pi-web-image-gallery-dialog></pi-web-image-gallery-dialog>
     `;
   }
 
   private renderTopNotices() {
-    const warnings = this.renderWarnings();
-    const notifications = this.renderNotificationTray();
-    if (warnings === null && notifications === null) return null;
-    return html`<div class="top-notices">${warnings}${notifications}</div>`;
-  }
-
-  private renderNotificationTray() {
-    const inbox = this.notificationInbox;
-    if (inbox?.sessionId !== this.sessionId) return null;
-    const chatKey = notificationTargetKey(inbox);
-    const hasPendingOverlay = inbox.pendingDismissedIds.size > 0 || inbox.dismissAllPending;
-    const retainsFocusTarget = this.retainedEmptyNotificationTrayTargetKey === chatKey;
-    const totalCount = notificationInboxTotalCount(inbox);
-    if (totalCount === 0 && !hasPendingOverlay && !retainsFocusTarget) return null;
-    const collapsed = notificationTrayIsCollapsed(this.collapsedNotificationTargetKeys, inbox);
-    const toggleLabel = collapsed ? "Expand notifications" : "Collapse notifications";
-    return html`
-      <section class=${`notification-tray${collapsed ? " collapsed" : ""}`} role="region" aria-labelledby="session-notifications-heading" @focusout=${(event: FocusEvent) => { this.releaseEmptyNotificationTray(event); }}>
-        <header class="notification-header" data-notification-focus="header" tabindex="-1">
-          <strong class="notification-heading" id="session-notifications-heading">${notificationTrayHeading(inbox)}</strong>
-          <div class="notification-header-actions">
-            <button
-              type="button"
-              class="notification-control notification-clear"
-              aria-label="Clear all notifications"
-              title="Clear all notifications"
-              ?disabled=${inbox.dismissAllPending || totalCount === 0 || this.onDismissAllNotifications === undefined}
-              @click=${() => { this.dismissAllNotifications(); }}
-            >Clear</button>
-            <button
-              type="button"
-              class="notification-control notification-toggle"
-              aria-label=${toggleLabel}
-              title=${toggleLabel}
-              aria-expanded=${String(!collapsed)}
-              aria-controls="session-notification-list"
-              @click=${() => { this.toggleNotificationTray(inbox, collapsed); }}
-            >${renderNotificationDisclosureIcon(collapsed)}</button>
-          </div>
-        </header>
-        <div class="notification-list" id="session-notification-list" ?hidden=${collapsed}>
-          ${inbox.discardedCount === 0 ? null : html`
-            <p class="notification-overflow">${notificationInboxOverflowLabel(inbox.discardedCount)}</p>
-          `}
-          ${inbox.notifications.map((notification) => {
-            const label = notificationSeverityLabel(notification.severity);
-            const truncationLabel = notificationMessageTruncationLabel(notification);
-            return html`
-              <article class=${`notification-row ${notification.severity}`} data-notification-id=${notification.id} tabindex="-1">
-                <div class="notification-metadata">
-                  <strong class="notification-severity">${label}</strong>
-                  <span aria-hidden="true">·</span>
-                  <time datetime=${notification.receivedAt}>${notificationTimestampFormatter.format(new Date(notification.receivedAt))}</time>
-                </div>
-                <p class="notification-message" dir="auto">${notification.message}</p>
-                ${truncationLabel === undefined ? null : html`<p class="notification-truncated">${truncationLabel}</p>`}
-                <button
-                  type="button"
-                  class="notification-row-dismiss"
-                  aria-label=${notificationDismissLabel(notification)}
-                  title="Dismiss notification"
-                  ?disabled=${inbox.pendingDismissedIds.has(notification.id) || inbox.dismissAllPending || this.onDismissNotification === undefined}
-                  @click=${() => { this.dismissNotification(notification.id); }}
-                >${renderNotificationCloseIcon()}</button>
-              </article>
-            `;
-          })}
-        </div>
-      </section>
-    `;
-  }
-
-  private renderNotificationLiveRegions() {
-    const announcements = this.notificationInbox?.sessionId === this.sessionId ? this.notificationInbox.announcements : [];
-    const polite = announcements.filter((announcement) => announcement.severity !== "error");
-    const assertive = announcements.filter((announcement) => announcement.severity === "error");
-    return html`
-      <div class="visually-hidden notification-live" aria-live="polite" aria-atomic="false">${repeat(polite, (announcement) => announcement.id, (announcement) => html`<span data-announcement-id=${announcement.id}>${notificationAnnouncementLabel(announcement)}</span>`)}</div>
-      <div class="visually-hidden notification-live" aria-live="assertive" aria-atomic="false">${repeat(assertive, (announcement) => announcement.id, (announcement) => html`<span data-announcement-id=${announcement.id}>${notificationAnnouncementLabel(announcement)}</span>`)}</div>
-    `;
-  }
-
-  private toggleNotificationTray(inbox: SelectedSessionNotificationView, collapsed: boolean): void {
-    this.collapsedNotificationTargetKeys = setNotificationTrayCollapsed(this.collapsedNotificationTargetKeys, inbox, !collapsed);
-  }
-
-  private dismissNotification(notificationId: string): void {
-    const inbox = this.notificationInbox;
-    if (inbox === undefined || this.onDismissNotification === undefined) return;
-    const focusTarget = notificationFocusTargetAfterDismiss(inbox.notifications, notificationId);
-    const chatKey = notificationTargetKey(inbox);
-    this.pendingNotificationFocus = { chatKey, focusTarget };
-    if (focusTarget.kind === "header") this.retainedEmptyNotificationTrayTargetKey = chatKey;
-    this.onDismissNotification(notificationId);
-  }
-
-  private dismissAllNotifications(): void {
-    const inbox = this.notificationInbox;
-    if (inbox === undefined || this.onDismissAllNotifications === undefined) return;
-    const chatKey = notificationTargetKey(inbox);
-    this.pendingNotificationFocus = { chatKey, focusTarget: { kind: "header" } };
-    this.retainedEmptyNotificationTrayTargetKey = chatKey;
-    this.onDismissAllNotifications();
-  }
-
-  private releaseEmptyNotificationTray(event: FocusEvent): void {
-    const tray = event.currentTarget;
-    const next = event.relatedTarget;
-    if (tray instanceof HTMLElement && next instanceof Node && tray.contains(next)) return;
-    // Removing the activated row can emit focusout before updated() moves focus.
-    if (this.pendingNotificationFocus !== undefined) return;
-    const inbox = this.notificationInbox;
-    if (inbox !== undefined
-      && this.retainedEmptyNotificationTrayTargetKey === notificationTargetKey(inbox)
-      && notificationInboxTotalCount(inbox) === 0) this.retainedEmptyNotificationTrayTargetKey = undefined;
-  }
-
-  private focusPendingNotificationTarget(): void {
-    const pending = this.pendingNotificationFocus;
-    this.pendingNotificationFocus = undefined;
-    const inbox = this.notificationInbox;
-    if (pending === undefined || inbox === undefined || notificationTargetKey(inbox) !== pending.chatKey) return;
-    const target = pending.focusTarget;
-    if (target.kind === "header") {
-      this.renderRoot.querySelector<HTMLElement>("[data-notification-focus='header']")?.focus();
-      return;
-    }
-    const row = Array.from(this.renderRoot.querySelectorAll<HTMLElement>("[data-notification-id]"))
-      .find((candidate) => candidate.dataset["notificationId"] === target.notificationId);
-    if (row !== undefined) {
-      row.focus();
-      return;
-    }
-    if (notificationInboxTotalCount(inbox) === 0) this.retainedEmptyNotificationTrayTargetKey = pending.chatKey;
-    this.renderRoot.querySelector<HTMLElement>("[data-notification-focus='header']")?.focus();
+    return html`<div class="top-notices">
+      ${this.renderWarnings()}
+      <session-notification-tray
+        .sessionId=${this.sessionId}
+        .notificationInbox=${this.notificationInbox}
+        .onDismissNotification=${this.onDismissNotification}
+        .onDismissAllNotifications=${this.onDismissAllNotifications}
+      ></session-notification-tray>
+    </div>`;
   }
 
   private renderWarnings() {
     const rows = chatSessionWarningRows(this.status);
     if (!this.warningsVisible || rows.length === 0) return null;
-    return html`
-      <aside class="session-warnings" role="alert" aria-live="polite">
-        ${this.onToggleWarnings === undefined ? null : html`
-          <div class="session-warnings-controls">
-            <button
-              type="button"
-              class="session-warnings-collapse ui-button ui-button--compact"
-              title="Minimise warnings"
-              aria-label="Minimise warnings"
-              @click=${this.handleToggleWarnings}
-            >
-              <svg class="session-warnings-collapse-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <path d="m18 15-6-6-6 6"></path>
-              </svg>
-              <span>Minimise</span>
-            </button>
-          </div>
-        `}
-        ${rows.map((row) => {
-          const dismissId = row.dismissId;
-          return html`
-          <div class=${`${row.severityClass} ui-transcript-surface`}>
-            <div class="session-warning-head">
-              ${renderSessionWarningIcon(row.severity, "session-warning-icon")}
-              ${row.source === undefined ? null : html`<span class="session-warning-source">${row.source}</span>`}
-            </div>
-            <div class="session-warning-body">
-              <p class="session-warning-message">${row.message}</p>
-              ${row.path === undefined ? null : html`<p class="session-warning-path">${row.path}</p>`}
-            </div>
-            ${dismissId === undefined ? null : html`
-              <button
-                type="button"
-                class="session-warning-dismiss ui-button ui-button--icon ui-button--compact"
-                title="Don't show this warning again"
-                aria-label="Dismiss warning"
-                @click=${() => { this.onDismissWarning?.(dismissId); }}
-              >×</button>
-            `}
-          </div>
-        `;
-        })}
-      </aside>
-    `;
-  }
-
-  private renderImageZoom() {
-    const gallery = this.imageGallery;
-    const image = gallery?.images[gallery.index];
-    return html`
-      <dialog class="image-zoom" aria-label="Image preview" aria-describedby="image-gallery-position"
-        @keydown=${this.onImageGalleryKeyDown} @click=${this.onImageZoomDialogClick} @close=${this.closeImageZoom} @cancel=${this.closeImageZoom}>
-        ${gallery === undefined || image === undefined ? null : html`
-          <div class="image-gallery-header ui-toolbar ui-toolbar--primary">
-            <span id="image-gallery-position" class="image-gallery-position ui-toolbar-title" role="status" aria-live="polite" aria-atomic="true">Image ${String(gallery.index + 1)} of ${String(gallery.images.length)}</span>
-            <div class="ui-toolbar-group"><button type="button" class="image-zoom-close ui-button ui-button--icon" aria-label="Close image" title="Close image" @click=${this.closeImageZoom}>×</button></div>
-          </div>
-          <div class="image-gallery-stage" @pointerdown=${this.onImageGalleryPointerDown} @pointerup=${this.onImageGalleryPointerUp} @pointercancel=${() => { this.imageGallerySwipe = undefined; }}>
-            <img class="image-zoom-full" src=${image.src} alt=${image.alt} decoding="async" draggable="false" />
-          </div>
-          ${gallery.images.length < 2 ? null : html`
-            <div class="image-gallery-navigation ui-toolbar ui-toolbar--primary">
-              <button type="button" class="ui-button" aria-label="Previous image" ?disabled=${gallery.index === 0} @click=${() => { this.moveImageGallery(-1); }}>Previous</button>
-              <button type="button" class="ui-button" aria-label="Next image" ?disabled=${gallery.index === gallery.images.length - 1} @click=${() => { this.moveImageGallery(1); }}>Next</button>
-            </div>
-          `}
-        `}
-      </dialog>
-    `;
+    return renderSessionWarnings(rows,
+      this.onToggleWarnings === undefined ? undefined : this.handleToggleWarnings,
+      this.onDismissWarning,
+    );
   }
 
   private groupedMessages(): ChatGroup[] {
@@ -824,47 +432,26 @@ export class ChatView extends LitElement {
   }
 
   private renderQueuedMessageList(section: QueuedMessageSection) {
-    const canClear = chatQueuedSectionShowsClearAction(section, this.onClearServerQueue !== undefined);
-    const actionsUnavailable = section.source === "server" ? this.status?.queueMessageActionsUnavailable : undefined;
-    const unavailableReason = actionsUnavailable === undefined ? undefined : actionsUnavailable === "" ? "Individual queue controls are unavailable with this runtime." : actionsUnavailable;
-    const actionsDisabled = this.queuedMessageActionPending || actionsUnavailable !== undefined;
-    return html`
-      <aside class="queued-messages ui-transcript-surface" aria-live="polite">
-        <div class="queued-header">
-          <div class="queued-heading">
-            <strong>${section.heading}</strong>
-            <small>${section.detail}</small>
-          </div>
-          ${canClear ? html`
-            <button type="button" class="queued-clear-button ui-button ui-button--icon ui-button--compact" ?disabled=${this.queuedMessageActionPending} aria-label="Clear queue" title="Clear queued messages without stopping active work" @click=${this.handleClearServerQueue}>${renderTrashIcon()}</button>
-          ` : null}
-        </div>
-        ${unavailableReason === undefined ? nothing : html`<small role="status">${unavailableReason}</small>`}
-        ${section.messages.map((message, index) => html`
-          <div class="queued-message">
-            <div class="queued-message-header">
-              <div class="queued-message-meta">
-                <span class="queued-kind">${message.kind === "steer" ? "Steer" : "Queue"} ${String(section.messages.slice(0, index + 1).filter((entry) => entry.kind === message.kind).length)}</span>
-                ${queuedMessageAttachmentLabel(message) === undefined ? nothing : html`
-                  <span class="queued-attachments" title="Attachments included with this queued message"><span aria-hidden="true">📎</span> ${queuedMessageAttachmentLabel(message)}</span>
-                `}
-              </div>
-              <div class="queued-message-actions ui-toolbar-group">
-                <button type="button" class="queued-action ui-button ui-button--icon ui-button--compact" aria-label="Copy queued message" title="Copy message" @click=${async () => {
-                  this.queuedCopyFeedback = await writeClipboardText(message.text) ? "Copied" : "Could not copy message";
-                }}>${renderCopyIcon()}</button>
-                ${section.source !== "server" || this.onQueuedMessageAction === undefined ? nothing : html`
-                  <button type="button" class="queued-action ui-button ui-button--icon ui-button--compact" ?disabled=${actionsDisabled} title=${unavailableReason ?? (message.kind === "steer" ? "Move to the end of the follow-up queue" : "Move to the end of the steering queue")} aria-label=${message.kind === "steer" ? "Switch to Queue" : "Switch to Steer"} @click=${() => { this.actOnQueuedMessage("toggle", index, section.messages); }}>${message.kind === "steer" ? renderQueueIcon() : renderSteerIcon()}</button>
-                  <button type="button" class="queued-action ui-button ui-button--icon ui-button--compact" ?disabled=${actionsDisabled} aria-label="Recall queued message" title=${unavailableReason ?? "Recall this message's text and clear later queued messages"} @click=${() => { this.actOnQueuedMessage("edit", index, section.messages); }}>${renderGoBackIcon()}</button>
-                  <button type="button" class="queued-action ui-button ui-button--icon ui-button--compact" ?disabled=${actionsDisabled} aria-label="Remove queued message" title=${unavailableReason ?? "Remove only this message"} @click=${() => { this.actOnQueuedMessage("remove", index, section.messages); }}>${renderTrashIcon()}</button>
-                `}
-              </div>
-            </div>
-            <formatted-text .imagesEnabled=${this.behaviors.loadImages} .codeBlocks=${this.behaviors.codeBlocks} .intentKey=${JSON.stringify([this.machineId, this.sessionId, "queue", section.source, index, message.kind])} .contentRendering=${this.contentRendering} .machineId=${this.machineId} .workspaceContext=${this.workspaceContext} .text=${message.text}></formatted-text>
-          </div>
-        `)}
-      </aside>
-    `;
+    return renderQueuedMessageSection(section, {
+      machineId: this.machineId,
+      sessionId: this.sessionId,
+      behaviors: this.behaviors,
+      contentRendering: this.contentRendering,
+      workspaceContext: this.workspaceContext,
+      pending: this.queuedMessageActionPending,
+      unavailable: this.status?.queueMessageActionsUnavailable,
+      onClear: this.onClearServerQueue === undefined ? undefined : this.handleClearServerQueue,
+      onCopy: (text) => { void this.copyQueuedMessage(text); },
+      onAction: this.onQueuedMessageAction === undefined ? undefined : (action, index, messages) => { this.actOnQueuedMessage(action, index, messages); },
+    });
+  }
+
+  private async copyQueuedMessage(text: string): Promise<void> {
+    const identity = machineSessionKey(this.machineId, this.sessionId);
+    const copied = await writeClipboardText(text);
+    if (this.isConnected && identity === machineSessionKey(this.machineId, this.sessionId)) {
+      this.queuedCopyFeedback = copied ? "Copied" : "Could not copy message";
+    }
   }
 
   private actOnQueuedMessage(action: QueuedMessageAction, index: number, messages: QueuedSessionMessage[]): void {
@@ -876,20 +463,11 @@ export class ChatView extends LitElement {
     const text = this.status?.sessionId === this.sessionId ? this.status.suggestedInput : undefined;
     if (text === undefined || this.onUseSuggestedInput === undefined
       || this.suggestedInputPending || this.suppressedSuggestedInput === text) return null;
-    return html`
-      <aside class="suggested-input ui-transcript-surface">
-        <div class="suggested-input-header">
-          <strong>Suggested input</strong>
-          ${this.onDismissSuggestedInput === undefined ? null : html`
-            <button type="button" class="suggested-input-dismiss ui-button ui-button--icon ui-button--compact" aria-label="Dismiss suggested input" title="Dismiss suggested input in this browser"
-              @click=${() => { this.onDismissSuggestedInput?.(this.machineId, this.sessionId, text); }}>×</button>
-          `}
-        </div>
-        <p class="suggested-input-text" dir="auto">${text === "" ? "Empty input" : text}</p>
-        <small>Replaces your current draft. Nothing is sent.</small>
-        <button type="button" class="suggested-input-use ui-button ui-button--primary" @click=${() => { this.onUseSuggestedInput?.(this.machineId, this.sessionId); }}>Use suggested input</button>
-      </aside>
-    `;
+    return renderSuggestedInput({
+      text,
+      onUse: () => { this.onUseSuggestedInput?.(this.machineId, this.sessionId); },
+      onDismiss: this.onDismissSuggestedInput === undefined ? undefined : () => { this.onDismissSuggestedInput?.(this.machineId, this.sessionId, text); },
+    });
   }
 
   private renderExtensionDialogs() {
@@ -976,167 +554,51 @@ export class ChatView extends LitElement {
     return Math.max(this.messageEnd, this.messageStart + this.messages.length);
   }
 
+  private transcriptRenderContext(): TranscriptRenderContext {
+    return {
+      machineId: this.machineId,
+      sessionId: this.sessionId,
+      session: this.transcriptSession(),
+      messages: this.messages,
+      messageStart: this.messageStart,
+      behaviors: this.behaviors,
+      contentRendering: this.contentRendering,
+      workspaceContext: this.workspaceContext,
+      anchors: { message: chatMessageAnchorKey, event: chatEventAnchorKey },
+      disclosure: {
+        isOpen: (key, defaultOpen) => this.disclosures.isOpen(key, defaultOpen),
+        toggle: (key, event, defaultOpen) => { this.onDisclosureToggle(key, event, defaultOpen); },
+      },
+      metadata: {
+        expandedKey: this.expandedMetaKey,
+        label: (message) => this.messageMetaLabel(message),
+        expand: (key) => { this.expandedMetaKey = key; },
+      },
+      actions: this.messageActionController,
+      openQuestionId: () => this.openQuestion()?.askId,
+      questionOutcomes: this.questionOutcomes,
+      questionIds: this.questionIds,
+      askDraftSessionId: this.askDraftSessionId,
+      onSubmitAsk: this.onSubmitAsk,
+      openImageGallery: (images, index) => { this.openToolImageGallery(images, index); },
+    };
+  }
+
   private renderMessage(message: ChatLine, index: number, entryActionHeaders: ReadonlySet<ChatLine>) {
-    const toolOnly = this.isToolExecutionOnlyMessage(message);
-    const hasHeader = chatMessageHasHeader(message);
-    const shellClass = toolOnly ? "msg tool-execution-shell" : "msg ask-user-record-shell";
-    const conversationClass = message.role === "user" || message.role === "assistant" ? " conversation-message" : "";
-    return html`
-      <article class=${`${hasHeader ? `msg ${message.role}${conversationClass}` : shellClass} ui-transcript-surface`} data-index=${index} data-scroll-anchor-id=${chatMessageAnchorKey(index, message) ?? nothing}>
-        ${hasHeader ? this.renderMessageHeader(message, String(index), index, entryActionHeaders) : null}
-        ${message.parts.map((part, partIndex) => this.renderPart(part, message, index, partIndex))}
-      </article>
-    `;
+    return transcript.renderMessage(this.transcriptRenderContext(), message, index, entryActionHeaders);
   }
 
   private renderToolImageOutputs(group: Extract<ChatDisplayGroup, { kind: "tool-images" }>, entryActionHeaders: ReadonlySet<ChatLine>) {
-    const { outputs } = group;
-    const first = outputs[0];
-    const label = chatToolOutputLabel(outputs.every((output) => output.toolName === first.toolName) ? first.toolName : undefined);
-    const parts = outputs.flatMap((output, outputIndex) => output.message.parts.flatMap((part, partIndex) => part.type !== "image" ? [] : [{
-      part, output, anchor: outputIndex > 0 && partIndex === 0 ? chatMessageAnchorKey(output.index, output.message) : undefined,
-    }]));
-    const images = parts.map((image, imageIndex) => ({ ...image,
-      description: `${chatToolOutputLabel(image.output.toolName)} image ${String(imageIndex + 1)} of ${String(parts.length)}`,
-    }));
-    return html`
-      <article class="msg tool-image-output conversation-message ui-transcript-surface" data-index=${first.index} data-scroll-anchor-id=${chatMessageAnchorKey(first.index, first.message) ?? nothing}>
-        ${outputs.length === 1 ? this.renderMessageHeader(first.message, String(first.index), first.index, entryActionHeaders, label) : html`<div class="msg-header"><span class="label">${label}</span></div>`}
-        <div class="tool-image-thumbnails">
-          ${images.map((image, imageIndex) => html`
-            <pi-web-transcript-image .imagePart=${image.part} .thumbnail=${true} .description=${image.description}
-              data-index=${image.output.index} data-scroll-anchor-id=${image.anchor ?? nothing}
-              .loadingDisabled=${!this.behaviors.loadImages} .session=${this.transcriptSession()} .machineId=${this.machineId}
-              @image-open=${(event: CustomEvent<ImageOpenDetail>) => { event.stopPropagation(); this.openToolImageGallery(images, imageIndex); }}
-            ></pi-web-transcript-image>
-          `)}
-        </div>
-        ${outputs.length === 1 ? null : html`
-          <details class="image-output-sources">
-            <summary class="ui-transcript-disclosure">Sources (${String(outputs.length)})</summary>
-            ${outputs.map((output, outputIndex) => html`<section class="image-output-source" aria-label=${`Output ${String(outputIndex + 1)}`}>
-              ${this.renderMessageHeader(output.message, `image-source:${String(output.index)}`, output.index, entryActionHeaders, `${chatToolOutputLabel(output.toolName)} · ${String(outputIndex + 1)}`)}
-            </section>`)}
-          </details>
-        `}
-      </article>
-    `;
-  }
-
-  private isToolExecutionOnlyMessage(message: ChatLine): boolean {
-    return message.role === "tool" && message.parts.length > 0 && message.parts.every((part) => part.type === "toolExecution");
+    return transcript.renderToolImageOutputs(this.transcriptRenderContext(), group, entryActionHeaders);
   }
 
   private renderMessageGroup(group: Extract<ChatGroup, { kind: "group" }>, defaultOpen: boolean, entryActionHeaders: ReadonlySet<ChatLine> = new Set()) {
-    const { messages, startIndex } = group;
     const disclosureKey = this.groupDisclosureKey(group, defaultOpen);
-    const open = this.behaviors.rememberDisclosures ? this.disclosures.isOpen(disclosureKey, defaultOpen) : defaultOpen;
-    return html`
-      <details class=${`${chatMessageGroupClassName(defaultOpen)} ui-transcript-surface ui-transcript-activity`} data-index=${startIndex} data-scroll-anchor-id=${this.groupAnchorKey(group, defaultOpen) ?? nothing} ?open=${open} @toggle=${this.behaviors.rememberDisclosures ? (event: Event) => { this.onDisclosureToggle(disclosureKey, event, defaultOpen); } : undefined}>
-        <summary class="ui-transcript-disclosure ui-transcript-heading">
-          <span class="label">${chatMessageGroupLabel(defaultOpen)}</span>
-          <span>${summarizeChatGroup(messages.map((event) => event.message))}</span>
-        </summary>
-        ${this.renderMessageGroupBody(group, entryActionHeaders)}
-      </details>
-    `;
-  }
-
-  private renderMessageGroupBody({ messages, startIndex }: Extract<ChatGroup, { kind: "group" }>, entryActionHeaders: ReadonlySet<ChatLine> = new Set()) {
-    return html`
-      <div class="group-body">
-        ${messages.map(({ message, index }, offset) => {
-          const toolOnly = this.isToolExecutionOnlyMessage(message);
-          return html`
-            <section class=${`${toolOnly ? "group-msg tool-execution-shell" : `group-msg ${message.role}`} ui-transcript-surface`} data-index=${index} data-scroll-anchor-id=${chatEventAnchorKey(index, message) ?? nothing}>
-              ${chatMessageHasHeader(message) ? this.renderMessageHeader(message, `${String(startIndex)}:${String(offset)}`, index, entryActionHeaders) : null}
-              ${message.parts.map((part, partIndex) => this.renderPart(part, message, index, partIndex))}
-            </section>
-          `;
-        })}
-      </div>
-    `;
-  }
-
-  private renderMessageHeader(message: ChatLine, key: string, index: number, entryActionHeaders: ReadonlySet<ChatLine>, label: string = message.role) {
-    const meta = this.messageMetaLabel(message);
-    const expanded = this.expandedMetaKey === key;
-    const detailId = `message-meta-${key}`;
-    const conversation = label === "user" || label === "assistant";
-    return html`
-      <div class=${conversation ? "msg-header conversation-header" : "msg-header"}>
-        <span class=${conversation ? "visually-hidden" : "label"}>${label}</span>
-        <div class="msg-header-trailing">
-          ${this.renderMessageActions(message, key, this.messages[index - this.messageStart] ?? message, entryActionHeaders.has(message))}
-          <button type="button" class="msg-meta ui-button ui-button--icon ui-button--compact" title=${meta} aria-label="Message information" aria-controls=${detailId} aria-expanded=${String(expanded)} @click=${() => { this.expandedMetaKey = expanded ? undefined : key; }}>${renderSessionWarningIcon("info", "msg-info-icon")}</button>
-        </div>
-      </div>
-      <div id=${detailId} class="msg-meta-details" ?hidden=${!expanded}>${meta}</div>
-    `;
-  }
-
-  private renderMessageActions(message: ChatLine, key: string, source: ChatLine, includeEntryActions: boolean) {
-    const actions = this.messageActionContext === undefined ? []
-      : this.messageActionAvailability.get(source, this.messageActions, this.messageActionContext, message, includeEntryActions)
-        .filter(({ action }) => action.target === "display" ? this.onDisplayedMessageAction !== undefined : this.onMessageAction !== undefined);
-    if (actions.length === 0) return null;
-    const feedback = this.messageActionFeedback;
-    return html`
-      <div class="msg-actions ui-toolbar-group" aria-label="Message actions">
-        ${actions.map(({ action, enabled, ariaLabel }) => {
-          const presentation = feedback?.machineId === this.machineId && feedback.sessionId === this.sessionId && feedback.key === key && feedback.actionId === action.id
-            ? feedback.presentation : undefined;
-          const pending = action.target === "display" ? this.displayedMessageActionsPending.has(this.messageActionKey(key, action.id)) : this.messageActionPending;
-          const icon = presentation?.icon ?? action.icon;
-          return html`<button type="button" class=${`msg-action ui-button ui-button--compact ${icon === undefined ? "" : "ui-button--icon"}`} title=${presentation?.title ?? action.title} aria-label=${presentation?.ariaLabel ?? presentation?.title ?? ariaLabel} ?disabled=${!enabled || pending} @click=${(event: MouseEvent) => { void this.actOnMessage(source, message, key, action, event); }}>${icon ?? action.title}</button>`;
-        })}
-        ${this.messageActionError?.machineId === this.machineId && this.messageActionError.sessionId === this.sessionId && this.messageActionError.key === key ? html`<span role="alert">${this.messageActionError.message}</span>` : null}
-      </div>
-    `;
-  }
-
-  private messageActionKey(key: string, actionId: string): string {
-    return JSON.stringify([this.machineId, this.sessionId, this.messageActionGeneration, key, actionId]);
-  }
-
-  private async actOnMessage(source: ChatLine, displayed: ChatLine, key: string, action: RegisteredMessageAction, event: MouseEvent): Promise<void> {
-    event.stopPropagation();
-    const context = this.messageActionContext;
-    if (context === undefined) return;
-    const pendingKey = this.messageActionKey(key, action.id);
-    if (action.target === "display" ? this.displayedMessageActionsPending.has(pendingKey) : this.messageActionPending) return;
-    const entry = messageActionMessage(source, displayed.role);
-    const onEntry = this.onMessageAction;
-    const onDisplay = this.onDisplayedMessageAction;
-    const run = action.target === "display"
-      ? onDisplay === undefined ? undefined : () => onDisplay({ ...context, message: displayedMessageActionMessage(displayed) }, action.id)
-      : entry === undefined || onEntry === undefined ? undefined : () => onEntry({ ...context, message: entry }, action.id);
-    if (run === undefined) return;
-    const sessionId = this.sessionId;
-    const machineId = this.machineId;
-    const generation = this.messageActionGeneration;
-    if (action.target === "display") this.displayedMessageActionsPending = new Set([...this.displayedMessageActionsPending, pendingKey]);
-    else this.messageActionPending = true;
-    this.messageActionError = undefined;
-    try {
-      const presentation = await run();
-      if (presentation !== undefined && this.isConnected && this.messageActionGeneration === generation && this.sessionId === sessionId && this.machineId === machineId) {
-        this.clearMessageActionFeedback();
-        this.messageActionFeedback = { machineId, sessionId, key, actionId: action.id, presentation };
-        this.messageActionFeedbackTimer = window.setTimeout(() => { this.clearMessageActionFeedback(); }, 1200);
-      }
-    } catch (error) {
-      if (this.isConnected && this.messageActionGeneration === generation && this.sessionId === sessionId && this.machineId === machineId) this.messageActionError = { machineId, sessionId, key, message: error instanceof Error ? error.message : String(error) };
-    } finally {
-      if (action.target === "display") this.displayedMessageActionsPending = new Set([...this.displayedMessageActionsPending].filter((item) => item !== pendingKey));
-      else this.messageActionPending = false;
-    }
-  }
-
-  private clearMessageActionFeedback(): void {
-    if (this.messageActionFeedbackTimer !== undefined) window.clearTimeout(this.messageActionFeedbackTimer);
-    this.messageActionFeedbackTimer = undefined;
-    this.messageActionFeedback = undefined;
+    return transcript.renderMessageGroup(this.transcriptRenderContext(), group, defaultOpen, entryActionHeaders, {
+      open: this.behaviors.rememberDisclosures ? this.disclosures.isOpen(disclosureKey, defaultOpen) : defaultOpen,
+      anchor: this.groupAnchorKey(group, defaultOpen),
+      toggle: this.behaviors.rememberDisclosures ? (event) => { this.onDisclosureToggle(disclosureKey, event, defaultOpen); } : undefined,
+    });
   }
 
   private messageMetaLabel(message: ChatLine): string {
@@ -1152,72 +614,6 @@ export class ChatView extends LitElement {
       this.imageSession = { id: this.sessionId, cwd: this.sessionCwd };
     }
     return this.imageSession;
-  }
-
-  private renderPart(part: ChatPart, message: ChatLine, messageIndex: number, partIndex: number) {
-    const intentKey = JSON.stringify([this.machineId, this.sessionId, message.entryId ?? messageIndex, partIndex]);
-    if (part.type === "text" || part.type === "thinking") {
-      const text = part.displayText ?? part.text;
-      if (text === "") return null;
-      if (part.type === "thinking") {
-        const disclosureKey = `thinking:${intentKey}`;
-        const open = this.behaviors.rememberDisclosures ? this.disclosures.isOpen(disclosureKey, true) : true;
-        return html`
-          <details class="part thinking ui-transcript-surface ui-transcript-activity" ?open=${this.behaviors.rememberDisclosures ? live(open) : open}
-            @toggle=${this.behaviors.rememberDisclosures ? (event: Event) => { this.onDisclosureToggle(disclosureKey, event, true); } : undefined}>
-            <summary class="ui-transcript-disclosure ui-transcript-heading"><svg class="thinking-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M6 14a5 5 0 1 1 8-1H9l-3 2v-1Z"/><circle cx="4" cy="17" r="1"/></svg>Thinking</summary>
-            <formatted-text .imagesEnabled=${this.behaviors.loadImages} .codeBlocks=${this.behaviors.codeBlocks} .intentKey=${intentKey} .contentRendering=${this.contentRendering} .machineId=${this.machineId} .workspaceContext=${this.workspaceContext} .text=${text}></formatted-text>
-          </details>
-        `;
-      }
-      if (message.role === "bash") return html`<pre class="part shell-output">${text}</pre>`;
-      return html`<formatted-text .imagesEnabled=${this.behaviors.loadImages} .codeBlocks=${this.behaviors.codeBlocks} .intentKey=${intentKey} class="part" .contentRendering=${this.contentRendering} .machineId=${this.machineId} .workspaceContext=${this.workspaceContext} .text=${text}></formatted-text>`;
-    }
-    if (part.type === "skillInvocation") return html`
-      <details class="part skill-invocation">
-        <summary class="ui-transcript-disclosure"><b>[skill]</b> ${part.name}</summary>
-        <small>${part.location}</small>
-        <formatted-text .imagesEnabled=${this.behaviors.loadImages} .codeBlocks=${this.behaviors.codeBlocks} .intentKey=${intentKey} .contentRendering=${this.contentRendering} .machineId=${this.machineId} .workspaceContext=${this.workspaceContext} .text=${part.content}></formatted-text>
-      </details>
-    `;
-    if (part.type === "skillRead") return html`
-      <div class="part skill-read">
-        <strong>Loaded ${part.name}</strong>
-        <small>read ${part.path}</small>
-      </div>
-    `;
-    if (part.type === "askUserQuestion") {
-      const open = this.openQuestion()?.askId === part.ask.askId;
-      return html`<ask-user-card
-        class=${open ? "part open-question-card" : "part closed-question-card"}
-        .ask=${part.ask} .open=${open}
-        .outcomes=${this.questionOutcomes.get(part.ask.askId) ?? []}
-        .draftSessionId=${this.askDraftSessionId}
-        .onSubmit=${open ? this.onSubmitAsk : undefined}
-      ></ask-user-card>`;
-    }
-    if (part.type === "askUserRecord") return html`
-      <ask-user-card
-        class="part"
-        .outcome=${part.outcome}
-        .compact=${this.questionIds.has(part.outcome.askId)}
-        .draftSessionId=${this.askDraftSessionId}
-      ></ask-user-card>
-    `;
-    if (part.type === "image") {
-      return html`<pi-web-transcript-image class="part chat-image" .imagePart=${part} .loadingDisabled=${!this.behaviors.loadImages}
-        .session=${this.transcriptSession()} .machineId=${this.machineId}
-      ></pi-web-transcript-image>`;
-    }
-    if (part.type === "toolCall") return html`<div class="part tool-line ui-transcript-surface ui-transcript-activity ui-transcript-tool"><div class="ui-transcript-heading"><span aria-hidden="true">▶</span> ${part.toolName}<span class="summary">${part.summary}</span></div></div>`;
-    if (part.type === "toolExecution") return html`<tool-execution-view class="part" .execution=${part}></tool-execution-view>`;
-    if (part.type === "toolResult") return html`
-      <details class=${`part tool-result ui-transcript-surface ui-transcript-activity ui-transcript-tool${part.isError ? " error" : ""}`} ?open=${part.isError}>
-        <summary class="ui-transcript-disclosure ui-transcript-heading">${part.isError ? "✖" : "✓"} ${part.toolName} result${part.isError ? " · Failed" : ""}</summary>
-        <formatted-text .imagesEnabled=${this.behaviors.loadImages} .codeBlocks=${this.behaviors.codeBlocks} .intentKey=${intentKey} .contentRendering=${this.contentRendering} .machineId=${this.machineId} .workspaceContext=${this.workspaceContext} .text=${part.text}></formatted-text>
-      </details>
-    `;
-    return null;
   }
 
   private onDisclosureToggle(key: string, event: Event, defaultOpen: boolean) {

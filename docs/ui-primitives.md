@@ -62,7 +62,7 @@ Use the existing `ModalSurface` component for focus trapping, Escape, backdrop d
 
 - `uiDialogStyles` provides common header, close button, search row, scrollable body, and footer treatment. It includes `uiButtonStyles`.
 - `uiSelectionStyles` provides gapless option rows, composite rows with separate pin/checkbox actions, descriptions, and empty states. Combine it with `uiDialogStyles` for selections such as models, thinking levels, and Actions.
-- `uiFormStyles` provides field labels, native input styling, checkbox rows, and form errors. Combine it with `uiDialogStyles` for provider login, adding machines, and adding projects. A dialog with both choices and a form can compose all three.
+- `uiFormStyles` from `ui/formStyles.ts` provides field labels, native input and textarea styling, checkbox rows, and form errors. It is also re-exported by `ui/dialogStyles.ts`. Combine it with `uiDialogStyles` for provider login, adding machines, and adding projects. Inline question forms and extension dialogs reuse the same fields without importing modal layout. A dialog with both choices and a form can compose all three.
 
 Use `ui-dialog-header`, `ui-dialog-title`, and a native `ui-button ui-button--icon` close button. Search inputs use `ui-dialog-search`; put a search input and adjacent actions in `ui-dialog-search-row`.
 
@@ -77,6 +77,12 @@ Keep only content-specific rules in each dialog. Existing dimension differences 
 Chat uses flat transcript sections rather than nested card outlines. Put breathing room inside the section; use restrained role/state tones and labels to distinguish hierarchy. Successful tools stay neutral, while running and error states remain explicit. Nested sections do not need another enclosing border. Code/diff content may retain one useful boundary, and editable inputs retain their input affordance.
 
 `uiTranscriptStyles` owns the frameless surface and full-width disclosure treatment (32px desktop, at least 44px for coarse pointers). Consumers own grouping, indentation, native disclosure state, and layout. Give sticky headings an opaque tone matching their section so scrolled text cannot show through them. Transcript patterns are internal and are not part of the browser-plugin UI styles capability.
+
+Chat's `.group-msg` sets the internal composition property `--ui-transcript-inset` (12px) and uses it for inline padding. In `chat/chatStyles.ts`, direct-child thinking disclosures use that same inset for their full-bleed width and negative inline margins. Keep the padding and full-bleed geometry tied to this property rather than duplicating offsets; the shared transcript primitive does not own this consumer layout.
+
+### Inline forms and records
+
+`uiTranscriptCardStyles` from `ui/transcriptCardStyles.ts` provides sticky header and status treatments for inline question forms and extension dialogs. Use `ui-transcript-card-header` and `ui-transcript-card-status`, with optional success or warning modifiers. Compose disclosure headings with a native `summary.ui-transcript-disclosure`; the disclosure primitive owns its indicator. Consumers retain heading semantics, form state, validation, draft persistence, countdowns, and submission behavior. Inline forms do not acquire modal focus trapping or Escape dismissal.
 
 ## Ownership and hierarchy
 

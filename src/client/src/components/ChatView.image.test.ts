@@ -90,10 +90,11 @@ describe("ChatView image event wiring", () => {
     const { view, presentation } = await mountImage();
     presentation.renderRoot.querySelector<HTMLButtonElement>(".image-button")?.click();
     await view.updateComplete;
-    expect(view.renderRoot.querySelector(".image-zoom-full")).not.toBeNull();
-    view.renderRoot.querySelector<HTMLButtonElement>(".image-zoom-close")?.click();
+    const gallery = view.renderRoot.querySelector("pi-web-image-gallery-dialog");
+    expect(gallery?.shadowRoot?.querySelector(".image-zoom-full")).not.toBeNull();
+    gallery?.shadowRoot?.querySelector<HTMLButtonElement>(".image-zoom-close")?.click();
     await view.updateComplete;
-    expect(view.renderRoot.querySelector(".image-zoom-full")).toBeNull();
+    expect(gallery?.shadowRoot?.querySelector(".image-zoom-full")).toBeNull();
   });
 
   it("assigns native image sources immediately with the selected machine and session cwd", async () => {

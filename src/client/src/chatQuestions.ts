@@ -1,5 +1,5 @@
 import type { AskUserOutcome, AskUserRequest } from "../../shared/apiTypes";
-import type { ChatLine } from "./components/shared";
+import type { ChatLine } from "./chatTypes";
 
 export interface QuestionTailContext {
   historyReady: boolean;

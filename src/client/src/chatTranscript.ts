@@ -1,5 +1,5 @@
 import { appendText, appendThinking, askUserQuestionFromToolDetails, askUserRecordFromToolDetails, normalizeMessage, normalizeMessages, previewFromDetails, summarizeArgs, textMessage, withMessageMeta } from "./chatMessages";
-import type { ChatLine, ToolExecutionPart } from "./components/shared";
+import type { ChatLine, ToolExecutionPart } from "./chatTypes";
 import { appendShellChunk, finalizeShellMessage, shellStartMessage } from "./shellMessages";
 import type { SessionUiEvent } from "./sessionSocket";
 

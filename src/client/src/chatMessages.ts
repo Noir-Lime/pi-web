@@ -1,7 +1,7 @@
 import { ASK_USER_ANSWERS_CUSTOM_TYPE } from "../../shared/apiTypes";
 import { parseAskUserOutcome, parseAskUserRequest } from "./api/parsers";
 import { isSessionMediaId, validImageDimensions } from "../../shared/sessionMedia";
-import type { ChatLine, ChatPart, ToolExecutionPart, ToolPreview } from "./components/shared";
+import type { ChatLine, ChatPart, ToolExecutionPart, ToolPreview } from "./chatTypes";
 
 export function normalizeMessages(messages: unknown[]): ChatLine[] {
   const lines: ChatLine[] = [];
