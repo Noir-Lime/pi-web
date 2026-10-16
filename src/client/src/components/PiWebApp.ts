@@ -1748,6 +1748,7 @@ export class PiWebApp extends LitElement {
         .tool=${this.effectiveWorkspaceTool(panels)}
         .panels=${panels}
         .pinnedIds=${this.navigationPreferences.pinnedIds}
+        .hideToolTabs=${!this.isDesktopSideBySideLayout()}
         .onShowNavigation=${this.showNavigation}
         .onTogglePanel=${this.isDesktopSideBySideLayout() ? this.workspacePanelActions.toggle : undefined}
         .onSelectTool=${(tool: QualifiedContributionId) => { this.openWorkspaceTool(tool); }}

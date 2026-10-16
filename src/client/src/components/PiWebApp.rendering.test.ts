@@ -97,6 +97,8 @@ describe("application rendering boundaries", () => {
     await settle(app);
     expect(layout()?.classList.contains("workspace-view")).toBe(true);
     expect(tabs().find((button) => button.title === "Test")?.classList.contains("selected")).toBe(true);
+    expect(app.shadowRoot?.querySelector("workspace-panel")?.shadowRoot?.querySelector("header")).toBeNull();
+    expect(app.shadowRoot?.querySelector("workspace-panel")?.shadowRoot?.textContent).toContain("Tool content");
     tabs().find((button) => button.title === "Chat")?.click();
     await settle(app);
     expect(layout()?.classList.contains("chat-view")).toBe(true);
@@ -107,7 +109,23 @@ describe("application rendering boundaries", () => {
     expect(layout()?.classList.contains("two-column-layout")).toBe(false);
     expect(tabs().map((button) => button.title)).not.toContain("Chat");
     expect(app.shadowRoot?.querySelector("workspace-panel")?.shadowRoot?.textContent).toContain("Tool content");
+    expect(app.shadowRoot?.querySelector("workspace-panel")?.shadowRoot?.querySelector("header")).not.toBeNull();
   });
+
+  it.each([false, true])("uses only the shared tool tabs in a narrow layout (mobile: %s)", async (mobile) => {
+    const app = await mountApp({ selectedWorkspace: workspace, workspaces: [workspace], mainView: "workspace" }, () => html`<p>Tool content</p>`);
+    const shell: unknown = Reflect.get(app, "appShell");
+    if (!(shell instanceof AppShellController)) throw new Error("Expected shell controller");
+    shell.isDesktopSideBySideLayout = false;
+    shell.isMobileNavigationLayout = mobile;
+    app.requestUpdate();
+    await settle(app);
+
+    expect(app.shadowRoot?.querySelector("app-mobile-main-tabs")?.shadowRoot?.querySelector('button[title="Test"]')).not.toBeNull();
+    expect(app.shadowRoot?.querySelector("workspace-panel")?.shadowRoot?.querySelector("header")).toBeNull();
+    expect(app.shadowRoot?.querySelector("workspace-panel")?.shadowRoot?.textContent).toContain("Tool content");
+  });
+
   it("moves navigation collapse and expand actions between top bars without leaving buttons in resize rails", async () => {
     const app = await mountApp({ selectedWorkspace: workspace, workspaces: [workspace], mainView: "chat" });
     const shell: unknown = Reflect.get(app, "appShell");
@@ -285,7 +303,7 @@ describe("application rendering boundaries", () => {
   it("selects workspace tools from Navigation without confusing tool IDs with views", async () => {
     const app = await mountApp({ selectedWorkspace: workspace, workspaces: [workspace], mainView: "chat" }, () => html`<p>Tool content</p>`);
     await settle(app);
-    app.shadowRoot?.querySelector("workspace-panel")?.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Navigation"]')?.click();
+    app.shadowRoot?.querySelector("app-mobile-main-tabs")?.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Navigation"]')?.click();
     await settle(app);
     const dialog = app.shadowRoot?.querySelector<NavigationDialog>("navigation-dialog");
     const tool = [...dialog?.shadowRoot?.querySelectorAll<HTMLButtonElement>(".destination-button") ?? []].find((button) => button.textContent === "Test");
@@ -321,13 +339,13 @@ describe("application rendering boundaries", () => {
     expect(app.shadowRoot?.querySelector("navigation-dialog")).toBeNull();
     expect(deepActiveElement(document)).toBe(originalFocus);
   });
-  it("updates both tab surfaces from pin controls without changing selected content, and reloads preferences", async () => {
+  it("updates shared tabs from pin controls without changing selected content, and reloads preferences", async () => {
     const app = await mountApp({ selectedWorkspace: workspace, workspaces: [workspace], workspaceTool: "render-test:panel", mainView: "workspace" }, () => html`<p>Selected tool content</p>`);
     await settle(app);
     const workspacePanel = app.shadowRoot?.querySelector("workspace-panel");
-    const open = workspacePanel?.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Navigation"]');
+    const open = app.shadowRoot?.querySelector("app-mobile-main-tabs")?.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Navigation"]');
     expect(open).not.toBeNull();
-    expect(workspacePanel?.shadowRoot?.querySelector("header > button:last-child")).toBe(open);
+    expect(workspacePanel?.shadowRoot?.querySelector("header")).toBeNull();
     expect(open?.querySelector("svg")).not.toBeNull();
     expect(open?.classList.contains("selected")).toBe(false);
     const tabStrip = app.shadowRoot?.querySelector("app-mobile-main-tabs");
@@ -352,7 +370,7 @@ describe("application rendering boundaries", () => {
     await settle(app);
     expect(open?.classList.contains("selected")).toBe(false);
     expect(tabStrip?.shadowRoot?.querySelector('button[aria-label="Navigation"]')?.classList.contains("selected")).toBe(false);
-    expect(workspacePanel?.shadowRoot?.querySelector('button[title="Test"]')?.classList.contains("selected")).toBe(true);
+    expect(tabStrip?.shadowRoot?.querySelector('button[title="Test"]')?.classList.contains("selected")).toBe(true);
     expect(workspacePanel?.shadowRoot?.querySelector(".panel-content")?.textContent).toContain("Selected tool content");
     document.body.replaceChildren();
     const reloaded = await mountApp({});
