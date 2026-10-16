@@ -50,7 +50,7 @@ export const chatStyles = css`
   .activity-dock.active .dot { width: 5px; height: 5px; animation: pulse 1s ease-in-out infinite; opacity: 1; }
   .msg { --ui-transcript-bg: var(--pi-bg); display: flow-root; max-width: 100%; min-width: 0; margin: 0; padding: 12px 16px 16px; overflow: visible; }
   .chat > .msg:last-child, .chat > .session-activity:last-child { margin-bottom: 0; }
-  .msg.conversation-message { --ui-transcript-bg: var(--pi-chat-conversation-bg); --formatted-link-color: color-mix(in srgb, var(--pi-accent) 45%, var(--pi-text) 55%); --formatted-muted-color: color-mix(in srgb, var(--pi-text-secondary) 80%, var(--pi-text) 20%); border-inline-start: 3px solid color-mix(in srgb, var(--pi-muted) 55%, var(--pi-border) 45%); padding-inline-start: 13px; }
+  .msg.conversation-message { padding: 12px; --ui-transcript-bg: var(--pi-chat-conversation-bg); --formatted-link-color: color-mix(in srgb, var(--pi-accent) 45%, var(--pi-text) 55%); --formatted-muted-color: color-mix(in srgb, var(--pi-text-secondary) 80%, var(--pi-text) 20%); border-inline-start: 3px solid color-mix(in srgb, var(--pi-muted) 55%, var(--pi-border) 45%); padding-inline-start: 12px; }
   .msg.user { --ui-transcript-bg: color-mix(in srgb, var(--pi-accent) 6%, var(--pi-bg)); border-inline-start-color: color-mix(in srgb, var(--pi-accent) 55%, var(--pi-bg)); }
   .msg.conversation-message > .msg-header .msg-header-trailing { opacity: 1; }
   .msg.conversation-message > .msg-header .ui-button { color: var(--formatted-muted-color); }
@@ -105,11 +105,13 @@ export const chatStyles = css`
   .session-activity span, .session-activity small { color: var(--pi-muted); }
   .history-boundary small { color: var(--pi-dim); }
   .msg-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 32px; margin-bottom: 4px; }
-  /* Let the first lines use the space beside actions without covering message text. */
-  .msg-header.conversation-header { float: inline-end; margin: -4px 0 4px 12px; max-width: calc(100% - 12px); }
+  /* Both columns set the row height; center content while actions stay at the top. */
+  .msg.conversation-layout { display: grid; grid-template: "body actions" auto "meta meta" auto / minmax(0, 1fr) fit-content(50%); align-items: start; padding: 0; }
+  .conversation-body { grid-area: body; min-width: 0; align-self: center; padding: 12px; }
+  .conversation-layout > .msg-meta-details { grid-area: meta; padding: 12px; }
+  .msg-header.conversation-header { grid-area: actions; min-width: 0; margin: 0; }
   .msg-header.conversation-header .msg-header-trailing { flex-wrap: wrap; }
   .msg-header.conversation-header .msg-actions { flex-wrap: wrap; flex-shrink: 1; }
-  .conversation-header ~ .part:not(formatted-text) { clear: both; }
   .msg-header-trailing { min-width: 0; flex: 1 1 auto; display: inline-flex; align-items: stretch; justify-content: flex-end; gap: 0; }
   .msg-actions { flex: 0 0 auto; }
   .msg-action { font-size: 14px; }

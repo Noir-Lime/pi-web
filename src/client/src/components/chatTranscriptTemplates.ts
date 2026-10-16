@@ -54,11 +54,13 @@ export function renderMessage(context: TranscriptRenderContext, message: ChatLin
     const toolOnly = isToolExecutionOnlyMessage(message);
     const hasHeader = chatMessageHasHeader(message);
     const shellClass = toolOnly ? "msg tool-execution-shell" : "msg ask-user-record-shell";
-    const conversationClass = message.role === "user" || message.role === "assistant" ? " conversation-message" : "";
+    const conversationClass = hasHeader && (message.role === "user" || message.role === "assistant") ? " conversation-message conversation-layout" : "";
     return html`
       <article class=${`${hasHeader ? `msg ${message.role}${conversationClass}` : shellClass} ui-transcript-surface`} data-index=${index} data-scroll-anchor-id=${context.anchors.message(index, message) ?? nothing}>
         ${hasHeader ? renderMessageHeader(context, message, String(index), index, entryActionHeaders) : null}
-        ${message.parts.map((part, partIndex) => renderPart(context, part, message, index, partIndex))}
+        ${conversationClass !== "" ? html`
+          <div class="conversation-body">${message.parts.map((part, partIndex) => renderPart(context, part, message, index, partIndex))}</div>
+        ` : message.parts.map((part, partIndex) => renderPart(context, part, message, index, partIndex))}
       </article>
     `;
   }
