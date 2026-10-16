@@ -807,7 +807,6 @@ export interface SessionLabelContribution {
 }
 
 export type ThemeColorScheme = "dark" | "light";
-export type ThemeTokens = Record<string, string>;
 
 export interface ThemeContribution {
   id: LocalContributionId;
@@ -815,7 +814,6 @@ export interface ThemeContribution {
   description?: string;
   order?: number;
   colorScheme: ThemeColorScheme;
-  tokens: ThemeTokens;
   stylesheets?: StylesheetContribution[];
 }
 

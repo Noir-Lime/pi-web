@@ -701,14 +701,12 @@ export interface SessionLabelContribution {
     items: (context: SessionLabelContext) => SessionLabelItem[];
 }
 export type ThemeColorScheme = "dark" | "light";
-export type ThemeTokens = Record<string, string>;
 export interface ThemeContribution {
     id: LocalContributionId;
     name: string;
     description?: string;
     order?: number;
     colorScheme: ThemeColorScheme;
-    tokens: ThemeTokens;
     stylesheets?: StylesheetContribution[];
 }
 export interface ThemePairContribution {

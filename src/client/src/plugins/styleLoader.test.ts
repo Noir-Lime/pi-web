@@ -67,6 +67,7 @@ describe("createPluginStylesheetLoader", () => {
     const load = createPluginStylesheetLoader({ fetch, createSheet: fixture.createSheet });
     expect(await load(fileUrl, new AbortController().signal)).toBe(fixture.sheet);
     expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0]?.[1]?.headers).toEqual({ Accept: "text/css" });
     expect(fixture.replaceSync).toHaveBeenCalledWith("x { background: url(https://cdn.test/styles/icon.png) }");
   });
 

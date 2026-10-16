@@ -25,7 +25,8 @@ export function createPluginStylesheetLoader(options: PluginStylesheetLoaderOpti
     }, timeoutMs);
     try {
       controller.signal.throwIfAborted();
-      const response = await fetchFile(url, { signal: controller.signal });
+      // Content negotiation also keeps dev servers from returning a CSS-as-JS module.
+      const response = await fetchFile(url, { signal: controller.signal, headers: { Accept: "text/css" } });
       if (!response.ok) throw new Error(`Stylesheet request failed: HTTP ${String(response.status)}`);
       const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
       if (contentType !== "text/css") throw new Error("Stylesheet response must have Content-Type text/css");

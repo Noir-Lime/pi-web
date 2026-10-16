@@ -1,0 +1,37 @@
+:root {
+  --pi-bg: #0d1117;
+  --pi-surface: #161b22;
+  --pi-surface-hover: #21262d;
+  --pi-terminal-bg: #05070a;
+  --pi-terminal-text: #e6edf3;
+  --pi-border: #30363d;
+  --pi-border-muted: #21262d;
+  --pi-text: #e6edf3;
+  --pi-text-secondary: #c9d1d9;
+  --pi-text-bright: #f0f6fc;
+  --pi-muted: #8b949e;
+  --pi-dim: #6e7681;
+  --pi-accent: #58a6ff;
+  --pi-accent-border: #2f81f7;
+  --pi-selection-bg: #0d2847;
+  --pi-success: #3fb950;
+  --pi-success-border: #238636;
+  --pi-success-bg: #0f1b12;
+  --pi-success-surface: #0f2a16;
+  --pi-success-ring: #3fb95055;
+  --pi-warning: #d29922;
+  --pi-warning-border: #6e5200;
+  --pi-warning-surface: #1f1a10;
+  --pi-danger: #ff7b72;
+  --pi-purple: #d2a8ff;
+  --pi-purple-border: #a371f7;
+  --pi-purple-surface: #21132f;
+  --pi-overlay: #0008;
+  --pi-shadow-soft: #0006;
+  --pi-shadow: #0008;
+  --pi-shadow-strong: #000b;
+  --pi-bg-overlay-soft: #0d1117dd;
+  --pi-bg-overlay: #0d1117e6;
+  --pi-success-bg-overlay: #0f1b12ee;
+  --pi-terminal-selection: #264f78;
+}

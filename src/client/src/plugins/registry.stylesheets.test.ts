@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { PluginRegistry } from "./registry";
 import { stylesheetIntegrationCapabilityToken } from "./styles";
 import type { PiWebPlugin, StylesheetContribution } from "./types";
-import { themePackPlugin } from "./themes";
 
 function plugin(stylesheets: StylesheetContribution[]): PiWebPlugin {
   return { apiVersion: 5, name: "Styles", activate: () => ({ contributions: { stylesheets } }) };
@@ -57,13 +56,8 @@ describe("plugin stylesheet contributions", () => {
 
   it("qualifies theme-owned files separately and ignores machine-bound themes", async () => {
     const registry = new PluginRegistry();
-    const baseline = new PluginRegistry();
-    await baseline.register({ id: "baseline", plugin: themePackPlugin });
-    const tokens = baseline.getThemes()[0]?.tokens;
-    await baseline.dispose();
-    if (tokens === undefined) throw new Error("Expected a built-in palette");
     const themes: PiWebPlugin = { apiVersion: 5, name: "Themes", activate: () => ({ contributions: {
-      themes: ["light", "dark"].map((id) => ({ id, name: id, colorScheme: "dark", tokens, stylesheets: [file] })),
+      themes: ["light", "dark"].map((id) => ({ id, name: id, colorScheme: "dark", stylesheets: [file] })),
     } }) };
     await registry.register({ id: "themes", plugin: themes });
     expect(registry.getThemes().map((theme) => theme.stylesheets?.[0]?.id)).toEqual(["themes:dark:custom", "themes:light:custom"]);
