@@ -5,6 +5,7 @@ import type { QualifiedContributionId } from "../plugins/types";
 import { renderNavigationMenuIcon } from "./tabIcons";
 import { workspacePanelStyles } from "./shared";
 import { pinnedNavigationTabs } from "../navigationPreferences";
+import { renderPanelToggleButton } from "./appShell/panelToggleButton";
 
 export interface WorkspacePanelEmptyState {
   title: string;
@@ -33,6 +34,7 @@ export class WorkspacePanel extends LitElement {
   @property({ type: Boolean }) hideToolTabs = false;
   @property({ attribute: false }) pinnedIds: string[] = [];
   @property({ attribute: false }) onShowNavigation?: () => void;
+  @property({ attribute: false }) onTogglePanel?: () => void;
   @property({ attribute: false }) onSelectTool: (tool: QualifiedContributionId) => void = () => undefined;
   @query(".workspace-header-strip") private workspaceHeaderStrip?: HTMLElement | null;
   @state() private workspaceHeaderCanScrollLeft = false;
@@ -92,6 +94,7 @@ export class WorkspacePanel extends LitElement {
             </div>
           </div>
           ${this.renderNavigationButton(selectedPanel !== undefined && !pinnedPanels.some((panel) => panel.id === selectedPanel.id))}
+          ${renderPanelToggleButton("workspace", false, this.onTogglePanel)}
         </header>
       `}
       ${this.error !== "" ? this.renderEmptyState({ title: this.error }) : selectedPanel === undefined ? this.renderEmptyState({
@@ -136,7 +139,7 @@ export class WorkspacePanel extends LitElement {
 
   private renderEmptyState(state: WorkspacePanelEmptyState, showNavigation = false): TemplateResult {
     return html`
-      ${showNavigation && !this.hideToolTabs ? html`<header>${this.renderNavigationButton()}</header>` : null}
+      ${showNavigation && !this.hideToolTabs ? html`<header>${this.renderNavigationButton()}${renderPanelToggleButton("workspace", false, this.onTogglePanel)}</header>` : null}
       <section class="empty-state" role="status">
         <h2>${state.title}</h2>
         ${state.body === undefined ? null : html`<p>${state.body}</p>`}

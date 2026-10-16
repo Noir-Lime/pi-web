@@ -22,6 +22,9 @@ export interface AppMobileMainTab {
 @customElement("app-mobile-main-tabs")
 export class AppMobileMainTabs extends LitElement {
   @property({ attribute: false }) tabs: AppMobileMainTab[] = [];
+  @property({ attribute: false }) leadingControl: TemplateResult | null = null;
+  @property({ attribute: false }) trailingControl: TemplateResult | null = null;
+  @property({ type: Boolean }) controlsOnly = false;
   @property({ attribute: false }) onShowNavigation?: () => void;
   @property({ type: Boolean }) hiddenActiveDestination = false;
   @property({ attribute: false }) selectedTab: AppMobileMainTabId | undefined = "chat";
@@ -53,6 +56,7 @@ export class AppMobileMainTabs extends LitElement {
     const fallbackLabels = this.fallbackLabels();
     return html`
       <div class=${this.frameClass()}>
+        ${this.leadingControl}
         <div class="mobile-tabs ui-tabs ui-tabs--primary" @scroll=${this.onMobileTabsScroll}>
           ${this.tabs.map((tab) => {
             const selected = this.selectedTab === tab.id;
@@ -66,12 +70,13 @@ export class AppMobileMainTabs extends LitElement {
           })}
           ${this.onShowNavigation === undefined ? null : html`<button type="button" class=${`ui-button ui-button--icon ui-tab navigation-menu-button${this.hiddenActiveDestination ? " selected" : ""}`} title="Navigation" aria-label="Navigation" aria-haspopup="dialog" @click=${this.onShowNavigation}>${renderNavigationMenuIcon()}</button>`}
         </div>
+        ${this.trailingControl}
       </div>
     `;
   }
 
   private frameClass(): string {
-    return `mobile-tabs-frame${this.canScrollLeft ? " can-scroll-left" : ""}${this.canScrollRight ? " can-scroll-right" : ""}`;
+    return `mobile-tabs-frame${this.controlsOnly ? " controls-only" : ""}${this.canScrollLeft ? " can-scroll-left" : ""}${this.canScrollRight ? " can-scroll-right" : ""}`;
   }
 
   private tabClass(tab: AppMobileMainTab): string {
@@ -158,12 +163,15 @@ export class AppMobileMainTabs extends LitElement {
 
   static override styles = [uiButtonStyles, uiToolbarStyles, uiTabStyles, css`
     :host { flex: 0 0 auto; min-width: 0; }
-    .mobile-tabs-frame { position: relative; display: flex; flex: 0 0 auto; min-width: 0; border-bottom: 1px solid var(--pi-border); background: var(--pi-bg); }
+    .mobile-tabs-frame { position: relative; display: flex; align-items: stretch; flex: 0 0 auto; min-width: 0; min-height: 44px; border-bottom: 1px solid var(--pi-border); background: var(--pi-bg); }
     .mobile-tabs-frame::before, .mobile-tabs-frame::after { content: ""; position: absolute; top: 0; bottom: 0; z-index: 2; width: 20px; opacity: 0; pointer-events: none; transition: opacity .15s ease; }
     .mobile-tabs-frame::before { left: 0; background: linear-gradient(90deg, color-mix(in srgb, var(--pi-shadow-strong) 55%, transparent) 0%, transparent 100%); }
     .mobile-tabs-frame::after { right: 0; background: linear-gradient(270deg, color-mix(in srgb, var(--pi-shadow-strong) 55%, transparent) 0%, transparent 100%); }
     .mobile-tabs-frame.can-scroll-left::before, .mobile-tabs-frame.can-scroll-right::after { opacity: 1; }
     .mobile-tabs { flex: 1 1 auto; }
+    .controls-only .mobile-tabs { display: none; }
+    .panel-toggle { border-inline-end: 1px solid var(--pi-border-muted); }
+    .panel-toggle[data-panel-toggle="workspace"] { margin-inline-start: auto; border-inline-start: 1px solid var(--pi-border-muted); border-inline-end: 0; }
     .mobile-tabs .navigation-tab { display: none; }
     .tab-icon { flex: 0 0 auto; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
     .tab-custom-icon { flex: 0 0 auto; width: 18px; height: 18px; display: inline-grid; place-items: center; color: currentColor; pointer-events: none; }

@@ -80,7 +80,7 @@ describe("composable normal chat", () => {
     const body = required(group, ".group-body");
     const image = required(group, "pi-web-transcript-image");
     expect(group.open).toBe(false);
-    expect(body.textContent).toContain("thinking");
+    expect(required(body, ".thinking > summary").textContent).toContain("Thinking");
     const render = vi.spyOn(view, "render");
     group.open = true; group.dispatchEvent(new Event("toggle"));
     group.open = false; group.dispatchEvent(new Event("toggle"));
@@ -89,6 +89,37 @@ describe("composable normal chat", () => {
     expect(required(group, "pi-web-transcript-image")).toBe(image);
     expect(render).not.toHaveBeenCalled();
     expect(localStorage.getItem(groupStorageKey(view.sessionId))).not.toBeNull();
+  });
+
+  it.each([false, true])("keeps skill loading in activity and opens only the live tail by default (streaming: %s)", async (streaming) => {
+    const view = await mount({ ...DEFAULT_CHAT_BEHAVIORS, rememberDisclosures: false });
+    view.isSendingPrompt = streaming;
+    view.messages = [{ role: "skill", entryId: "load-skill", parts: [{ type: "skillRead", name: "ux-writing", path: "/skills/ux-writing/SKILL.md" }] }];
+    await view.updateComplete;
+    const group = required(view.renderRoot, ".event-group");
+    expect(group.hasAttribute("open")).toBe(streaming);
+    expect(required(group, ".skill-read").textContent).toContain("Loaded ux-writing");
+    expect(view.renderRoot.querySelector("article.skill")).toBeNull();
+    expect(group.querySelector(".conversation-message")).toBeNull();
+  });
+
+  it("identifies thinking and failed tool results inside an initially collapsed activity group", async () => {
+    const view = await mount();
+    view.messages = [
+      { role: "assistant", parts: [{ type: "thinking", text: "Check the file first." }] },
+      { role: "tool", parts: [{ type: "toolResult", toolName: "read", text: "File not found", isError: true }] },
+      { role: "assistant", parts: [{ type: "text", text: "The file was not found." }] },
+    ];
+    await view.updateComplete;
+    const group = required(view.renderRoot, ".event-group");
+    const thinking = required(group, ".thinking");
+    const result = required(group, ".tool-result");
+    expect(group).toBeInstanceOf(HTMLDetailsElement);
+    expect(group.hasAttribute("open")).toBe(false);
+    expect(required(thinking, "summary").textContent).toContain("Thinking");
+    expect(thinking.hasAttribute("open")).toBe(false);
+    expect(required(result, "summary").textContent).toContain("read result · Failed");
+    expect(result.hasAttribute("open")).toBe(true);
   });
 
   it.each([true, false])("follows native group and nested toggles without rerendering (remember choices: %s)", async (rememberDisclosures) => {

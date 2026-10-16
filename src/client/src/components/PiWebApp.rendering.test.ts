@@ -53,6 +53,14 @@ beforeEach(() => {
   vi.stubGlobal("cancelAnimationFrame", () => undefined);
 });
 
+function panelToggle(app: PiWebApp, label: string): HTMLButtonElement {
+  for (const host of app.renderRoot.querySelectorAll("app-navigation-panel, workspace-panel, app-mobile-main-tabs")) {
+    const button = host.shadowRoot?.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+    if (button !== undefined && button !== null) return button;
+  }
+  throw new Error(`Expected ${label}`);
+}
+
 afterEach(() => {
   document.body.replaceChildren();
   clearStagedAttachments(machineSessionKey("local", session.id));
@@ -73,14 +81,17 @@ describe("application rendering boundaries", () => {
     app.requestUpdate();
     await settle(app);
     const layout = () => app.shadowRoot?.querySelector(".shell");
-    const edgeButton = (label: string) => app.shadowRoot?.querySelector('app-panel-edge-control[side="workspace"]')?.shadowRoot?.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+    const panelButton = (label: string) => panelToggle(app, label);
     const tabs = () => [...app.shadowRoot?.querySelector("app-mobile-main-tabs")?.shadowRoot?.querySelectorAll<HTMLButtonElement>(".mobile-tabs button") ?? []];
     expect(layout()?.classList.contains("two-column-layout")).toBe(false);
     expect(tabs().map((button) => button.title)).not.toContain("Chat");
-    expect(edgeButton("Collapse workspace panel")).not.toBeNull();
-    edgeButton("Collapse workspace panel")?.click();
+    const collapse = panelButton("Collapse workspace panel");
+    expect(collapse.closest("header")).not.toBeNull();
+    collapse.focus();
+    collapse.click();
     await settle(app);
     expect(layout()?.classList.contains("two-column-layout")).toBe(true);
+    expect(deepActiveElement(document)).toBe(panelButton("Expand workspace panel"));
     expect(tabs().find((button) => button.title === "Chat")?.classList.contains("selected")).toBe(true);
     tabs().find((button) => button.title === "Test")?.click();
     await settle(app);
@@ -89,13 +100,42 @@ describe("application rendering boundaries", () => {
     tabs().find((button) => button.title === "Chat")?.click();
     await settle(app);
     expect(layout()?.classList.contains("chat-view")).toBe(true);
-    expect(edgeButton("Expand workspace panel")).not.toBeNull();
-    edgeButton("Expand workspace panel")?.click();
+    const expand = panelButton("Expand workspace panel");
+    expand.focus();
+    expand.click();
     await settle(app);
     expect(layout()?.classList.contains("two-column-layout")).toBe(false);
     expect(tabs().map((button) => button.title)).not.toContain("Chat");
     expect(app.shadowRoot?.querySelector("workspace-panel")?.shadowRoot?.textContent).toContain("Tool content");
   });
+  it("moves navigation collapse and expand actions between top bars without leaving buttons in resize rails", async () => {
+    const app = await mountApp({ selectedWorkspace: workspace, workspaces: [workspace], mainView: "chat" });
+    const shell: unknown = Reflect.get(app, "appShell");
+    if (!(shell instanceof AppShellController)) throw new Error("Expected shell controller");
+    shell.isDesktopSideBySideLayout = true;
+    shell.isMobileNavigationLayout = false;
+    app.requestUpdate();
+    await settle(app);
+
+    const collapse = panelToggle(app, "Collapse navigation panel");
+    expect(collapse.closest("header")).not.toBeNull();
+    collapse.focus();
+    collapse.click();
+    await settle(app);
+    const expand = panelToggle(app, "Expand navigation panel");
+    expect(expand.getAttribute("aria-expanded")).toBe("false");
+    expect(deepActiveElement(document)).toBe(expand);
+    expect(app.shadowRoot?.querySelector("app-mobile-main-tabs")?.hasAttribute("panel-controls")).toBe(true);
+    expand.click();
+    await settle(app);
+    expect(deepActiveElement(document)).toBe(panelToggle(app, "Collapse navigation panel"));
+    expect(panelToggle(app, "Collapse navigation panel").getAttribute("aria-expanded")).toBe("true");
+    for (const edge of app.shadowRoot?.querySelectorAll("app-panel-edge-control") ?? []) {
+      expect(edge.shadowRoot?.querySelector("button")).toBeNull();
+      expect(edge.shadowRoot?.querySelector('[role="separator"]')).not.toBeNull();
+    }
+  });
+
   it("reactively filters navigation at both layout boundaries without losing hidden pins", async () => {
     let width = 1181;
     const originalMatchMedia = window.matchMedia.bind(window);

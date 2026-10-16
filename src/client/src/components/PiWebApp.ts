@@ -92,6 +92,7 @@ import "./appShell/AppMobileMainTabs";
 import type { AppMobileMainTab } from "./appShell/AppMobileMainTabs";
 import { shouldShowMachinesSection, type AppNavigationPanel, type NavigationFocusTarget } from "./appShell/AppNavigationPanel";
 import "./appShell/AppPanelEdgeControl";
+import { renderPanelToggleButton } from "./appShell/panelToggleButton";
 import "./appShell/AppRefreshControl";
 import { errorBanner } from "./errorBanner";
 import { deprecatedAgentInputsBanner, deprecatedAgentInputsWarnings } from "./deprecatedAgentInputsBanner";
@@ -1748,6 +1749,7 @@ export class PiWebApp extends LitElement {
         .panels=${panels}
         .pinnedIds=${this.navigationPreferences.pinnedIds}
         .onShowNavigation=${this.showNavigation}
+        .onTogglePanel=${this.isDesktopSideBySideLayout() ? this.workspacePanelActions.toggle : undefined}
         .onSelectTool=${(tool: QualifiedContributionId) => { this.openWorkspaceTool(tool); }}
       ></workspace-panel>
     `;
@@ -1759,14 +1761,28 @@ export class PiWebApp extends LitElement {
   private createPanelActions(side: ResizablePanelSide) {
     return {
       toggle: () => {
+        const restoreFocus = deepActiveElement(this.ownerDocument)?.getAttribute("data-panel-toggle") === side;
         if (side === "navigation") this.panelCollapse.toggleNavigationPanel();
         else this.panelCollapse.toggleWorkspacePanel();
+        if (restoreFocus) void this.focusPanelToggle(side);
       },
       resizeStart: () => this.startPanelResize(side),
       resize: (width: number) => { this.panelResize.resizePanel(side, width, { persist: false }); },
       resizeEnd: () => { this.panelResize.persistPanelSizes(); },
       reset: () => { this.resetResizablePanel(side); },
     };
+  }
+
+  private async focusPanelToggle(side: ResizablePanelSide): Promise<void> {
+    await this.updateComplete;
+    if (hasRenderedModal(this.ownerDocument)) return;
+    const collapsed = side === "navigation" ? this.panelCollapse.navigationPanelCollapsed : this.panelCollapse.workspacePanelCollapsed;
+    const selector = collapsed ? "app-mobile-main-tabs" : side === "navigation" ? "aside app-navigation-panel" : "workspace-panel";
+    const host = this.renderRoot.querySelector(selector);
+    if (!(host instanceof LitElement)) return;
+    await host.updateComplete;
+    const button = host.shadowRoot?.querySelector<HTMLButtonElement>(`[data-panel-toggle="${side}"]`);
+    if (button !== undefined && button !== null) focusElement(button);
   }
 
   private renderNavigationPanelEdgeControl() {
@@ -1776,14 +1792,10 @@ export class PiWebApp extends LitElement {
         side="navigation"
         controls="navigation-panel"
         resizeLabel="Resize navigation panel"
-        expandLabel="Expand navigation panel"
-        collapseLabel="Collapse navigation panel"
-        .collapsed=${this.panelCollapse.navigationPanelCollapsed}
         .resizable=${!this.appShell.isMobileNavigationLayout}
         .panelWidth=${this.panelResize.panelWidth("navigation")}
         .minWidth=${constraints.minWidth}
         .maxWidth=${constraints.maxWidth}
-        .onToggle=${this.navigationPanelActions.toggle}
         .onResizeStart=${this.navigationPanelActions.resizeStart}
         .onResize=${this.navigationPanelActions.resize}
         .onResizeEnd=${this.navigationPanelActions.resizeEnd}
@@ -1799,14 +1811,10 @@ export class PiWebApp extends LitElement {
         side="workspace"
         controls="workspace-panel"
         resizeLabel="Resize workspace panel"
-        expandLabel="Expand workspace panel"
-        collapseLabel="Collapse workspace panel"
-        .collapsed=${this.panelCollapse.workspacePanelCollapsed}
         .resizable=${!this.appShell.isMobileNavigationLayout}
         .panelWidth=${this.panelResize.panelWidth("workspace")}
         .minWidth=${constraints.minWidth}
         .maxWidth=${constraints.maxWidth}
-        .onToggle=${this.workspacePanelActions.toggle}
         .onResizeStart=${this.workspacePanelActions.resizeStart}
         .onResize=${this.workspacePanelActions.resize}
         .onResizeEnd=${this.workspacePanelActions.resizeEnd}
@@ -2031,6 +2039,7 @@ export class PiWebApp extends LitElement {
         .sessionLabelItems=${guard(this.workspaceSurfaceInputs(), () => (session: SessionInfo) => this.sessionLabelItems(session))}
         .refreshControl=${this.appShell.shouldShowAppRefreshInHeader() ? this.renderAppRefresh() : undefined}
         .onShowActions=${this.navigationActions.showActions}
+        .onTogglePanel=${this.appShell.isMobileNavigationLayout ? undefined : this.navigationPanelActions.toggle}
         .onToggleProjects=${this.navigationActions.toggleProjects}
         .onToggleWorkspaces=${this.navigationActions.toggleWorkspaces}
         .onToggleSessions=${this.navigationActions.toggleSessions}
@@ -3778,6 +3787,10 @@ export class PiWebApp extends LitElement {
     const selectedTab = this.selectedNavigationTab(panels);
     return html`
       <app-mobile-main-tabs
+        ?panel-controls=${(!this.appShell.isMobileNavigationLayout && this.panelCollapse.navigationPanelCollapsed) || (this.appShell.isDesktopSideBySideLayout && this.panelCollapse.workspacePanelCollapsed)}
+        .controlsOnly=${this.isDesktopSideBySideLayout()}
+        .leadingControl=${!this.appShell.isMobileNavigationLayout && this.panelCollapse.navigationPanelCollapsed ? renderPanelToggleButton("navigation", true, this.navigationPanelActions.toggle) : null}
+        .trailingControl=${this.appShell.isDesktopSideBySideLayout && this.panelCollapse.workspacePanelCollapsed ? renderPanelToggleButton("workspace", true, this.workspacePanelActions.toggle) : null}
         .tabs=${pinnedTabs}
         .hiddenActiveDestination=${availableTabs.some((tab) => tab.id === selectedTab) && !pinnedTabs.some((tab) => tab.id === selectedTab)}
         .onShowNavigation=${this.showNavigation}
@@ -3888,7 +3901,7 @@ export class PiWebApp extends LitElement {
         ${this.renderNavigationPanelEdgeControl()}
         <main class=${mainViewClass(mainView)}>
           ${this.renderContextBar()}
-          ${guard([...this.workspaceSurfaceInputs(), state.sessions, this.unreadSessionIds], () => this.renderMobileMainTabs())}
+          ${guard([...this.workspaceSurfaceInputs(), state.sessions, this.unreadSessionIds, this.panelCollapse.navigationPanelCollapsed, this.panelCollapse.workspacePanelCollapsed], () => this.renderMobileMainTabs())}
           ${this.unknownRouteView() === undefined ? null : html`<div class="error warning" role="alert"><span class="error-text">Unknown view: ${this.unknownRouteView()}</span></div>`}
           ${this.renderServerNoticeBanners()}
           ${errorBanner(this.displayedError(), () => { this.dismissDisplayedError(); })}

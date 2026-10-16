@@ -43,15 +43,19 @@ describe("groupChatMessages", () => {
     ]);
   });
 
-  it("keeps skill reads out of event groups", () => {
+  it("groups agent skill loading with the work leading to an answer", () => {
     const messages: ChatLine[] = [
       { role: "assistant", parts: [{ type: "thinking", text: "plan" }, { type: "skillRead", name: "playwright", path: "/skills/playwright/SKILL.md" }] },
     ];
 
     expect(groupChatMessages(messages)).toEqual([
-      { kind: "group", startIndex: 0, endIndex: 0, messages: [{ index: 0, message: { role: "assistant", parts: [{ type: "thinking", text: "plan" }] } }] },
-      { kind: "message", index: 0, message: { role: "skill", parts: [{ type: "skillRead", name: "playwright", path: "/skills/playwright/SKILL.md" }] } },
+      { kind: "group", startIndex: 0, endIndex: 0, messages: [{ index: 0, message: messages[0] }] },
     ]);
+  });
+
+  it("keeps user-invoked skill content with the request rather than agent activity", () => {
+    const invocation: ChatLine = { role: "user", parts: [{ type: "skillInvocation", name: "ux-writing", location: "/skills/ux-writing", content: "Instructions" }] };
+    expect(groupChatMessages([invocation])).toEqual([{ kind: "message", index: 0, message: invocation }]);
   });
 
   it("keeps image content visible outside collapsed event groups", () => {
@@ -172,7 +176,11 @@ describe("canonicalEntryActionHeaders", () => {
     ]);
     const slices = renderedMessages(groups);
 
-    expect([...canonicalEntryActionHeaders(groups)]).toEqual([slices[2], slices[5], slices[7]]);
+    expect([...canonicalEntryActionHeaders(groups)]).toEqual([
+      slices.find((message) => message.parts.some((part) => part.type === "text" && part.text === "reply")),
+      slices.find((message) => message.parts.some((part) => part.type === "text" && part.text === "request")),
+      slices.find((message) => message.entryId === "skill-only"),
+    ]);
   });
 
   it("selects the rendered tool-image header over its technical result", () => {

@@ -7,6 +7,8 @@ import { selectedMachineId } from "../../controllers/types";
 import type { NavigationSection } from "../../appShell/navigationState";
 import { NAVIGATION_SECTION_ORDER } from "../../appShell/navigationState";
 import type { KeyboardNavigableSection } from "../navigationFocus";
+import { uiButtonStyles } from "../ui/controlStyles";
+import { renderPanelToggleButton } from "./panelToggleButton";
 import "../MachineList";
 import "../MachineSwitcher";
 import "../ProjectList";
@@ -50,6 +52,7 @@ export class AppNavigationPanel extends LitElement {
   @property({ type: Number }) startingSessionCount = 0;
   @property({ type: Boolean }) canStartSession = false;
   @property({ attribute: false }) onShowActions?: () => void;
+  @property({ attribute: false }) onTogglePanel?: () => void;
   @property({ attribute: false }) onToggleMachines?: () => void;
   @property({ attribute: false }) onToggleProjects?: () => void;
   @property({ attribute: false }) onToggleWorkspaces?: () => void;
@@ -145,6 +148,7 @@ export class AppNavigationPanel extends LitElement {
   override render() {
     return html`
       <header>
+        ${renderPanelToggleButton("navigation", false, this.onTogglePanel)}
         <strong>PI WEB</strong>
         <machine-switcher
           .machines=${this.machines}
@@ -159,7 +163,7 @@ export class AppNavigationPanel extends LitElement {
         ></machine-switcher>
         <div class="header-actions">
           ${this.refreshControl}
-          <button title="Show Actions" aria-label="Show Actions" @click=${() => { this.onShowActions?.(); }}>Actions</button>
+          <button class="ui-button" title="Show Actions" aria-label="Show Actions" @click=${() => { this.onShowActions?.(); }}>Actions</button>
         </div>
       </header>
       ${this.compact && shouldShowMachinesSection(this.machines) ? html`
@@ -277,7 +281,7 @@ export class AppNavigationPanel extends LitElement {
     void this.onCancelKeyboardNavigation?.();
   }
 
-  static override styles = css`
+  static override styles = [uiButtonStyles, css`
     :host { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
     :host([compact]) { flex: 1 1 auto; }
     header { flex: 0 0 auto; display: flex; align-items: stretch; min-height: 44px; gap: 0; padding: 0; border-bottom: 1px solid var(--pi-border); }
@@ -286,9 +290,7 @@ export class AppNavigationPanel extends LitElement {
     :host([compact]) header { display: none; }
     .header-actions { flex: 0 0 auto; display: flex; align-items: stretch; gap: 0; border-inline-start: 1px solid var(--pi-border-muted); }
     .header-actions > * + * { border-inline-start: 1px solid var(--pi-border-muted); }
-    .header-actions > button { box-sizing: border-box; min-width: 44px; min-height: 44px; border: 0; border-radius: 0; background: transparent; color: var(--pi-muted); padding: 10px 12px; font: 12px/20px system-ui, sans-serif; }
-    .header-actions > button:hover, .header-actions > button:focus-visible { background: var(--pi-surface-hover); color: var(--pi-text); }
-    .header-actions > button:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: -2px; }
+    .panel-toggle { border-inline-end: 1px solid var(--pi-border-muted); }
     /* Expanded sections share the panel height equally, so collapsing one
        section distributes its space to every remaining section, not just the
        session list. Collapsed sections keep only their heading height. */
@@ -297,8 +299,7 @@ export class AppNavigationPanel extends LitElement {
     project-list[collapsed],
     workspace-list[collapsed],
     session-list[collapsed] { flex: 0 0 auto; min-height: auto; overflow: hidden; }
-    button { border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); color: var(--pi-text); padding: 7px 9px; cursor: pointer; }
-  `;
+  `];
 }
 
 export function shouldShowMachinesSection(machines: readonly Machine[]): boolean {

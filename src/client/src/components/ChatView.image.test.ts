@@ -49,6 +49,29 @@ describe("ChatView image event wiring", () => {
     return { view, presentation, native };
   }
 
+  it("presents tool images as conversation while keeping their technical context in collapsed activity", async () => {
+    const view = new ChatView();
+    view.messages = [
+      { role: "tool", entryId: "tool-image", parts: [
+        { type: "toolResult", toolName: "read", text: "Read image file", isError: false },
+        { type: "image", mimeType: "image/png", data: "QUJD" },
+      ] },
+      { role: "assistant", entryId: "reply", parts: [{ type: "text", text: "Here is the image." }] },
+    ];
+    document.body.append(view);
+    await view.updateComplete;
+
+    const activity = view.renderRoot.querySelector<HTMLDetailsElement>(".event-group");
+    const imageMessage = view.renderRoot.querySelector("article.tool-image-output");
+    expect(activity?.open).toBe(false);
+    expect(imageMessage?.classList.contains("conversation-message")).toBe(true);
+    expect(imageMessage?.closest(".event-group")).toBeNull();
+    expect(imageMessage?.querySelector(".label")?.textContent).toBe("read output");
+    expect(imageMessage?.querySelector("pi-web-transcript-image")).not.toBeNull();
+    expect(view.renderRoot.querySelector("article.assistant")?.classList.contains("conversation-message")).toBe(true);
+    expect(activity?.querySelector(".conversation-message")).toBeNull();
+  });
+
   it("leaves native image load/error events free of custom scroll corrections", async () => {
     const { view, presentation, native } = await mountImage();
     const scroll = vi.fn();

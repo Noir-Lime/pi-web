@@ -34,8 +34,8 @@ export class ToolExecutionView extends LitElement {
     const target = toolTarget(execution, path);
 
     return html`
-      <section class=${`tool-card ui-transcript-surface ${execution.status}`}>
-        <div class="tool-header">
+      <section class=${`tool-card ui-transcript-surface ui-transcript-activity ui-transcript-tool ${execution.status}`}>
+        <div class="tool-header ui-transcript-heading">
           <div class="tool-title">
             <span class="status-icon" aria-hidden="true">${statusIcon(execution.status)}</span>
             <strong>${execution.toolName}</strong>
@@ -129,33 +129,34 @@ export class ToolExecutionView extends LitElement {
 
   static override styles = [uiButtonStyles, uiTranscriptStyles, css`
     :host { display: block; width: 100%; max-width: 100%; min-width: 0; color: var(--pi-text); }
-    .tool-card { --ui-transcript-bg: color-mix(in srgb, var(--pi-muted) 4%, var(--pi-bg)); display: grid; gap: 8px; width: 100%; max-width: 100%; min-width: 0; overflow: hidden; padding: 9px; color: var(--pi-text); }
-    .tool-card.running, .tool-card.pending { --ui-transcript-bg: color-mix(in srgb, var(--pi-warning) 6%, var(--pi-bg)); }
-    .tool-card.error { --ui-transcript-bg: color-mix(in srgb, var(--pi-danger) 8%, var(--pi-bg)); }
+    .tool-card { display: grid; width: 100%; max-width: 100%; min-width: 0; overflow: hidden; padding: 0; color: var(--pi-text); }
+    .tool-card.running, .tool-card.pending { --ui-activity-tone: var(--pi-warning); }
+    .tool-card.error { --ui-activity-tone: var(--pi-danger); }
     .success .status-icon { color: var(--pi-success); }
     .running .status-icon, .pending .status-icon { color: var(--pi-warning); }
-    .error .status-icon, .error .status-label { color: var(--pi-danger); }
-    .tool-header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; min-width: 0; }
+    .error .status-icon { color: var(--pi-danger); }
+    .tool-header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; min-width: 0; }
     .tool-title { flex: 1 1 auto; display: inline-flex; align-items: baseline; gap: 7px; min-width: 0; }
     .status-icon { flex: 0 0 auto; color: var(--pi-muted); }
     strong { flex: 0 0 auto; color: var(--pi-text); }
-    .path, .summary { display: block; flex: 1 1 auto; min-width: 0; max-width: 100%; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: thin; white-space: pre; color: var(--pi-accent); font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; direction: ltr; text-align: left; unicode-bidi: isolate; }
-    .summary { color: var(--pi-muted); font-family: inherit; }
-    .tool-meta { flex: 0 0 auto; display: inline-flex; align-items: baseline; gap: 8px; color: var(--pi-muted); font-size: 12px; }
+    .path, .summary { display: block; flex: 1 1 auto; min-width: 0; max-width: 100%; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: thin; white-space: pre; color: var(--pi-text); font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; direction: ltr; text-align: left; unicode-bidi: isolate; }
+    .summary { color: var(--pi-text-secondary); }
+    .tool-meta { flex: 0 0 auto; display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 8px; color: var(--pi-text-secondary); font-size: 12px; }
     .diff-stats { display: inline-flex; gap: 3px; }
-    .added, .diff .added { color: var(--pi-success); }
-    .removed, .diff .removed { color: var(--pi-danger); }
-    .status-label { text-transform: uppercase; letter-spacing: .04em; color: var(--pi-muted); }
-    .notice { margin: 0; color: var(--pi-warning); }
+    .added, .diff .added { color: color-mix(in srgb, var(--pi-success) 65%, var(--pi-text) 35%); }
+    .removed, .diff .removed { color: color-mix(in srgb, var(--pi-danger) 65%, var(--pi-text) 35%); }
+    .status-label { color: var(--pi-text-secondary); }
+    .notice { margin: 0; padding: 8px 12px; color: var(--pi-warning); }
     .muted { margin: 0; color: var(--pi-muted); }
     .error-text { margin: 0; color: var(--pi-danger); padding: 8px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
     .text-body { min-width: 0; }
+    .text-body[open], .diff-details[open] { padding-bottom: 12px; }
     .text-body > summary { color: var(--pi-muted); }
     .detail-target, .detail-result { display: grid; gap: 4px; margin: 8px 12px 0; min-width: 0; }
     .detail-label { color: var(--pi-muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
     .text-body pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--pi-text); }
     .detail-result pre { box-sizing: border-box; max-width: 100%; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: thin; border: 1px solid var(--pi-border-muted); border-radius: 0; background: var(--pi-bg); padding: 8px; white-space: pre; overflow-wrap: normal; direction: ltr; text-align: left; unicode-bidi: isolate; }
-    .detail-target-value { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--pi-accent); font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; direction: ltr; text-align: left; unicode-bidi: isolate; }
+    .detail-target-value { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--pi-text-secondary); font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; direction: ltr; text-align: left; unicode-bidi: isolate; }
     .diff-details { min-width: 0; max-width: 100%; }
     .diff-details > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; color: var(--pi-muted); }
     .diff-details > summary span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
