@@ -1,4 +1,4 @@
-import type { TemplateResult } from "lit";
+import type { ReactiveControllerHost, TemplateResult } from "lit";
 import type { DeleteWorkspaceFileResponse, FileContentResponse, FileTreeResponse, MachineKind, PluginBackend, PluginPeer, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, PiWebStatusResponse, PluginCapability, PluginCapabilityProvision, TerminalCommandRunHandle, WorkspaceProviderMetadata, WorkspaceRemovalPresentation, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse } from "./shared/pluginApiTypes.js";
 
 export type {
@@ -248,7 +248,29 @@ export interface ContentRenderingCapability {
   renderMarkdown(request: ContentMarkdownRenderRequest): TemplateResult;
 }
 
+/**
+ * Host capability token: { pluginId: "pi-web", id: "stylesheet-integration", version: 1, parse }.
+ * Direct stylesheet rules reach only explicitly registered roots; custom properties can inherit further.
+ * Internal host selectors/markup are not stable APIs. Existing shared UI primitives remain the base.
+ */
+export interface StylesheetIntegrationCapabilityV1 {
+  /** Register a retained open or closed root. Release on disconnect; register again on reconnect. */
+  readonly registerRoot: (root: ShadowRoot) => () => void;
+  /** Installs a Lit lifecycle controller; call once when constructing the component. */
+  readonly createController: (host: ReactiveControllerHost & { readonly renderRoot?: HTMLElement | DocumentFragment }) => void;
+}
+
+/** A CSS file, normally new URL("./custom.css", import.meta.url).href. Inline CSS and runtime @import are unsupported. */
+export interface StylesheetContribution {
+  id: string;
+  /** Absolute HTTP(S) URL. Assets resolve relative to the CSS file, including redirects. */
+  url: string;
+  /** Lower numbers load first; default 1000. Ties use qualified contribution IDs. */
+  order?: number;
+}
+
 export interface PluginContributions {
+  stylesheets?: StylesheetContribution[];
   contentRenderers?: ContentRendererContribution[];
   messageActions?: MessageActionContribution[];
   actions?: PluginAction[];
@@ -794,6 +816,7 @@ export interface ThemeContribution {
   order?: number;
   colorScheme: ThemeColorScheme;
   tokens: ThemeTokens;
+  stylesheets?: StylesheetContribution[];
 }
 
 export interface ThemePairContribution {

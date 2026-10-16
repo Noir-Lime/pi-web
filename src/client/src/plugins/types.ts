@@ -77,7 +77,17 @@ export interface PluginActivationResult {
   dispose?(signal: AbortSignal): MaybePromise<void>;
 }
 
+export type StylesheetContribution = import("../../../plugin-api").StylesheetContribution;
+
+export interface QualifiedStylesheetContribution extends StylesheetContribution {
+  id: QualifiedContributionId;
+  pluginId: PluginId;
+  machineId?: string;
+  sourcePluginId?: PluginId;
+}
+
 export interface PluginContributions {
+  stylesheets?: StylesheetContribution[];
   contentRenderers?: import("../../../plugin-api").ContentRendererContribution[];
   messageActions?: import("../../../plugin-api").MessageActionContribution[];
   actions?: PluginAction[];
@@ -462,6 +472,7 @@ export interface ThemeContribution {
   order?: number;
   colorScheme: ThemeColorScheme;
   tokens: ThemeTokens;
+  stylesheets?: StylesheetContribution[];
 }
 
 export interface ThemePairContribution {
