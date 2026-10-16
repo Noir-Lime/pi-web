@@ -1382,6 +1382,8 @@ type SessionUiEventBody =
   | { type: "command.output"; level: "info" | "success" | "error"; message: string }
   | SessionNotificationInboxEvent
   | { type: "session.error"; message: string }
+  /** Technical details for the browser console, never transcript or notification content. */
+  | { type: "session.diagnostic"; message: string }
   | { type: "dialog.opened"; dialog: PendingExtensionDialog }
   | { type: "dialog.closed"; dialogId: string; reason: ExtensionDialogCloseReason; answer?: ExtensionDialogAnswer }
   | { type: "session.name"; sessionId: string; name?: string }

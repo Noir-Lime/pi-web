@@ -741,6 +741,8 @@ export function parseSessionStreamEvent(value: unknown): SessionUiEvent {
       return parseCommandOutputEvent(record);
     case "session.error":
       return { type: "session.error", message: requireString(record, "message") };
+    case "session.diagnostic":
+      return { type: "session.diagnostic", message: requireString(record, "message") };
     case "session.name":
       return parseSessionNameEvent(record);
     case "session.created":
