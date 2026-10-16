@@ -1,10 +1,8 @@
 import { css, svg, type TemplateResult } from "lit";
-export type { ChatLine, ChatPart, ChatImagePart, ToolExecutionPart, ToolPreview } from "../chatTypes";
+export type { ChatLine } from "../chatTypes";
 import type { SessionWarningSeverity } from "../api";
 import { uiButtonStyles, uiMenuStyles, uiToolbarStyles, uiTabStyles } from "./ui/controlStyles";
 
-/** Shared downstream shadow for content passing beneath sticky scroll controls. */
-export const scrollHideShadow = css`0 8px 18px var(--pi-shadow-soft)`;
 /** Directional navigation shadow that avoids a halo above the fixed heading edge. */
 export const scrollBoundaryShadow = css`0 8px 18px -8px var(--pi-shadow-soft)`;
 
@@ -247,10 +245,6 @@ export const listStyles = css`
   .workspace-detail-row .workspace-label-base, .workspace-detail-row .workspace-label-item, .workspace-detail-row .workspace-label-render { overflow: visible; text-overflow: clip; overflow-wrap: anywhere; white-space: normal; }
   @keyframes pulse { 0%, 100% { transform: scale(.75); opacity: .55; } 50% { transform: scale(1.2); opacity: 1; } }
 `;
-
-export { chatStyles } from "./chat/chatStyles";
-
-export { formattedTextStyles } from "./formattedTextStyles";
 
 export const statusBarStyles = css`
   :host { display: block; color: var(--pi-muted); font: 12px system-ui, sans-serif; }

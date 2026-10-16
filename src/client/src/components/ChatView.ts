@@ -9,7 +9,7 @@ import { ChatDisclosureController } from "../chatDisclosure";
 import { writeClipboardText } from "../clipboard";
 import { renderSuggestedInput } from "./chat/SuggestedInput";
 import { chatSessionWarningRows, renderSessionWarnings } from "./chat/SessionWarnings";
-export { chatSessionWarningRows, type ChatSessionWarningRow } from "./chat/SessionWarnings";
+export { chatSessionWarningRows } from "./chat/SessionWarnings";
 import { type QueuedMessageAction, type QueuedMessageActionTarget } from "../queuedMessageActions";
 import { chatQueuedMessageSections, renderQueuedMessageSection, type QueuedMessageSection } from "./chat/QueuedMessages";
 export { chatQueuedMessageSections, chatQueuedSectionShowsClearAction, type QueuedMessageSection } from "./chat/QueuedMessages";
