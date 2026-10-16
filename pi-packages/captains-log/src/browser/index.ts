@@ -1,7 +1,17 @@
-import type { PiWebPlugin, WorkspacePanelContext, PluginPeerChannel } from "@jmfederico/pi-web/plugin-api";
+import type { PiWebPlugin, WorkspacePanelContext, PluginPeerChannel, PluginCapability, UiStylesCapabilityV1 } from "@jmfederico/pi-web/plugin-api";
 import { isLogEntry, MAX_FINDINGS, type LogEntry } from "./protocol.js";
 import { renderCaptainPanel, selectedSourceSession } from "./panel.js";
 import { LOG_CHANNEL, isCaptainServerFrame, type CaptainClientFrame } from "./channelProtocol.js";
+
+const uiStylesCapability: PluginCapability<UiStylesCapabilityV1, 1> = {
+  pluginId: "pi-web", id: "ui-styles", version: 1,
+  parse(value) {
+    if (typeof value !== "object" || value === null || !("cssText" in value) || typeof value.cssText !== "string") {
+      throw new Error("PI WEB UI styles capability v1 requires cssText");
+    }
+    return { cssText: value.cssText };
+  },
+};
 
 interface PanelState {
   entries: LogEntry[]; selected?: LogEntry; status: string;
@@ -12,7 +22,9 @@ interface PanelState {
 const plugin: Extract<PiWebPlugin, { apiVersion: 4 }> = {
   apiVersion: 4,
   name: "Captain's Log",
+  requires: [uiStylesCapability],
   activate({ html, runtimePluginId, lifetimeSignal }) {
+    let uiCssText = "";
     if (!customElements.get("captains-log-lifetime")) {
       customElements.define("captains-log-lifetime", class extends HTMLElement {
         mount?: () => void;
@@ -159,6 +171,9 @@ const plugin: Extract<PiWebPlugin, { apiVersion: 4 }> = {
       context.host.requestRender();
     }
     return {
+      start({ capabilities }) {
+        uiCssText = capabilities.resolve(uiStylesCapability).cssText;
+      },
       contributions: {
         actions: [{
           id: "summon", title: "Open pirate translator", group: "Captain's Log",
@@ -171,7 +186,7 @@ const plugin: Extract<PiWebPlugin, { apiVersion: 4 }> = {
             const state = stateFor(context);
             const source = selectedSourceSession(context);
             return html`<captains-log-lifetime .mount=${() => { void connect(context, state); }} .unmount=${() => { stop(state); }} .scope=${state}>
-              ${renderCaptainPanel(html, {
+              ${renderCaptainPanel(html, uiCssText, {
                 ...state,
                 connected: state.channel !== undefined && context.peer?.openChannel !== undefined,
                 pending: state.pending !== undefined,

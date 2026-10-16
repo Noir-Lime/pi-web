@@ -4,17 +4,22 @@ import { afterEach, expect, it, vi } from "vitest";
 import plugin from "../../../pi-packages/captains-log/src/browser/index.js";
 import type { LogEntry } from "../../../pi-packages/captains-log/src/browser/protocol.js";
 import { entryFrames, isCaptainClientFrame } from "../../../pi-packages/captains-log/src/browser/channelProtocol.js";
-import type { JsonValue, PluginPeerChannelClose, PluginPeerChannelOptions, WorkspacePanelContext } from "../../plugin-api.js";
+import type { JsonValue, PluginCapability, PluginPeerChannelClose, PluginPeerChannelOptions, WorkspacePanelContext } from "../../plugin-api.js";
 import { parsePluginBackendChannelServerEnvelope } from "../../shared/pluginBackendProtocol.js";
 
 afterEach(() => { document.body.replaceChildren(); localStorage.clear(); vi.useRealTimers(); });
 const source = { id: "source-session-a", name: "Fix the login flow", cwd: "/workspace", archived: false, pending: false };
 const entry: LogEntry = { id: "11111111-1111-4111-8111-111111111111", createdAt: "2026-09-01", status: "running", text: "", sessionId: "captain-session", question: "Translate the last reply", stages: ["Backend admitted channel translation"], sourceSessionId: source.id };
+const hostCssText = '.ui-button { color: red; } /* </style><span id="injected"></span> */';
 const flush = async () => { for (let i = 0; i < 15; i++) await Promise.resolve(); };
 async function setup(requestHandler: (operation: string) => Promise<JsonValue> = (operation) => Promise.resolve(operation === "list" ? [] : { ...entry })) {
   const container = document.createElement("div"); document.body.append(container);
   const lifetime = new AbortController();
   const activation = await plugin.activate({ apiVersion: 4, pluginId: "captains-log", runtimePluginId: "captains-log", html, svg, signal: new AbortController().signal, lifetimeSignal: lifetime.signal });
+  await activation.start?.({
+    capabilities: { resolve: <Value,>(capability: PluginCapability<Value>): Value => capability.parse({ cssText: hostCssText }) },
+    signal: new AbortController().signal,
+  });
   const panel = required(activation.contributions.workspacePanels?.[0]);
   const channels: { options: PluginPeerChannelOptions; send: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn>; finish: (close: PluginPeerChannelClose) => void }[] = [];
   const request = vi.fn(requestHandler);
@@ -53,6 +58,20 @@ function button(label = "Let the Captain tell it") {
   if (!match) throw new Error(`Missing button: ${label}`);
   return match;
 }
+it("requires host UI styles and applies them as text to native controls", async () => {
+  expect(plugin.requires).toMatchObject([{ pluginId: "pi-web", id: "ui-styles", version: 1 }]);
+  expect(() => plugin.requires?.[0]?.parse({})).toThrow("cssText");
+  const app = await setup();
+  try {
+    expect(document.querySelector("style[data-ui-styles]")?.textContent).toBe(hostCssText);
+    expect(document.querySelector("#injected")).toBeNull();
+    expect(button().classList.contains("ui-button--primary")).toBe(true);
+    const translate = button();
+    app.selectSession({ ...source, name: "Renamed source" });
+    expect(button()).toBe(translate);
+    expect([...document.querySelectorAll(".captains-log button")].every((control) => control.classList.contains("ui-button"))).toBe(true);
+  } finally { await app.dispose(); }
+});
 it("translates the session selected at click time, renders frozen reply chunks, and never polls", async () => {
   vi.useFakeTimers();
   const app = await setup();

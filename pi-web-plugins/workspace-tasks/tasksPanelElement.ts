@@ -28,11 +28,13 @@ export function tasksPanelBadge(context: WorkspacePanelContext): string | undefi
   return state?.kind === "unavailable" ? "!" : undefined;
 }
 
-class PiWebTasksPanel extends HTMLElement {
+export class PiWebTasksPanel extends HTMLElement {
   private contextValue: WorkspacePanelContext | undefined;
   private runningTaskId: string | undefined;
   private status: TaskStatus | undefined;
   private readonly root: ShadowRoot;
+  private readonly uiStyle = document.createElement("style");
+  private readonly localStyle = document.createElement("style");
   private readonly onConfigChanged = () => {
     this.render();
   };
@@ -40,6 +42,19 @@ class PiWebTasksPanel extends HTMLElement {
   constructor() {
     super();
     this.root = this.attachShadow({ mode: "open" });
+    this.uiStyle.setAttribute("data-ui-styles", "");
+    this.localStyle.textContent = taskStyles();
+    this.root.append(this.uiStyle, this.localStyle);
+  }
+
+  set uiCssText(value: string) {
+    this.uiStyle.textContent = value;
+  }
+
+  private setContent(markup: string): void {
+    const template = document.createElement("template");
+    template.innerHTML = markup;
+    this.root.replaceChildren(this.uiStyle, this.localStyle, template.content);
   }
 
   set context(value: WorkspacePanelContext | undefined) {
@@ -66,25 +81,24 @@ class PiWebTasksPanel extends HTMLElement {
   private render(): void {
     const context = this.contextValue;
     if (context === undefined) {
-      this.root.innerHTML = `${taskStyles()}<section class="empty">Select a workspace.</section>`;
+      this.setContent(`<section class="empty">Select a workspace.</section>`);
       return;
     }
 
     const state = getOrLoadWorkspaceConfig(context);
-    this.root.innerHTML = `
-      ${taskStyles()}
-      <section class="toolbar">
-        <strong>Workspace Tasks</strong>
-        <span class="toolbar-tasks">
-          <button class="secondary" data-refresh-config ${state.kind === "loading" ? "disabled" : ""}>Refresh</button>
-          <button class="secondary" data-open-terminal>Open Terminal</button>
+    this.setContent(`
+      <section class="ui-toolbar toolbar">
+        <strong class="ui-toolbar-title toolbar-title">Workspace Tasks</strong>
+        <span class="ui-toolbar-group">
+          <button type="button" class="ui-button" data-refresh-config ${state.kind === "loading" ? "disabled" : ""}>Refresh</button>
+          <button type="button" class="ui-button" data-open-terminal>Open Terminal</button>
         </span>
       </section>
       ${this.renderStatus()}
       <section class="viewer tasks-viewer">
         ${this.renderConfigState(state)}
       </section>
-    `;
+    `);
 
     this.root.querySelector("button[data-refresh-config]")?.addEventListener("click", () => {
       void this.refreshConfig(context);
@@ -268,7 +282,7 @@ function renderTask(task: WorkspaceTask, runningTaskId: string | undefined): str
         ${description}
         <code>${escapeHtml(task.command)}</code>
       </div>
-      <button data-task-id="${escapeAttr(task.id)}" ${disabled ? "disabled" : ""}>${running ? "Dispatching…" : "Run"}</button>
+      <button type="button" class="ui-button ui-button--primary" data-task-id="${escapeAttr(task.id)}" ${disabled ? "disabled" : ""}>${running ? "Dispatching…" : "Run"}</button>
     </article>
   `;
 }
@@ -280,18 +294,9 @@ function taskFromConfigState(state: ConfigState | undefined, taskId: string | nu
 
 function taskStyles(): string {
   return `
-    <style>
       :host { display: contents; }
-      .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; padding: 0 0 0 10px; border-bottom: 1px solid var(--pi-border-muted); font-size: 12px; color: var(--pi-muted); }
-      .toolbar > strong { font-weight: 500; }
-      .toolbar-tasks { align-self: stretch; display: inline-flex; align-items: stretch; flex-wrap: wrap; justify-content: flex-end; gap: 0; }
-      .toolbar button.secondary { box-sizing: border-box; min-height: 32px; border: 0; border-radius: 0; background: transparent; color: var(--pi-muted); padding: 6px 10px; font: 12px/20px system-ui, sans-serif; }
-      .toolbar button + button { border-inline-start: 1px solid var(--pi-border-muted); }
-      .toolbar button:hover:not(:disabled) { background: var(--pi-surface-hover); color: var(--pi-text); }
-      .toolbar button:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: -2px; }
-      @media (pointer: coarse) {
-        .toolbar button.secondary { min-width: 44px; min-height: 44px; }
-      }
+      .toolbar { border-bottom: 1px solid var(--pi-border-muted); }
+      .toolbar-title { padding-inline: 10px; }
       .viewer { box-sizing: border-box; min-height: 0; overflow: auto; padding: 12px; }
       .tasks-viewer { display: grid; align-content: start; gap: 12px; }
       .tasks { display: grid; gap: 14px; }
@@ -303,9 +308,6 @@ function taskStyles(): string {
       code, pre { border: 1px solid var(--pi-border-muted); border-radius: 6px; background: var(--pi-bg); color: var(--pi-text-secondary); font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
       code { overflow: auto; padding: 5px 7px; white-space: nowrap; }
       pre { margin: 8px 0 0; overflow: auto; padding: 8px; white-space: pre-wrap; }
-      button { border: 1px solid var(--pi-accent-border); border-radius: 7px; background: var(--pi-accent); color: var(--pi-bg); cursor: pointer; padding: 6px 10px; font: inherit; }
-      button.secondary { border-color: var(--pi-border); background: var(--pi-surface); color: var(--pi-text); }
-      button:disabled { cursor: wait; opacity: 0.65; }
       .empty-state { border: 1px dashed var(--pi-border-muted); border-radius: 8px; color: var(--pi-muted); padding: 12px; }
       .empty-state p { margin: 6px 0 0; }
       .panel-status { margin: 12px 12px 0; }
@@ -318,7 +320,6 @@ function taskStyles(): string {
         .task-card { grid-template-columns: 1fr; }
         .task-card button { justify-self: start; }
       }
-    </style>
   `;
 }
 
