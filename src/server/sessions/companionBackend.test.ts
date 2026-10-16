@@ -1,3 +1,4 @@
+import { resolve as resolvePath } from "node:path";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { createCompanionBackend, type ServerPluginPeerRequestContextV5, type ServerPluginPeerV5, type JsonValue } from "../../server-plugin-api.js";
@@ -6,8 +7,8 @@ import type { ServerPluginPairedBackendContribution } from "../plugins/serverPlu
 import { bindCompanionBackend } from "./companionBackend.js";
 import { PLUGIN_BACKEND_CHANNEL_DRAIN_TIMEOUT_MS } from "../../shared/pluginBackendProtocol.js";
 
-const project = { id: "p", name: "Host project", path: "/host", createdAt: "2026-01-01" };
-const workspace = { id: "w", projectId: "p", path: "/host/work", label: "Host workspace", isMain: false };
+const project = { id: "p", name: "Host project", path: resolvePath("/host"), createdAt: "2026-01-01" };
+const workspace = { id: "w", projectId: "p", path: resolvePath("/host/work"), label: "Host workspace", isMain: false };
 
 function fixture(backend: ServerPluginPeerV5, apiVersion: 3 | 5 = 5, options: { channelCallbackTimeoutMs?: number } = {}) {
   const bus = createEventBus();
