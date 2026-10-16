@@ -524,9 +524,9 @@ export const formattedTextStyles = css`
   h4 { font-size: 14px; }
   .table-scroll { max-width: 100%; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; }
   .table-scroll:focus-visible { outline: 1px solid var(--pi-accent); outline-offset: 2px; }
-  table { border-collapse: collapse; width: max-content; min-width: 100%; max-width: none; }
+  table { --formatted-table-bg: color-mix(in srgb, var(--pi-text) 4%, var(--ui-transcript-bg, var(--pi-bg))); border-collapse: collapse; width: max-content; min-width: 100%; max-width: none; background: var(--formatted-table-bg); }
   th, td { border: 1px solid var(--pi-border); padding: 4px 8px; max-width: 48ch; overflow-wrap: anywhere; }
-  th { background: var(--pi-surface); }
+  th { background: color-mix(in srgb, var(--pi-text) 4%, var(--formatted-table-bg)); }
 `;
 
 export const statusBarStyles = css`
