@@ -1,7 +1,7 @@
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import { createAssistantMessageEventStream, getCurrentSystemPrompt } from "@earendil-works/pi-ai";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { cleanSessionName, fallbackSessionName, generateShortSessionName, requireInitialSessionName } from "./sessionNameGenerator.js";
 import { KNOWN_THINKING_LEVELS } from "../../shared/thinkingLevels.js";
 
@@ -77,7 +77,7 @@ describe("sessionNameGenerator", () => {
       expect(options?.maxTokens).toBe(2048);
       return streamThatCompletes("A short title")(model, context, options);
     };
-    await generateShortSessionName(streamFn, fakeModel(), "A request", 2048);
+    await generateShortSessionName(streamFn, fakeModel(), "A request", { maxTokens: 2048 });
   });
 
   it.each(KNOWN_THINKING_LEVELS)("passes naming thinking level %s independently of the token budget", async (level) => {
@@ -86,7 +86,22 @@ describe("sessionNameGenerator", () => {
       expect(options?.maxTokens).toBe(24);
       return streamThatCompletes("A short title")(model, context, options);
     };
-    expect(await generateShortSessionName(streamFn, fakeModel(), "A request", undefined, level)).toBe("A short title");
+    expect(await generateShortSessionName(streamFn, fakeModel(), "A request", { thinkingLevel: level })).toBe("A short title");
+  });
+
+  it.each([undefined, 90_000])("uses the total request timeout %s, defaulting to 10 seconds", async (timeoutMs) => {
+    const controller = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+    const streamFn: StreamFn = (model, context, options) => {
+      expect(options?.signal).toBe(controller.signal);
+      return streamThatCompletes("A short title")(model, context, options);
+    };
+    try {
+      await generateShortSessionName(streamFn, fakeModel(), "A request", timeoutMs === undefined ? {} : { timeoutMs });
+      expect(timeout).toHaveBeenCalledWith(timeoutMs ?? 10_000);
+    } finally {
+      timeout.mockRestore();
+    }
   });
 
   it("returns undefined when the stream reports an error", async () => {

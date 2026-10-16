@@ -154,6 +154,19 @@ export class SettingsSessiondPanel extends LitElement {
             <small id="session-naming-max-tokens-help">Use a positive whole number. Clear to use 24 tokens, regardless of the model.</small>
           </div>
           <div class="field ui-form-field">
+            <label for="session-naming-timeout">Naming timeout (seconds)</label>
+            <input id="session-naming-timeout" class="ui-input" type="number" min="0.001" max="2147483.647" step="0.001" placeholder="10"
+              aria-describedby="session-naming-timeout-help"
+              .value=${live(config.config.sessionNaming?.timeoutMs === undefined ? "" : String(config.config.sessionNaming.timeoutMs / 1000))}
+              ?disabled=${this.loading || this.saving}
+              @change=${(event: Event) => {
+                const input = event.target;
+                if (!(input instanceof HTMLInputElement)) return;
+                if (input.reportValidity()) void this.saveNamingField("timeoutMs", input.value === "" ? undefined : Math.round(input.valueAsNumber * 1000));
+              }}>
+            <small id="session-naming-timeout-help">Total timeout includes model loading. Increase it for cold local engines. Clear to use 10 seconds.</small>
+          </div>
+          <div class="field ui-form-field">
             <label for="session-naming-thinking-level">Naming thinking level</label>
             <select id="session-naming-thinking-level" class="ui-select"
               aria-describedby="session-naming-thinking-level-help"
@@ -177,6 +190,7 @@ export class SettingsSessiondPanel extends LitElement {
             <dl>
               <div><dt>Naming model</dt><dd>${config.effectiveConfig.sessionNaming?.model ?? "Use session model"}</dd></div>
               <div><dt>Naming token budget</dt><dd>${config.effectiveConfig.sessionNaming?.maxTokens ?? 24}</dd></div>
+              <div><dt>Naming timeout</dt><dd>${(config.effectiveConfig.sessionNaming?.timeoutMs ?? 10000) / 1000} seconds</dd></div>
               <div><dt>Naming thinking level</dt><dd>${config.effectiveConfig.sessionNaming?.thinkingLevel ?? "minimal"}</dd></div>
             </dl>
           </section>
@@ -221,6 +235,7 @@ export class SettingsSessiondPanel extends LitElement {
       ...(current.model === undefined ? {} : { model: current.model }),
       ...(current.maxTokens === undefined ? {} : { maxTokens: current.maxTokens }),
       ...(current.thinkingLevel === undefined ? {} : { thinkingLevel: current.thinkingLevel }),
+      ...(current.timeoutMs === undefined ? {} : { timeoutMs: current.timeoutMs }),
     };
     await this.onSave?.({ sessionNaming });
   }

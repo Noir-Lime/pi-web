@@ -387,10 +387,10 @@
 <td>Sessiond restart</td>
 </tr>
 <tr>
-<th scope="row">Session naming<br><code>sessionNaming.model</code><br><code>sessionNaming.maxTokens</code><br><code>sessionNaming.thinkingLevel</code></th>
+<th scope="row">Session naming<br><code>sessionNaming.model</code><br><code>sessionNaming.maxTokens</code><br><code>sessionNaming.thinkingLevel</code><br><code>sessionNaming.timeoutMs</code></th>
 <td>Machine; no project overrides</td>
-<td>Session model; 24 tokens; minimal thinking</td>
-<td>Choose a naming model, generation budget, and thinking level in Settings → Session daemon.</td>
+<td>Session model; 24 tokens; minimal thinking; 10 seconds</td>
+<td>Choose a naming model, generation budget, thinking level, and timeout in Settings → Session daemon.</td>
 <td>Next naming request; no restart</td>
 </tr>
 <tr>
@@ -410,10 +410,11 @@
 </tbody></table></div>
 <details class="config-details" id="session-naming"><summary>Session naming model and token budget</summary>
 <p>Use <strong>Settings → Session daemon → Session naming</strong> on the selected machine. The naming model button opens a searchable list of that machine’s available models; choose <strong>Use session model</strong> to remove the model override. No active session is required. Refresh settings to reload the list after configuring a provider. Naming defaults to the session’s model and <strong>24 tokens</strong>, including for reasoning models. It does not change the conversation’s model.</p>
-<pre><code>{ "sessionNaming": { "model": "provider/model-id", "maxTokens": 2048, "thinkingLevel": "off" } }</code></pre>
+<pre><code>{ "sessionNaming": { "model": "provider/model-id", "maxTokens": 2048, "thinkingLevel": "off", "timeoutMs": 90000 } }</code></pre>
 <p>All overrides are optional. Omit <code>model</code> to use the session model; omit <code>maxTokens</code> to restore 24. The model uses that machine’s catalog and configured credentials. The budget must be a positive integer; providers may count reasoning against it. It does not control title length.</p>
 <p><code>thinkingLevel</code> defaults to <code>minimal</code>. Supported values are <code>off</code>, <code>minimal</code>, <code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code>, and <code>max</code>. Choose <code>off</code> to disable optional reasoning where supported, while keeping a positive token budget for the title. Models and providers may limit or map levels; <code>off</code> cannot disable mandatory reasoning. Naming settings do not change the conversation’s thinking level.</p>
-<p>Saved model, budget, and thinking-level changes apply to the next naming request without a restart or reload. Existing names and in-progress naming requests are unchanged. Agent permission changes in the same panel still require a session-daemon restart. Naming failures use the first-message fallback and are recorded in daemon logs.</p>
+<p><code>timeoutMs</code> sets the total naming-request timeout, including gateway queueing, model loading, and generation. It defaults to <code>10000</code> (10 seconds). Use a positive integer in milliseconds, up to <code>2147483647</code>; Settings displays seconds. Increase it for local models that need time to load. Clearing the UI field restores 10 seconds. This is a total wall-time limit, not an idle timeout, and has no environment-variable override.</p>
+<p>Saved model, budget, thinking-level, and timeout changes apply to the next naming request without a restart or reload. Existing names and in-progress naming requests are unchanged. Agent permission changes in the same panel still require a session-daemon restart. Naming failures use the first-message fallback and are recorded in daemon logs.</p>
 </details>
 <details class="config-details"><summary>Independent sessions vs. tracked subsessions</summary>
 <p>Independent sessions run in a workspace of the same project without returning output to their parent. Tracked subsessions run in the parent’s working directory and return results automatically; the parent can keep working or wait for them. Delivered results are not automatically repeated, but remain available for review.</p>

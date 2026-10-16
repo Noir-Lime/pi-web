@@ -7,6 +7,7 @@ import type { SettingsPanelFrame } from "./SettingsPanelFrame";
 import type { CommandPicker } from "../CommandPicker";
 
 afterEach(() => {
+  vi.restoreAllMocks();
   document.body.replaceChildren();
   localStorage.clear();
 });
@@ -132,21 +133,21 @@ describe("SettingsSessiondPanel DOM", () => {
 
   it("separates saved naming values and immediate-effect help from restart permissions", async () => {
     const config = configResponse();
-    config.effectiveConfig.sessionNaming = { model: "provider/naming", maxTokens: 64, thinkingLevel: "off" };
+    config.effectiveConfig.sessionNaming = { model: "provider/naming", maxTokens: 64, thinkingLevel: "off", timeoutMs: 30500 };
     const panel = await mount(config);
     const summary = panel.shadowRoot?.querySelector("section[aria-labelledby='naming-summary-heading']");
     expect(summary?.getAttribute("aria-describedby")).toBe("naming-summary-help");
     expect(summary?.querySelector("h3")?.textContent).toBe("For the next naming request");
     expect(summary?.querySelector("small")?.textContent).toBe("Saved naming settings apply without a restart. Existing names and in-progress naming requests are unchanged.");
-    expect(Array.from(summary?.querySelectorAll("dd") ?? [], (item) => item.textContent)).toEqual(["provider/naming", "64", "off"]);
+    expect(Array.from(summary?.querySelectorAll("dd") ?? [], (item) => item.textContent)).toEqual(["provider/naming", "64", "30.5 seconds", "off"]);
     panel.configResponse = configResponse();
     await panel.updateComplete;
-    expect(Array.from(summary?.querySelectorAll("dd") ?? [], (item) => item.textContent)).toEqual(["Use session model", "24", "minimal"]);
+    expect(Array.from(summary?.querySelectorAll("dd") ?? [], (item) => item.textContent)).toEqual(["Use session model", "24", "10 seconds", "minimal"]);
   });
 
-  it("searches and selects naming models while preserving the budget, and resets defaults", async () => {
+  it("searches and selects naming models while preserving naming overrides, and resets defaults", async () => {
     const config = configResponse();
-    config.config.sessionNaming = { model: "openai/gpt-5", maxTokens: 48, thinkingLevel: "off" };
+    config.config.sessionNaming = { model: "openai/gpt-5", maxTokens: 48, thinkingLevel: "off", timeoutMs: 30000 };
     const panel = await mount(config);
     panel.namingModels = [
       { provider: "openai", id: "gpt-5", name: "GPT 5" },
@@ -173,7 +174,7 @@ describe("SettingsSessiondPanel DOM", () => {
     choices?.[0]?.click();
     await panel.updateComplete;
     expect(panel.shadowRoot?.querySelector("command-picker")).toBeNull();
-    expect(onSave).toHaveBeenLastCalledWith({ sessionNaming: { model: "anthropic/claude-sonnet", maxTokens: 48, thinkingLevel: "off" } });
+    expect(onSave).toHaveBeenLastCalledWith({ sessionNaming: { model: "anthropic/claude-sonnet", maxTokens: 48, thinkingLevel: "off", timeoutMs: 30000 } });
     const budget = toggle(panel, "session-naming-max-tokens");
     for (const invalid of ["0", "-1", "1.5"]) {
       onSave.mockClear();
@@ -183,10 +184,10 @@ describe("SettingsSessiondPanel DOM", () => {
     }
     budget.value = "64";
     budget.dispatchEvent(new Event("change"));
-    expect(onSave).toHaveBeenLastCalledWith({ sessionNaming: { model: "openai/gpt-5", maxTokens: 64, thinkingLevel: "off" } });
+    expect(onSave).toHaveBeenLastCalledWith({ sessionNaming: { model: "openai/gpt-5", maxTokens: 64, thinkingLevel: "off", timeoutMs: 30000 } });
     budget.value = "";
     budget.dispatchEvent(new Event("change"));
-    expect(onSave).toHaveBeenLastCalledWith({ sessionNaming: { model: "openai/gpt-5", thinkingLevel: "off" } });
+    expect(onSave).toHaveBeenLastCalledWith({ sessionNaming: { model: "openai/gpt-5", thinkingLevel: "off", timeoutMs: 30000 } });
     model?.click();
     await panel.updateComplete;
     const resetPicker = panel.shadowRoot?.querySelector<CommandPicker>("command-picker");
@@ -194,12 +195,12 @@ describe("SettingsSessiondPanel DOM", () => {
     await resetPicker.updateComplete;
     resetPicker.shadowRoot?.querySelector<HTMLButtonElement>("button.ui-selection-option")?.click();
     await panel.updateComplete;
-    expect(onSave).toHaveBeenLastCalledWith({ sessionNaming: { maxTokens: 48, thinkingLevel: "off" } });
+    expect(onSave).toHaveBeenLastCalledWith({ sessionNaming: { maxTokens: 48, thinkingLevel: "off", timeoutMs: 30000 } });
   });
 
   it("saves thinking overrides including off and resets to minimal without changing the model or budget", async () => {
     const config = configResponse();
-    config.config.sessionNaming = { model: "provider/naming", maxTokens: 64 };
+    config.config.sessionNaming = { model: "provider/naming", maxTokens: 64, timeoutMs: 30000 };
     const panel = await mount(config);
     const onSave = vi.fn();
     panel.onSave = onSave;
@@ -210,16 +211,51 @@ describe("SettingsSessiondPanel DOM", () => {
     expect(Array.from(select.options, (option) => option.value)).toEqual(["", "off", "minimal", "low", "medium", "high", "xhigh", "max"]);
     select.value = "off";
     select.dispatchEvent(new Event("change"));
-    expect(onSave).toHaveBeenLastCalledWith({ sessionNaming: { model: "provider/naming", maxTokens: 64, thinkingLevel: "off" } });
-    panel.configResponse = { ...config, config: { sessionNaming: { model: "provider/naming", maxTokens: 64, thinkingLevel: "off" } } };
+    expect(onSave).toHaveBeenLastCalledWith({ sessionNaming: { model: "provider/naming", maxTokens: 64, thinkingLevel: "off", timeoutMs: 30000 } });
+    panel.configResponse = { ...config, config: { sessionNaming: { model: "provider/naming", maxTokens: 64, thinkingLevel: "off", timeoutMs: 30000 } } };
     await panel.updateComplete;
     expect(select.value).toBe("off");
     select.value = "";
     select.dispatchEvent(new Event("change"));
-    expect(onSave).toHaveBeenLastCalledWith({ sessionNaming: { model: "provider/naming", maxTokens: 64 } });
+    expect(onSave).toHaveBeenLastCalledWith({ sessionNaming: { model: "provider/naming", maxTokens: 64, timeoutMs: 30000 } });
     panel.saving = true;
     await panel.updateComplete;
     expect(select.disabled).toBe(true);
+  });
+
+  it("converts timeout seconds to integer milliseconds and clears only the timeout override", async () => {
+    const config = configResponse();
+    config.config.sessionNaming = { model: "provider/naming", maxTokens: 48, thinkingLevel: "off", timeoutMs: 30500 };
+    const panel = await mount(config);
+    const onSave = vi.fn();
+    panel.onSave = onSave;
+    const input = toggle(panel, "session-naming-timeout");
+    expect(panel.shadowRoot?.querySelector(`label[for='${input.id}']`)?.textContent).toBe("Naming timeout (seconds)");
+    expect(input.value).toBe("30.5");
+    expect(input.min).toBe("0.001");
+    expect(input.max).toBe("2147483.647");
+    expect(input.step).toBe("0.001");
+    // happy-dom uses exact floating-point remainder for step validation, rejecting
+    // valid fractional seconds. Keep native range checks and emulate step tolerance.
+    vi.spyOn(input.validity, "stepMismatch", "get").mockImplementation(() => {
+      const milliseconds = input.valueAsNumber * 1000;
+      return input.value !== "" && Math.abs(milliseconds - Math.round(milliseconds)) > 0.000001;
+    });
+    expect(help(panel, input)).toContain("Total timeout includes model loading. Increase it for cold local engines.");
+    for (const [seconds, timeoutMs] of [["0.001", 1], ["1.001", 1001], ["2147483.647", 2147483647]] as const) {
+      input.value = seconds;
+      input.dispatchEvent(new Event("change"));
+      expect(onSave).toHaveBeenLastCalledWith({ sessionNaming: { model: "provider/naming", maxTokens: 48, thinkingLevel: "off", timeoutMs } });
+    }
+    for (const invalid of ["0", "-1", "0.0001", "1.0005", "2147483.648"]) {
+      onSave.mockClear();
+      input.value = invalid;
+      input.dispatchEvent(new Event("change"));
+      expect(onSave).not.toHaveBeenCalled();
+    }
+    input.value = "";
+    input.dispatchEvent(new Event("change"));
+    expect(onSave).toHaveBeenLastCalledWith({ sessionNaming: { model: "provider/naming", maxTokens: 48, thinkingLevel: "off" } });
   });
 
   it("defaults to the session model and 24 tokens, allows cancel, and disables naming controls during saves", async () => {
@@ -229,6 +265,10 @@ describe("SettingsSessiondPanel DOM", () => {
     const model = panel.shadowRoot?.querySelector<HTMLButtonElement>("#session-naming-model");
     expect(model?.textContent).toContain("Use session model");
     expect(toggle(panel, "session-naming-max-tokens").placeholder).toBe("24");
+    const timeout = toggle(panel, "session-naming-timeout");
+    expect(timeout.value).toBe("");
+    expect(timeout.placeholder).toBe("10");
+    expect(help(panel, timeout)).toContain("Clear to use 10 seconds.");
     model?.click();
     await panel.updateComplete;
     const picker = panel.shadowRoot?.querySelector<CommandPicker>("command-picker");
@@ -242,6 +282,11 @@ describe("SettingsSessiondPanel DOM", () => {
     await panel.updateComplete;
     expect(model?.disabled).toBe(true);
     expect(toggle(panel, "session-naming-max-tokens").disabled).toBe(true);
+    expect(timeout.disabled).toBe(true);
+    panel.saving = false;
+    panel.loading = true;
+    await panel.updateComplete;
+    expect(timeout.disabled).toBe(true);
   });
 
   it("keeps an unavailable saved model visible and explains loading and catalog errors without changing it", async () => {

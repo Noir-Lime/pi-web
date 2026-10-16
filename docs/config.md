@@ -58,7 +58,7 @@ Process restarts depend on the key:
 - `host` / `port`: restart the gateway web/API service or process.
 - `maxUploadBytes`: restart both the web/API process and the session daemon on that machine.
 - `spawnSessions` / `subsessions` / `askUser` / `extensionDialogsTimeoutMs` / `environmentFacts`: restart the session daemon on that machine.
-- `sessionNaming`: saved model, token budget, and thinking level apply to the next naming request without a restart. Existing names and in-progress naming requests are unchanged.
+- `sessionNaming`: saved model, token budget, thinking level, and timeout apply to the next naming request without a restart. Existing names and in-progress naming requests are unchanged.
 - `pathAccess`: applies on the next request; existing file views may need a browser refresh.
 - `uploads.defaultFolder`: applies to newly opened Files upload dialogs and new direct drag/drop batches after config/workspace refresh.
 - `attachments.defaultFolder`: applies to new prompt-attachment saves after config/workspace refresh.
@@ -166,7 +166,7 @@ Rows with JSON key `—` are runtime-only environment variables, not config-file
 | Agent can spawn sessions | `spawnSessions` | `PI_WEB_SPAWN_SESSIONS` | Global/session daemon | Not supported locally | Restart session daemon on that machine |
 | Tracked subsessions | `subsessions` | `PI_WEB_SUBSESSIONS` | Global/session daemon | Not supported locally; also requires `spawnSessions` | Restart session daemon on that machine |
 | Agent can post question forms | `askUser` | `PI_WEB_ASK_USER` | Global/session daemon | Not supported locally | Restart session daemon on that machine |
-| Session naming | `sessionNaming.model`, `sessionNaming.maxTokens`, `sessionNaming.thinkingLevel` | — | Global/session daemon | Not supported locally | Next naming request; no restart |
+| Session naming | `sessionNaming.model`, `sessionNaming.maxTokens`, `sessionNaming.thinkingLevel`, `sessionNaming.timeoutMs` | — | Global/session daemon | Not supported locally | Next naming request; no restart |
 | Extension dialog auto-cancel timeout | `extensionDialogsTimeoutMs` | — | Global/session daemon | Not supported locally | Restart session daemon on that machine |
 | Session environment facts | `environmentFacts` | `PI_WEB_ENVIRONMENT_FACTS` | Global/session daemon | Not supported locally | Restart session daemon on that machine |
 | PI WEB plugin desired enablement | `plugins.<id>.enabled` | — | Global | Not supported locally | Browser-only: reload tab. Server-backed: manually restart sessiond, then reload tab |
@@ -362,7 +362,7 @@ Restart the session daemon after changing `askUser` or after upgrading PI WEB to
 
 ### Session naming
 
-Use **Settings → Session daemon → Session naming** on the selected machine to choose a naming model, generation budget, and thinking level. The naming model button opens a searchable list of that machine's available models; choose **Use session model** to remove the model override. No active session is required. Refresh settings to reload the list after configuring a provider. By default, naming uses the session's model and **24 tokens**, including for reasoning models. Naming does not change the conversation's model.
+Use **Settings → Session daemon → Session naming** on the selected machine to choose a naming model, generation budget, thinking level, and timeout. The naming model button opens a searchable list of that machine's available models; choose **Use session model** to remove the model override. No active session is required. Refresh settings to reload the list after configuring a provider. By default, naming uses the session's model and **24 tokens**, including for reasoning models. Naming does not change the conversation's model.
 
 These settings are optional machine-global overrides:
 
@@ -371,7 +371,8 @@ These settings are optional machine-global overrides:
   "sessionNaming": {
     "model": "provider/model-id",
     "maxTokens": 2048,
-    "thinkingLevel": "off"
+    "thinkingLevel": "off",
+    "timeoutMs": 90000
   }
 }
 ```
@@ -380,7 +381,9 @@ These settings are optional machine-global overrides:
 
 `thinkingLevel` defaults to `minimal`. Supported values are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. Choose `off` to disable optional reasoning where supported, while keeping a positive token budget for the title. Models and providers may limit or map thinking levels; `off` cannot disable mandatory reasoning. Naming settings do not change the conversation's thinking level.
 
-Saved model, budget, and thinking-level changes apply to the next naming request without a restart or reload. Existing names and in-progress naming requests are unchanged. Agent permission changes in the same panel still require a session-daemon restart. Naming failures use the existing first-message fallback and are recorded in daemon logs.
+`timeoutMs` sets the total naming-request timeout, including gateway queueing, model loading, and generation. It defaults to `10000` (10 seconds). Use a positive integer in milliseconds, up to `2147483647`; Settings displays seconds. Increase it for local models that need time to load. Clearing the UI field restores 10 seconds. This is a total wall-time limit, not an idle timeout, and has no environment-variable override.
+
+Saved model, budget, thinking-level, and timeout changes apply to the next naming request without a restart or reload. Existing names and in-progress naming requests are unchanged. Agent permission changes in the same panel still require a session-daemon restart. Naming failures use the existing first-message fallback and are recorded in daemon logs.
 
 ### Extension dialogs
 

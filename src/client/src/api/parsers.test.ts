@@ -105,7 +105,7 @@ describe("API parsers", () => {
       envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, askUser: false },
     };
     for (const field of ["config", "effectiveConfig"] as const) {
-      for (const sessionNaming of [{}, { model: "openai/gpt-5" }, { maxTokens: 48 }, { model: "openai/gpt-5", maxTokens: 32 }, ...KNOWN_THINKING_LEVELS.map((thinkingLevel) => ({ thinkingLevel }))]) {
+      for (const sessionNaming of [{}, { model: "openai/gpt-5" }, { maxTokens: 48 }, { timeoutMs: 1 }, { timeoutMs: 10000 }, { timeoutMs: 2147483647 }, { model: "openai/gpt-5", maxTokens: 32, thinkingLevel: "off", timeoutMs: 15000 }, ...KNOWN_THINKING_LEVELS.map((thinkingLevel) => ({ thinkingLevel }))]) {
         expect(parsePiWebConfigResponse({ ...response, [field]: { sessionNaming } })[field]).toEqual({ sessionNaming });
       }
       for (const sessionNaming of [[], "model", { model: 42 }, { model: "no-provider" }, { maxTokens: 0 }, { maxTokens: -1 }, { maxTokens: 1.5 }]) {
@@ -113,6 +113,9 @@ describe("API parsers", () => {
       }
       for (const thinkingLevel of ["", "ultra", "MINIMAL", " minimal ", null, false, 42, {}, []]) {
         expect(() => parsePiWebConfigResponse({ ...response, [field]: { sessionNaming: { thinkingLevel } } })).toThrow();
+      }
+      for (const timeoutMs of [0, -1, 1.5, 2147483648, Number.MAX_SAFE_INTEGER, NaN, Infinity, -Infinity, "10000", null, false, {}, []]) {
+        expect(() => parsePiWebConfigResponse({ ...response, [field]: { sessionNaming: { timeoutMs } } })).toThrow();
       }
       expect(parsePiWebConfigResponse(response)[field]).not.toHaveProperty("sessionNaming");
     }

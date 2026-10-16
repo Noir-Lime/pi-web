@@ -68,7 +68,7 @@ describe("config routes", () => {
   });
 
   it.each(["/api/config", "/api/machines/local/config"])("saves and resets session naming through %s", async (url) => {
-    const sessionNaming = { model: "provider/org/model", maxTokens: 64, thinkingLevel: "off" as const };
+    const sessionNaming = { model: "provider/org/model", maxTokens: 64, thinkingLevel: "off" as const, timeoutMs: 2147483647 };
     const saved = await app.inject({ method: "PUT", url, payload: { config: { sessionNaming } } });
     expect(saved.statusCode).toBe(200);
     expect(parsePiWebConfigResponseBody(saved.json()).config.sessionNaming).toEqual(sessionNaming);
@@ -79,7 +79,7 @@ describe("config routes", () => {
   });
 
   it("preserves session naming on unrelated selected-machine saves", async () => {
-    const sessionNaming = { model: "provider/model", maxTokens: 48, thinkingLevel: "high" as const };
+    const sessionNaming = { model: "provider/model", maxTokens: 48, thinkingLevel: "high" as const, timeoutMs: 15000 };
     savedConfig.sessionNaming = sessionNaming;
     const response = await app.inject({ method: "PUT", url: "/api/machines/local/config", payload: { config: { spawnSessions: false } } });
     expect(response.statusCode).toBe(200);
@@ -104,6 +104,20 @@ describe("config routes", () => {
     const response = responseFor({}, true);
     for (const field of ["config", "effectiveConfig"]) {
       expect(() => parsePiWebConfigResponseBody({ ...response, [field]: config })).toThrow("sessionNaming.thinkingLevel");
+    }
+  });
+
+  it.each([0, -1, 1.5, 2147483648, "10000", null, false, {}, []])("rejects invalid naming timeout %j before writing and in remote responses", async (timeoutMs) => {
+    const config = { sessionNaming: { timeoutMs } };
+    for (const url of ["/api/config", "/api/machines/local/config"]) {
+      const result = await app.inject({ method: "PUT", url, payload: { config } });
+      expect(result.statusCode).toBe(400);
+      expect(result.json<{ error: string }>().error).toContain("sessionNaming.timeoutMs");
+    }
+    expect(service.write).not.toHaveBeenCalled();
+    const response = responseFor({}, true);
+    for (const field of ["config", "effectiveConfig"]) {
+      expect(() => parsePiWebConfigResponseBody({ ...response, [field]: config })).toThrow("sessionNaming.timeoutMs");
     }
   });
 

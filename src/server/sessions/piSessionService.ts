@@ -4734,7 +4734,7 @@ export class PiSessionService implements SessionRouteService {
       if (model === undefined) throw new Error(`Session naming model is unavailable: ${naming.model}`);
     }
     if (model === undefined) return undefined;
-    return generateShortSessionName(session.agent.streamFunction, model, firstMessage, naming.maxTokens, naming.thinkingLevel);
+    return generateShortSessionName(session.agent.streamFunction, model, firstMessage, naming);
   }
 
   private applyGeneratedSessionName(session: PiAgentSession, name: string | undefined): void {

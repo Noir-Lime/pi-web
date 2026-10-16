@@ -181,7 +181,13 @@ export interface PiWebConfigValues {
   /** Maximum accepted HTTP request body size in bytes (uploads/attachments). */
   maxUploadBytes?: number;
   /** Machine-wide naming overrides; defaults are the session model, 24 tokens, and minimal thinking. */
-  sessionNaming?: { model?: string; maxTokens?: number; thinkingLevel?: ThinkingLevel };
+  sessionNaming?: {
+    model?: string;
+    maxTokens?: number;
+    thinkingLevel?: ThinkingLevel;
+    /** Total wall time in milliseconds; defaults to 10000 when omitted. */
+    timeoutMs?: number;
+  };
   /** When true, LLMs can start new sessions via the spawn_session tool. */
   spawnSessions?: boolean;
   /**

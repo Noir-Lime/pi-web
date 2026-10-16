@@ -15,7 +15,18 @@ export function requireInitialSessionName(value: unknown): string {
   return value;
 }
 
-export async function generateShortSessionName<TApi extends Api>(streamFn: StreamFn, model: Model<TApi>, firstMessage: string, maxTokens = 24, thinkingLevel: ThinkingLevel = "minimal"): Promise<string | undefined> {
+interface SessionNameGenerationOptions {
+  maxTokens?: number;
+  thinkingLevel?: ThinkingLevel;
+  timeoutMs?: number;
+}
+
+export async function generateShortSessionName<TApi extends Api>(
+  streamFn: StreamFn,
+  model: Model<TApi>,
+  firstMessage: string,
+  { maxTokens = 24, thinkingLevel = "minimal", timeoutMs = SESSION_NAME_TIMEOUT_MS }: SessionNameGenerationOptions = {},
+): Promise<string | undefined> {
   const stream = await streamFn(
     model,
     normalizeContext({
@@ -29,7 +40,7 @@ export async function generateShortSessionName<TApi extends Api>(streamFn: Strea
     {
       maxTokens,
       ...(thinkingLevel === "off" ? {} : { reasoning: thinkingLevel }),
-      signal: AbortSignal.timeout(SESSION_NAME_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     },
   );
 

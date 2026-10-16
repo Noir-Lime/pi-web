@@ -1490,13 +1490,16 @@ function optionalSessionNaming(value: unknown): PiWebConfigValues["sessionNaming
   const model = optionalString(value, "model");
   const maxTokens = optionalNumber(value, "maxTokens");
   const thinkingLevel = optionalString(value, "thinkingLevel");
+  const timeoutMs = optionalNumber(value, "timeoutMs");
   if (model !== undefined && !/^[^/\s]+\/[^\s]+$/.test(model)) throw new Error("Invalid PI WEB sessionNaming.model field");
   if (maxTokens !== undefined && (!Number.isSafeInteger(maxTokens) || maxTokens <= 0)) throw new Error("Invalid PI WEB sessionNaming.maxTokens field");
   if (thinkingLevel !== undefined && !isKnownThinkingLevel(thinkingLevel)) throw new Error("Invalid PI WEB sessionNaming.thinkingLevel field");
+  if (timeoutMs !== undefined && (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2147483647)) throw new Error("Invalid PI WEB sessionNaming.timeoutMs field");
   return {
     ...optionalField("model", model),
     ...optionalField("maxTokens", maxTokens),
     ...optionalField("thinkingLevel", thinkingLevel),
+    ...optionalField("timeoutMs", timeoutMs),
   };
 }
 

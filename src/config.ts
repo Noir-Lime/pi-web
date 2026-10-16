@@ -300,11 +300,12 @@ function parsePiWebConfig(value: Record<string, unknown>, path: string): PiWebCo
 
 export function parseSessionNamingConfig(value: unknown, path: string): NonNullable<PiWebConfigValues["sessionNaming"]> {
   if (!isRecord(value)) throw new Error(`PI WEB config sessionNaming must be an object: ${path}`);
-  const unknownKey = Object.keys(value).find((key) => key !== "model" && key !== "maxTokens" && key !== "thinkingLevel");
+  const unknownKey = Object.keys(value).find((key) => key !== "model" && key !== "maxTokens" && key !== "thinkingLevel" && key !== "timeoutMs");
   if (unknownKey !== undefined) throw new Error(`PI WEB config sessionNaming has unknown key ${JSON.stringify(unknownKey)}: ${path}`);
   const model = value["model"];
   const maxTokens = value["maxTokens"];
   const thinkingLevel = value["thinkingLevel"];
+  const timeoutMs = value["timeoutMs"];
   if (model !== undefined && (typeof model !== "string" || !/^[^/\s]+\/\S+$/.test(model))) {
     throw new Error(`PI WEB config sessionNaming.model must be an exact provider/model-id with non-empty parts: ${path}`);
   }
@@ -314,7 +315,11 @@ export function parseSessionNamingConfig(value: unknown, path: string): NonNulla
   if (thinkingLevel !== undefined && (typeof thinkingLevel !== "string" || !isKnownThinkingLevel(thinkingLevel))) {
     throw new Error(`PI WEB config sessionNaming.thinkingLevel must be a known thinking level: ${path}`);
   }
+  if (timeoutMs !== undefined && (typeof timeoutMs !== "number" || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2147483647)) {
+    throw new Error(`PI WEB config sessionNaming.timeoutMs must be an integer from 1 to 2147483647: ${path}`);
+  }
   return {
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     ...(model !== undefined ? { model } : {}),
     ...(maxTokens !== undefined ? { maxTokens } : {}),
     ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
