@@ -73,6 +73,8 @@ import {
 } from "./plugins/pluginBackendRegistry.js";
 import { runSessionDaemonShutdown } from "./sessiond/sessionDaemonShutdown.js";
 import { sessionServiceDependencies } from "./sessiond/sessionServiceDependencies.js";
+import { PiSessionEventConnections } from "./sessions/piSessionEventConnections.js";
+import { bindCompanionBackend } from "./sessions/companionBackend.js";
 import { registerWorkspaceCatalogRoutes } from "./sessiond/workspaceCatalogRoutes.js";
 import { registerPluginBackendChannelRoutes } from "./sessiond/pluginBackendChannelRoutes.js";
 import { installPluginBackendChannelWebSocketPayloadLimit } from "./webSocketBridge.js";
@@ -305,8 +307,20 @@ async function createSessionDaemonRuntime() {
     projectLifecycleForFailedConstruction = projectLifecycle;
     const projectWorkspaceDeps = { projects, workspaces: workspaceProviders };
     const spawnTargets = config.spawnSessions ? new ProjectScopedSpawnTargetResolver(projectWorkspaceDeps) : undefined;
+    // A plugin may open a session during activation. Install discovery before
+    // session_start, but publish backend authority only after startup health.
+    let companionOptions: {
+      backends: PluginBackendRegistry;
+      contributions: ReturnType<typeof serverPlugins.pairedBackendContributions>;
+      projects: ProjectService;
+    } | undefined = undefined;
+    const sessionEvents = new PiSessionEventConnections((bus) => bindCompanionBackend(bus, () => {
+      if (companionOptions === undefined) throw new Error("PI WEB companion backends are not ready during daemon startup");
+      return companionOptions;
+    }));
     const sessions = new PiSessionService(eventHub, sessionServiceDependencies({
       modelRuntime: auth.runtime,
+      sessionEvents,
       agentDir: activeAgentProfile.dir,
       archiveStore: new SessionArchiveStore(defaultSessionArchiveFilePath(daemonEnvironment)),
       workspaceActivity,
@@ -361,11 +375,13 @@ async function createSessionDaemonRuntime() {
     const remainingHealth = await serverPlugins.inspectHealth(remainingActivePluginIds);
     const pluginHealth = Object.freeze([...providerHealth, ...remainingHealth]
       .sort((left, right) => left.pluginId.localeCompare(right.pluginId)));
+    const backendContributions = eligiblePluginBackendContributions(serverPlugins.pairedBackendContributions(), pluginHealth);
     const pluginBackends = new PluginBackendRegistry({
-      contributions: eligiblePluginBackendContributions(serverPlugins.pairedBackendContributions(), pluginHealth),
+      contributions: backendContributions,
       workspaces: workspaceProviders,
       logger: app.log,
     });
+    companionOptions = { backends: pluginBackends, contributions: backendContributions, projects };
     const workspaceProviderRuntime = createWorkspaceProviderRuntimeSnapshot(
       serverPlugins.healthRecords(),
       pluginHealth,

@@ -1,6 +1,6 @@
 import type { TemplateResult } from "lit";
-import type { DeleteWorkspaceFileResponse, FileContentResponse, FileTreeResponse, JsonValue, MachineKind, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, PiWebStatusResponse, PluginCapability, PluginCapabilityProvision, TerminalCommandRunHandle, WorkspaceProviderMetadata, WorkspaceRemovalPresentation, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse } from "./shared/pluginApiTypes.js";
-export type { FileContentMediaType, FileContentResponse, FileTreeEntry, FileTreeResponse, JsonObject, JsonPrimitive, JsonValue, MachineKind, PiWebComponentStatus, PiWebDockerMode, PiWebInstallationInfo, PiWebInstallationKind, PiWebReleaseStatus, PiWebServiceComponent, PiWebStatusMessage, PiWebStatusResponse, PiWebStatusSeverity, PiWebVersionResponse, PluginCapability, PluginCapabilityProvision, SessionUiMetadata, TerminalCommandRun, TerminalCommandRunHandle, TerminalCommandRunStatus, WorkspaceProviderCapabilities, WorkspaceProviderMetadata, WorkspaceRemovalPresentation, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse, DeleteWorkspaceFileResponse, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, } from "./shared/pluginApiTypes.js";
+import type { DeleteWorkspaceFileResponse, FileContentResponse, FileTreeResponse, MachineKind, PluginBackend, PluginPeer, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, PiWebStatusResponse, PluginCapability, PluginCapabilityProvision, TerminalCommandRunHandle, WorkspaceProviderMetadata, WorkspaceRemovalPresentation, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse } from "./shared/pluginApiTypes.js";
+export type { FileContentMediaType, FileContentResponse, FileTreeEntry, FileTreeResponse, JsonObject, JsonPrimitive, JsonValue, PluginBackend, PluginBackendScope, PluginPeer, PluginPeerRequestOptions, PluginPeerChannelOptions, PluginPeerChannelClose, PluginPeerChannel, MachineKind, PiWebComponentStatus, PiWebDockerMode, PiWebInstallationInfo, PiWebInstallationKind, PiWebReleaseStatus, PiWebServiceComponent, PiWebStatusMessage, PiWebStatusResponse, PiWebStatusSeverity, PiWebVersionResponse, PluginCapability, PluginCapabilityProvision, SessionUiMetadata, TerminalCommandRun, TerminalCommandRunHandle, TerminalCommandRunStatus, WorkspaceProviderCapabilities, WorkspaceProviderMetadata, WorkspaceRemovalPresentation, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse, DeleteWorkspaceFileResponse, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, } from "./shared/pluginApiTypes.js";
 export type { PluginCatalogV1, PluginCatalogProject, PluginCatalogWorkspace, PluginSessionSnapshot, PluginWorkspaceSelection, PluginSessionSelection, PluginCatalogReadOptions } from "./shared/pluginCatalogTypes.js";
 import type { PluginCatalogV1 } from "./shared/pluginCatalogTypes.js";
 export type PiWebPlugin = LegacyPiWebPlugin | PiWebPluginV5;
@@ -20,21 +20,6 @@ export type PluginActivationResultV5 = Omit<PluginActivationResult, "contributio
 /** Captured machine target; changing selection never retargets this catalog. */
 export interface PluginCatalog extends PluginCatalogV1 {
     readonly machineId: string;
-}
-export type PluginBackendScope = {
-    readonly kind: "machine";
-} | {
-    readonly kind: "project";
-    readonly projectId: string;
-} | {
-    readonly kind: "workspace";
-    readonly projectId: string;
-    readonly workspaceId: string;
-};
-/** Exact package-paired backend on this callback's machine. Absent for browser-only plugins. */
-export interface PluginBackend {
-    readonly machineId: string;
-    forScope(scope: PluginBackendScope): PluginPeer;
 }
 export interface PluginDiscoveryContext {
     readonly catalog: PluginCatalog;
@@ -543,44 +528,6 @@ export interface WorkspaceFilesCapabilityV1 extends WorkspaceFiles {
 /** Host context value used to feature-detect versioned workspace-file additions. */
 export type WorkspaceFilesContextValue = LegacyWorkspaceFiles | WorkspaceFilesCapabilityV1;
 export type WorkspacePanelFiles = WorkspaceFiles;
-export interface PluginPeerRequestOptions {
-    /** Cancels this bounded request through local or federated host transport. */
-    readonly signal?: AbortSignal;
-}
-/** Callbacks and cancellation for one bounded package-peer channel. */
-export interface PluginPeerChannelOptions {
-    /** Cancels the channel open or closes the live channel through every host hop. */
-    readonly signal?: AbortSignal;
-    /** Receives one plugin-authored JSON frame after the channel is ready. */
-    readonly onData: (data: JsonValue) => void;
-}
-export interface PluginPeerChannelClose {
-    readonly code: number;
-    readonly reason: string;
-    readonly wasClean: boolean;
-    /** Attributed host or server-plugin failure when one preceded the close. */
-    readonly error?: Readonly<{
-        code: string;
-        message: string;
-    }>;
-}
-export interface PluginPeerChannel {
-    readonly closed: Promise<PluginPeerChannelClose>;
-    /** Queue one bounded JSON frame or throw. Success means queue acceptance, not remote receipt. */
-    send(data: JsonValue): void;
-    close(reason?: string): void;
-}
-/**
- * Exact revision-paired path to this browser package's active server entry.
- * A peer supplies a request handler, a channel handler, or both, but never neither.
- */
-export type PluginPeer = {
-    request(operation: string, input: JsonValue, options?: PluginPeerRequestOptions): Promise<JsonValue>;
-    openChannel?(operation: string, input: JsonValue, options: PluginPeerChannelOptions): Promise<PluginPeerChannel>;
-} | {
-    request?: undefined;
-    openChannel(operation: string, input: JsonValue, options: PluginPeerChannelOptions): Promise<PluginPeerChannel>;
-};
 export interface WorkspaceHost {
     requestRender(): void;
 }

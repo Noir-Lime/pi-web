@@ -1,9 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
+  createCompanionBackend,
   PI_WEB_HOST_PI_SESSIONS_CAPABILITY,
   PI_WEB_HOST_WORKSPACES_CAPABILITY,
 } from "./server-plugin-api.js";
+import type { PluginBackend } from "./plugin-api.js";
 import type {
   JsonObject,
   PiWebHostPiSessionRun,
@@ -95,6 +97,25 @@ type ReadonlyKeys<Value> = {
 type WritableKeys<Value> = Exclude<keyof Value, ReadonlyKeys<Value>>;
 
 describe("public server plugin API", () => {
+  it("discovers a companion backend synchronously and fails closed without a host", () => {
+    expectTypeOf<ReturnType<typeof createCompanionBackend>>().toEqualTypeOf<PluginBackend>();
+    expect(() => createCompanionBackend({ emit: vi.fn() }, "paired")).toThrow("hosted PI WEB");
+    const backend: PluginBackend = { machineId: "local", forScope: () => ({ request: () => Promise.resolve(null) }) };
+    const emit = vi.fn((_channel: string, data: unknown) => {
+      if (typeof data !== "object" || data === null) throw new Error("Expected discovery");
+      const accept: unknown = Reflect.get(data, "accept");
+      if (typeof accept !== "function") throw new Error("Expected discovery callback");
+      Reflect.apply(accept, undefined, [() => backend]);
+    });
+    expect(createCompanionBackend({ emit }, "paired")).toBe(backend);
+    expect(emit).toHaveBeenCalledWith("pi-web:companion-backend:discover", expect.objectContaining({ pluginId: "paired" }));
+    expect(() => createCompanionBackend({ emit: (_channel, data) => {
+      if (typeof data !== "object" || data === null) throw new Error("Expected discovery");
+      const accept: unknown = Reflect.get(data, "accept");
+      if (typeof accept !== "function") throw new Error("Expected discovery callback");
+      Reflect.apply(accept, undefined, [() => { throw new Error("Unavailable"); }]);
+    } }, "paired")).toThrow("Unavailable");
+  });
   it("discriminates legacy v3 and scoped v5 plugin entry points", () => {
     const legacy: PiWebServerPlugin = {
       apiVersion: 3,
@@ -455,7 +476,7 @@ describe("public server plugin API", () => {
       readFile("src/plugin-api.ts", "utf8"),
     ]);
     expect(source).not.toMatch(/\b(?:BackgroundService|Fastify|WorkspaceService|ProjectService|TerminalService|PiSessionService|SessionManager|SessionDaemonClient)\b/u);
-    expect(source).not.toMatch(/event\s*bus|service\s*locator|registerRoute/iu);
+    expect(source).not.toMatch(/service\s*locator|registerRoute/iu);
     expect(source).toContain('from "./shared/pluginApiTypes.js";');
     expect(source).not.toContain("./shared/apiTypes.js");
     expect(browserSource).not.toMatch(/PI_WEB_HOST_(?:STATE|WORKSPACES|PI_SESSIONS)_CAPABILITY|PiWebHost(?:State|Workspace|Workspaces|PiSession|PiSessions)/u);
