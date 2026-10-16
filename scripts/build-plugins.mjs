@@ -25,7 +25,8 @@ const codeHighlightOutputDir = resolve(bundledPluginsOutputDir, "code-highlight"
 // Files, Terminal, Mermaid, and Code highlighting are exceptions to plain transpilation: each
 // browser entry is replaced below by a self-contained bundle. Terminal also
 // keeps a package-local transpiled server graph. Captain's Log likewise bundles
-// its browser entry after transpiling its standalone package graph.
+// its browser entry after transpiling its standalone package graph. Workflows
+// bundles its server entry against the public host API for standalone delivery.
 const buildTargets = [
   { rootDir: bundledPluginsSourceDir, outDir: bundledPluginsOutputDir, label: "plugin" },
   { rootDir: resolve("pi-packages"), outDir: resolve("dist/pi-packages"), label: "package" },
@@ -68,6 +69,15 @@ async function buildAll() {
         configFile: resolve(target.rootDir, "captains-log/vite.config.mjs"),
         logLevel: "silent",
         build: { outDir: resolve(target.outDir, "captains-log/dist/browser") },
+      });
+      await viteBuild({
+        configFile: resolve(target.rootDir, "workflows/vite.config.mjs"),
+        logLevel: "silent",
+        // Map the public entry to its source for checkout builds, including cold
+        // dev startup before dist exists. Plugin code still imports only the
+        // published API; standalone builds use the installed public export.
+        resolve: { alias: { "@jmfederico/pi-web/server-plugin-api": resolve("src/server-plugin-api.ts") } },
+        build: { outDir: resolve(target.outDir, "workflows") },
       });
     }
     const suffix = result.transpiled === 1 ? "file" : "files";
