@@ -95,6 +95,49 @@ describe("plugin-defined transcript message actions", () => {
     await vi.waitFor(() => { expect(context.history.fork).toHaveBeenCalledOnce(); });
   });
 
+  it.each([false, true])("offers existing history actions on question requests (answered: %s), targeting the tool result", async (answered) => {
+    const { view } = await mount();
+    const question = { id: "q", question: "Choose?", options: [] };
+    const ask = { askId: "ask", askedAt: "2026-07-20T10:00:00.000Z", questions: [question] };
+    view.messages = normalizeMessages([
+      { role: "assistant", content: [{ type: "toolCall", id: "ask-call", name: "ask_user", arguments: { questions: ask.questions } }] },
+      { role: "toolResult", toolName: "ask_user", toolCallId: "ask-call", entryId: "question-result",
+        content: "Questions posted", details: { ask }, isError: false },
+    ]);
+    if (answered) view.messages = [...view.messages, { role: "user", entryId: "answer-record", parts: [{ type: "askUserRecord", outcome: {
+      askId: ask.askId, askedAt: ask.askedAt, closedAt: "2026-07-20T10:01:00.000Z", reason: "submitted",
+      questions: [{ question, answered: true, values: [], otherText: "Custom answer" }],
+      answeredCount: 1, unansweredIds: [], summary: "Answered",
+    } }] }];
+    view.historyReady = true;
+    view.onSubmitAsk = vi.fn();
+    const onAction = vi.fn().mockResolvedValue(undefined);
+    view.onMessageAction = onAction;
+    await settle(view);
+
+    const card = view.renderRoot.querySelector("ask-user-card");
+    expect(card?.classList.contains(answered ? "closed-question-card" : "open-question-card")).toBe(true);
+    expect(card?.closest(".event-group")).toBeNull();
+    expect(buttons(view).map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Clone session from this message", "Go back to this message",
+    ]);
+    expect(card?.parentElement?.querySelectorAll(".msg-action")).toHaveLength(2);
+    button(view, "Go back to this message").click();
+    await settle(view);
+    button(view, "Clone session from this message").click();
+    await settle(view);
+    const expected = { ...base, message: { entryId: "question-result", role: "tool", text: "", isQuestion: true } };
+    expect(onAction.mock.calls).toEqual([[expected, "core:message.back"], [expected, "core:message.fork"]]);
+
+    view.messages = view.messages.map((message) => {
+      const entryless = { ...message };
+      delete entryless.entryId;
+      return entryless;
+    });
+    await settle(view);
+    expect(buttons(view)).toEqual([]);
+  });
+
   it("delegates go-back to the browser helper without a blanket confirmation", async () => {
     const { view, context } = await mount();
     const confirm = vi.fn(() => false);
