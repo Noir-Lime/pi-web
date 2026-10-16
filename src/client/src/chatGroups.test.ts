@@ -247,19 +247,19 @@ describe("canonicalEntryActionHeaders", () => {
   });
 });
 
-it("keeps question requests top-level and headerless while hiding coalesced result boundaries", () => {
+it("gives top-level question requests the canonical header while hiding coalesced result boundaries", () => {
   const question: ChatLine = { role: "tool", entryId: "question-result", parts: [{ type: "askUserQuestion", ask: {
     askId: "ask-1", askedAt: "2026-07-20T10:00:00.000Z", questions: [{ id: "q", question: "Choose?", options: [] }],
   } }] };
   const groups = groupChatMessages([
     { role: "tool", parts: [{ type: "toolExecution", toolName: "ask_user", summary: "questions", status: "success" }] },
-    question,
+    { ...question, parts: [{ type: "toolResult", toolName: "ask_user", text: "Posted questions", isError: false }, ...question.parts] },
     { role: "tool", parts: [{ type: "toolResultBoundary", toolCallId: "earlier" }] },
     text("user", "Continue"),
   ]);
   expect(groups.map((group) => group.kind)).toEqual(["group", "message", "message"]);
   expect(groups[1]).toEqual({ kind: "message", index: 1, message: question });
-  expect(canonicalEntryActionHeaders(groups).size).toBe(0);
+  expect([...canonicalEntryActionHeaders(groups)]).toEqual([renderedMessages(groups)[2]]);
 });
 
 describe("summarizeChatGroup", () => {

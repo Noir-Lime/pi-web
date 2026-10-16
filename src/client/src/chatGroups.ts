@@ -69,7 +69,7 @@ export function groupChatMessages(messages: ChatLine[], indexOffset = 0): ChatGr
 export function chatMessageHasHeader(message: ChatLine): boolean {
   return !(message.parts.length > 0 && (
     (message.role === "tool" && message.parts.every((part) => part.type === "toolExecution"))
-    || message.parts.every((part) => part.type === "askUserQuestion" || part.type === "askUserRecord")
+    || message.parts.every((part) => part.type === "askUserRecord")
   ));
 }
 

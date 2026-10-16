@@ -390,6 +390,8 @@ export interface PluginRuntimeContext {
 /** A durable message displayed in the transcript; text excludes thinking and tool payloads. */
 export interface MessageActionMessage {
     readonly entryId: string;
+    /** This entry contains an ask_user question request, not an answer record. */
+    readonly isQuestion?: boolean;
     readonly role: "user" | "assistant" | "tool" | "system" | "bash" | "skill";
     readonly text: string;
 }
