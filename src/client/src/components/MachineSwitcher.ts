@@ -1,7 +1,7 @@
 import { LitElement, css, html, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { Machine, MachineHealth, MachineStatus } from "../api";
-import type { MachineStatusSnapshot } from "../../../shared/machineStatus";
+import { rollUpStatusFlags, type MachineStatusSnapshot } from "../../../shared/machineStatus";
 import { browserGatewayDisplayUrl, machineIconUrl } from "../instanceIdentity";
 import { actionMenuPanelStyle } from "./actionMenu";
 import { hasStatusUnread, renderActivityIndicator, statusActivityKind } from "./activityBadge";
@@ -68,8 +68,8 @@ export class MachineSwitcher extends LitElement implements KeyboardNavigableSect
       <div class="machine-switcher">
         <button
           type="button"
-          class="machine-switcher-button"
-          title=${machineTitle(selected)}
+          class=${`machine-switcher-button ${status === "offline" || status === "error" ? "disconnected" : ""}`}
+          title=${`${selected.name} · ${machineSubtitle(selected)} · ${machineStatusLabel(status)}`}
           aria-label=${this.machineSwitcherAriaLabel(selected)}
           aria-expanded=${String(this.open)}
           @click=${(event: MouseEvent) => { this.toggleMenu(event.currentTarget); }}
@@ -81,7 +81,7 @@ export class MachineSwitcher extends LitElement implements KeyboardNavigableSect
             <span class="machine-switcher-kicker">Machine</span>
             <span class="machine-switcher-label">${label}</span>
           </span>
-          <span class=${`machine-status ${status}`}>${machineStatusLabel(status)}</span>
+          ${this.renderOtherMachinesActivity(selected)}
           <span class="machine-chevron" aria-hidden="true">▾</span>
         </button>
         ${this.open ? html`
@@ -133,8 +133,9 @@ export class MachineSwitcher extends LitElement implements KeyboardNavigableSect
   }
 
   private renderMachineInfo(machine: Machine): TemplateResult {
+    const status = machineStatus(machine, this.statuses);
     return html`
-      <div class="machine-info" title=${machineSubtitle(machine)}>
+      <div class=${`machine-info ${status === "offline" || status === "error" ? "disconnected" : ""}`} title=${`${machineSubtitle(machine)} · ${machineStatusLabel(status)}`}>
         ${this.renderMachineIcon(machine)}
         ${this.renderActivity(machine)}
         <span class="machine-info-url">${machineSubtitle(machine)}</span>
@@ -164,12 +165,27 @@ export class MachineSwitcher extends LitElement implements KeyboardNavigableSect
     return renderActivityIndicator(kind, kind === "terminal" ? "Machine terminal active" : "Machine active", unreadLabel);
   }
 
+  private renderOtherMachinesActivity(selected: Machine): TemplateResult | undefined {
+    const others = this.machines.filter((machine) => machine.id !== selected.id);
+    // Offline machines retain unread attention, but their stale work flags
+    // must not imply that work is still running.
+    const activeFlags = rollUpStatusFlags(others
+      .filter((machine) => !["offline", "error"].includes(machineStatus(machine, this.statuses)))
+      .map((machine) => this.statusSnapshots[machine.id]?.machine ?? {}));
+    const unread = others.some((machine) => hasStatusUnread(this.statusSnapshots[machine.id]?.machine));
+    const kind = statusActivityKind(activeFlags);
+    const indicator = renderActivityIndicator(kind,
+      kind === "terminal" ? "Terminal active on other machines" : "Other machines active",
+      unread ? "Unread sessions on other machines" : undefined);
+    return indicator === undefined ? undefined : html`<span class="other-machines-activity">${indicator}</span>`;
+  }
+
   private selectedMachine(): Machine | undefined {
     return this.selected ?? this.machines.find((machine) => machine.id === "local") ?? this.machines[0];
   }
 
   private machineSwitcherAriaLabel(machine: Machine): string {
-    return `Machine: ${machine.name}. Switch machine.`;
+    return `Machine: ${machine.name}. ${machineStatusLabel(machineStatus(machine, this.statuses))}. Switch machine.`;
   }
 
   private switcherButton(): HTMLElement | null {
@@ -308,7 +324,7 @@ export class MachineSwitcher extends LitElement implements KeyboardNavigableSect
   }
 
   static override styles = [uiButtonStyles, uiMenuStyles, css`
-    :host { min-width: 0; display: flex; }
+    :host { min-width: 0; display: flex; container: machine-selector / inline-size; }
     .machine-switcher { flex: 1 1 auto; min-width: 0; display: flex; }
     .machine-switcher-button { box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; display: flex; align-items: center; gap: 6px; border: 0; border-radius: 0; background: transparent; color: var(--pi-text); padding: 6px 10px; cursor: pointer; text-align: left; }
     .machine-switcher-button:hover, .machine-switcher-button:focus-visible { background: var(--pi-surface-hover); }
@@ -316,10 +332,12 @@ export class MachineSwitcher extends LitElement implements KeyboardNavigableSect
     .machine-switcher-text { flex: 1 1 auto; min-width: 0; display: grid; gap: 1px; }
     .machine-switcher-kicker { color: var(--pi-muted); font-size: 10px; line-height: 1; text-transform: uppercase; letter-spacing: .02em; }
     .machine-switcher-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; line-height: 1.2; }
-    .machine-status { flex: 0 0 auto; color: var(--pi-muted); font-size: 11px; }
-    .machine-status.online { color: var(--pi-success); }
-    .machine-status.offline, .machine-status.error { color: var(--pi-danger); }
+    .disconnected .machine-switcher-text, .disconnected .machine-info-url { opacity: .55; }
+    .other-machines-activity { flex: 0 0 auto; display: inline-flex; align-items: center; }
     .machine-chevron { flex: 0 0 auto; color: var(--pi-muted); font-size: 11px; }
+    @container machine-selector (max-width: 220px) {
+      .machine-switcher-kicker { display: none; }
+    }
     .activity-indicator { flex: 0 0 auto; display: inline-block; width: 7px; height: 7px; background: var(--pi-success); animation: pulse 1s ease-in-out infinite; }
     .activity-indicator.session { border-radius: 50%; background: var(--pi-success); }
     .activity-indicator.terminal { border-radius: 2px; background: var(--pi-accent); }
@@ -338,7 +356,7 @@ export class MachineSwitcher extends LitElement implements KeyboardNavigableSect
     .machine-option.no-actions { grid-template-columns: minmax(0, 1fr); }
     .machine-option-main { min-width: 0; display: grid; gap: 2px; }
     .machine-option-name { min-width: 0; display: flex; align-items: center; gap: 6px; }
-    .machine-option-name span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .machine-option-name span:last-child { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
     .machine-option-main small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--pi-muted); }
     .machine-option-actions { position: relative; align-self: stretch; }
     .machine-option-actions-toggle { height: 100%; }
