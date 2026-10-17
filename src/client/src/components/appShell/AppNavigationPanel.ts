@@ -309,10 +309,11 @@ export class AppNavigationPanel extends LitElement {
        section distributes its space to every remaining section, not just the
        session list. Collapsed sections keep only their heading height. */
     machine-list, project-list, workspace-list, session-list { flex: 1 1 0px; min-height: 0; overflow: hidden; border-bottom: 1px solid var(--pi-border-muted); }
+    /* A collapsed heading already owns its separator; do not add a second line. */
     machine-list[collapsed],
     project-list[collapsed],
     workspace-list[collapsed],
-    session-list[collapsed] { flex: 0 0 auto; min-height: auto; overflow: hidden; }
+    session-list[collapsed] { flex: 0 0 auto; min-height: auto; overflow: hidden; border-bottom: 0; }
   `];
 }
 

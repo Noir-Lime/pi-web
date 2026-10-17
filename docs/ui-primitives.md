@@ -56,7 +56,7 @@ A popup item uses both `ui-button` and `ui-menu-item` on its native button. A ch
 
 ## Sidebar list surfaces
 
-`sidebarListStyles` is the shared treatment for navigation lists. Grey section headers provide hierarchy above dark, continuous rows. Keep rows full-width and gapless; do not introduce inset card surfaces or visual gutters. Selected, hover, and keyboard-focus states remain on the entire row.
+`sidebarListStyles` is the shared treatment for navigation lists. Grey section headers provide hierarchy above dark, continuous rows. Keep rows full-width and gapless; do not introduce inset card surfaces or visual gutters. Selected, hover, and keyboard-focus states remain on the entire row. Collapsed navigation sections keep the heading's 1px separator and omit the outer section border so adjacent borders do not double the line thickness.
 
 ## Dialog patterns
 
