@@ -319,7 +319,7 @@ function taskStyles(): string {
       .task-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; border: 1px solid var(--pi-border); border-radius: 10px; background: var(--pi-surface); padding: 12px; }
       .task-copy { display: grid; min-width: 0; gap: 5px; }
       .task-copy span, .muted { color: var(--pi-muted); }
-      code, pre { border: 1px solid var(--pi-border-muted); border-radius: 6px; background: var(--pi-bg); color: var(--pi-text-secondary); font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      code, pre { border: 1px solid var(--pi-border-muted); border-radius: 6px; background: var(--pi-bg); color: var(--pi-text-secondary); font: 12px var(--pi-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); }
       code { overflow: auto; padding: 5px 7px; white-space: nowrap; }
       pre { margin: 8px 0 0; overflow: auto; padding: 8px; white-space: pre-wrap; }
       .empty-state { border: 1px dashed var(--pi-border-muted); border-radius: 8px; color: var(--pi-muted); padding: 12px; }

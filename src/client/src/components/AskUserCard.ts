@@ -450,7 +450,7 @@ export class AskUserCard extends LitElement {
       width: 100%;
       margin: 0 0 14px;
       color: var(--pi-text);
-      font: 14px system-ui, sans-serif;
+      font: 14px var(--pi-font, system-ui, sans-serif);
       container-type: inline-size;
     }
     .card {

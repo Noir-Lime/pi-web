@@ -266,7 +266,7 @@ export class SettingsSessiondPanel extends LitElement {
     h3 { margin: 0; font-size: 13px; line-height: 1.3; }
     .loading-card { color: var(--pi-muted); }
     .config-path-card span, dt { color: var(--pi-muted); font-size: 12px; font-weight: 600; }
-    code { border: 1px solid var(--pi-border-muted); border-radius: 5px; background: var(--pi-bg); padding: 1px 4px; color: var(--pi-text); font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+    code { border: 1px solid var(--pi-border-muted); border-radius: 5px; background: var(--pi-bg); padding: 1px 4px; color: var(--pi-text); font: 12px var(--pi-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); overflow-wrap: anywhere; }
     .field small, .effective-card small { color: var(--pi-muted); line-height: 1.45; }
     .naming-model { justify-content: space-between; text-align: start; gap: 12px; }
     #session-naming-model-value { min-width: 0; overflow-wrap: anywhere; }

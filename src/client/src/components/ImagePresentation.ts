@@ -80,6 +80,7 @@ export class ImagePresentation extends LitElement {
   }
 
   static override styles = [uiButtonStyles, css`
+    @layer pi-web-base {
     :host { display: block; max-width: 100%; min-width: 0; }
     .frame { max-width: 100%; }
     button { font: inherit; color: inherit; }
@@ -97,5 +98,6 @@ export class ImagePresentation extends LitElement {
     :host([thumbnail]) .image-button:hover { background: var(--pi-surface-hover); }
     :host([thumbnail]) .placeholder code { display: none; }
     :host([thumbnail]) img { width: 100%; height: 100%; max-height: none; border-radius: 0; }
+    }
   `];
 }

@@ -132,7 +132,7 @@ export class MachineDialog extends LitElement {
   }
 
   static override styles = [uiDialogStyles, uiFormStyles, css`
-    :host { --ui-dialog-width: 560px; --ui-input-font-family: var(--pi-control-monospace-font-family, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); }
+    :host { --ui-dialog-width: 560px; --ui-input-font-family: var(--pi-control-monospace-font-family, var(--pi-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace)); }
     .hint { color: var(--pi-muted); }
     .intro { margin: 4px 0 0; line-height: 1.4; }
     .optional { color: var(--pi-muted); font-weight: 400; }

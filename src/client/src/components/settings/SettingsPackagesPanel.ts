@@ -244,7 +244,7 @@ export class SettingsPackagesPanel extends LitElement {
     .package-card, .known-package-card { align-items: center; }
     .package-card.filtered { opacity: .82; }
     .package-main strong, .package-main small { overflow-wrap: anywhere; }
-    code { color: var(--pi-text); font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+    code { color: var(--pi-text); font: 12px var(--pi-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); overflow-wrap: anywhere; }
 
     @media (max-width: 760px) {
       .install-row { grid-template-columns: minmax(0, 1fr); }

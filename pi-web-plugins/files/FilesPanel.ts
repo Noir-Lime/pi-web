@@ -456,14 +456,15 @@ export class WorkspaceFilesPanel extends LitElement {
   }
 
   static override styles = css`
-    :host { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; color: var(--pi-text); background: var(--pi-bg); font: 13px system-ui, sans-serif; container-type: inline-size; }
+    :host { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; color: var(--pi-text); background: var(--pi-bg); font: 13px var(--pi-font, system-ui, sans-serif); container-type: inline-size; }
     .files-panel { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
     .toolbar { gap: 8px; padding-inline-start: 10px; }
     .toolbar .ui-toolbar-title { flex: 0 0 auto; font-weight: 500; }
     .toolbar > .muted, .toolbar > .stale { align-self: center; }
     .toolbar-actions { margin-inline-start: auto; }
-    button { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--pi-border); border-radius: 7px; background: var(--pi-surface); color: var(--pi-text); padding: 5px 7px; cursor: pointer; }
-    button:focus-visible, input:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 1px; }
+    /* Host UI classes own their controls, including file-row grid geometry. */
+    button:not(.ui-button) { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--pi-border); border-radius: 7px; background: var(--pi-surface); color: var(--pi-text); padding: 5px 7px; cursor: pointer; }
+    button:not(.ui-button):focus-visible, input:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 1px; }
     .muted { color: var(--pi-muted); }
     .stale { border: 1px solid var(--pi-warning-border); border-radius: 999px; color: var(--pi-warning); padding: 1px 6px; font-size: 12px; }
     .files-error { flex: 0 0 auto; margin: 0; border-bottom: 1px solid var(--pi-danger); color: var(--pi-danger); padding: 8px; overflow-wrap: anywhere; }
@@ -506,7 +507,7 @@ export class WorkspaceFilesPanel extends LitElement {
     form { box-sizing: border-box; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 12px; overflow: auto; overscroll-behavior: contain; padding: 16px; }
     form > label { flex: 0 0 auto; display: grid; gap: 6px; }
     form > label > span, .review-files > strong { font-weight: 600; }
-    form > label > input:not([type]) { box-sizing: border-box; width: 100%; border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); color: var(--pi-text); padding: 8px 9px; font: var(--pi-control-font-size, 16px) var(--pi-control-font-family, system-ui, sans-serif); }
+    form > label > input:not([type]) { box-sizing: border-box; width: 100%; border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); color: var(--pi-text); padding: 8px 9px; font: var(--pi-control-font-size, 16px) var(--pi-control-font-family, var(--pi-font, system-ui, sans-serif)); }
     .dialog-options { flex: 0 0 auto; display: grid; gap: 8px; }
     .dialog-options label { display: flex; align-items: center; gap: 8px; }
     .review-files { flex: 1 1 180px; display: grid; gap: 6px; min-height: 0; max-height: 180px; overflow: auto; border: 1px solid var(--pi-border-muted); border-radius: 8px; padding: 8px; }

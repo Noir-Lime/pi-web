@@ -134,6 +134,7 @@ export class NavigationDialog extends LitElement {
   };
 
   static override styles = [uiDialogStyles, uiSelectionStyles, uiToolbarStyles, css`
+    @layer pi-web-base {
     .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
     footer { justify-content: space-between; flex-wrap: wrap; }
     h2 { align-self: stretch; padding: 12px 16px 4px; }
@@ -142,5 +143,6 @@ export class NavigationDialog extends LitElement {
     .destination-button { overflow-wrap: anywhere; font-weight: 600; }
     .pin-button[aria-pressed="true"] svg { color: var(--pi-accent); }
     .mobile-navigation { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12px; }
+    }
   `];
 }

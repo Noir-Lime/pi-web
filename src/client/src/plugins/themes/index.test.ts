@@ -58,7 +58,20 @@ describe("built-in CSS themes", () => {
         },
       });
       expect(css).toMatch(/^:root \{/);
-      expect(declarations.size).toBe(35);
+      expect([...declarations.keys()]).toEqual(expect.arrayContaining([
+        "--pi-font", "--pi-mono", "--pi-thinking", "--pi-tool",
+        "--pi-syntax-comment", "--pi-syntax-keyword", "--pi-syntax-string",
+        "--pi-syntax-number", "--pi-syntax-title", "--pi-syntax-deletion",
+        "--pi-chat-conversation-bg", "--pi-chat-conversation-border",
+        "--pi-chat-user-bg", "--pi-chat-user-border", "--pi-chat-system-bg",
+        "--pi-chat-activity-bg", "--pi-chat-compacting-bg",
+      ]));
+      expect(declarations.get("--pi-syntax-deletion")).toBe("var(--pi-danger)");
+      for (const value of declarations.values()) {
+        for (const reference of value.matchAll(/var\((--pi-[\w-]+)/g)) {
+          expect([...declarations.keys()], `${id} has an unresolved palette reference`).toContain(reference[1]);
+        }
+      }
       expect([declarations.get("--pi-bg"), declarations.get("--pi-text")]).toEqual(colors);
       properties ??= [...declarations.keys()].sort();
       expect([...declarations.keys()].sort()).toEqual(properties);
