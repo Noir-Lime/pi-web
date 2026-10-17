@@ -75,6 +75,7 @@ describe("plugin stylesheet contributions", () => {
         const integration = capabilities.resolve(stylesheetIntegrationCapabilityToken);
         expect(integration.registerRoot).toBeTypeOf("function");
         expect(integration.createController).toBeTypeOf("function");
+        expect(integration.subscribe).toBeTypeOf("function");
       } }),
     } });
     await registry.dispose();

@@ -201,6 +201,13 @@ export interface ContentRenderingCapability {
 export interface StylesheetIntegrationCapabilityV1 {
     /** Register a retained open or closed root. Release on disconnect; register again on reconnect. */
     readonly registerRoot: (root: ShadowRoot) => () => void;
+    /**
+     * Subscribe to active stylesheet changes after adoption in all registered roots.
+     * Includes removal, not initial subscription or root registration. Read initial values
+     * after registering your root. Listeners run synchronously; failures are logged in isolation.
+     * Release on disconnect. This does not observe arbitrary CSS mutations or media queries.
+     */
+    readonly subscribe: (listener: () => void) => () => void;
     /** Installs a Lit lifecycle controller; call once when constructing the component. */
     readonly createController: (host: ReactiveControllerHost & {
         readonly renderRoot?: HTMLElement | DocumentFragment;

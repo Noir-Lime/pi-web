@@ -52,7 +52,20 @@ export class TerminalPanel extends LitElement {
     this.releaseStyles?.();
     this.releaseStyles = undefined;
     this.integration = value;
-    if (this.isConnected && this.renderRoot instanceof ShadowRoot) this.releaseStyles = value?.registerRoot(this.renderRoot);
+    this.connectStylesheetIntegration();
+  }
+
+  private connectStylesheetIntegration(): void {
+    if (!this.isConnected || !(this.renderRoot instanceof ShadowRoot) || this.integration === undefined || this.releaseStyles !== undefined) return;
+    const releaseRoot = this.integration.registerRoot(this.renderRoot);
+    const unsubscribe = this.integration.subscribe(() => { this.applyTerminalTheme(); });
+    this.releaseStyles = () => {
+      unsubscribe();
+      releaseRoot();
+    };
+    // Subscription does not deliver an initial notification; registration may
+    // already have adopted a new palette while a terminal view exists.
+    this.applyTerminalTheme();
   }
 
   @property({ attribute: false }) context: WorkspacePanelContext | undefined;
@@ -93,7 +106,6 @@ export class TerminalPanel extends LitElement {
   private terminalNavigationGeneration = 0;
   private resizeObserver: ResizeObserver | undefined;
   private intersectionObserver: IntersectionObserver | undefined;
-  private themeObserver: MutationObserver | undefined;
   private replayInputSuppression: TerminalReplayInputSuppression | undefined;
   private observedRuntime: TerminalBrowserRuntime | undefined;
   private observedWorkspaceScope: string | undefined;
@@ -113,11 +125,9 @@ export class TerminalPanel extends LitElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    if (this.renderRoot instanceof ShadowRoot) this.releaseStyles ??= this.integration?.registerRoot(this.renderRoot);
+    this.connectStylesheetIntegration();
     this.syncDefaultSoftKeysEnvironment();
     this.softKeysDefaultEnvironmentMedia?.addEventListener("change", this.onSoftKeysDefaultEnvironmentChange);
-    this.themeObserver = new MutationObserver(() => { this.applyTerminalTheme(); });
-    this.themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "style", "data-theme"] });
   }
 
   override firstUpdated(): void {
@@ -134,8 +144,6 @@ export class TerminalPanel extends LitElement {
   override disconnectedCallback(): void {
     this.intersectionObserver?.disconnect();
     this.intersectionObserver = undefined;
-    this.themeObserver?.disconnect();
-    this.themeObserver = undefined;
     this.softKeysDefaultEnvironmentMedia?.removeEventListener("change", this.onSoftKeysDefaultEnvironmentChange);
     this.workspaceGeneration += 1;
     this.cancelWorkspaceRequests();

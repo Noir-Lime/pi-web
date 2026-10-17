@@ -9,6 +9,7 @@ export const pluginStyles = new PluginStyleRegistry((url, signal) => createPlugi
 
 export const stylesheetIntegrationCapability: StylesheetIntegrationCapabilityV1 = Object.freeze({
   registerRoot: (root: ShadowRoot) => pluginStyles.registerRoot(root),
+  subscribe: (listener: () => void) => pluginStyles.subscribe(listener),
   createController: (host: Parameters<StylesheetIntegrationCapabilityV1["createController"]>[0]) => {
     new PluginStylesController(host, pluginStyles);
   },
@@ -27,7 +28,8 @@ export const stylesheetIntegrationCapabilityToken: PluginCapability<StylesheetIn
 function isStylesheetIntegration(value: unknown): value is StylesheetIntegrationCapabilityV1 {
   return typeof value === "object" && value !== null
     && "registerRoot" in value && typeof value.registerRoot === "function"
-    && "createController" in value && typeof value.createController === "function";
+    && "createController" in value && typeof value.createController === "function"
+    && "subscribe" in value && typeof value.subscribe === "function";
 }
 
 /** Application-owned publication and error boundary; roots/sheets remain registry-owned. */
@@ -51,7 +53,11 @@ export class PluginStyleRuntime {
     void this.registry.setContributions(contributions).catch((error: unknown) => {
       // Removal/theme replacement intentionally aborts old files; only report
       // failures for the publication that still owns the active selection.
-      if (revision === this.revision) this.reportError(error);
+      if (revision === this.revision) {
+        // Allow the next publication to retry failed files; successful files stay cached.
+        this.signature = undefined;
+        this.reportError(error);
+      }
     });
   }
 

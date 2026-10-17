@@ -28,7 +28,7 @@ describe("host UI styles capability", () => {
     const requests: PluginCapability[] = [];
     const resolve = <Value,>(requested: PluginCapability<Value>): Value => {
       requests.push(requested);
-      return requested.parse({ cssText, registerRoot: vi.fn(() => vi.fn()), createController: vi.fn() });
+      return requested.parse({ cssText, registerRoot: vi.fn(() => vi.fn()), createController: vi.fn(), subscribe: vi.fn(() => vi.fn()) });
     };
     result.start({ capabilities: { resolve }, signal: new AbortController().signal });
     expect(requests.map(({ id }) => id)).toEqual(["ui-styles", "stylesheet-integration"]);

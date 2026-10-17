@@ -30,8 +30,24 @@ mask: URL(#mask); content: "one.png"; other: future-syntax("unchanged"); }`;
     expect(output).toContain("url(https://example.test/plugins/palettes/icons/a.svg#mark)");
     expect(output).toContain('image-set("https://example.test/plugins/palettes/one.png" 1x, url(https://example.test/plugins/palettes/two.png) 2x, "https://example.test/plugins/palettes/three.png" type("image/png"))');
     expect(output).toContain(`--message: "url(fake.png)"`);
-    expect(output).toContain("url(https://example.test/plugins/palettes/theme.css#mask)");
+    expect(output).toContain("url(#mask)");
     expect(output).toContain('content: "one.png"; other: future-syntax("unchanged")');
+  });
+
+  it("preserves local SVG references in quoted, unquoted and escaped resource URLs", () => {
+    const output = resolveStylesheetAssets(String.raw`x {
+filter: url(#shadow);
+clip-path: url("#clip");
+mask: url('\23 mask');
+other: u\72l(\23 marker);
+background-image: image-set("#local" 1x, "icons.svg#external" 2x);
+}`, fileUrl);
+    expect(output).toContain("filter: url(#shadow)");
+    expect(output).toContain('clip-path: url("#clip")');
+    expect(output).toContain('mask: url("#mask")');
+    expect(output).toContain("other: url(#marker)");
+    expect(output).toContain('image-set("#local" 1x, "https://example.test/plugins/palettes/icons.svg#external" 2x)');
+    expect(output).not.toContain("theme.css#");
   });
 
   it("handles CSS escapes, image-set prefixes, root paths and absolute/data URLs", () => {

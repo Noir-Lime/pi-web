@@ -23,10 +23,17 @@ interface LoadedFile {
 export class PluginStyleRegistry {
   private readonly roots = new Map<StyleRoot, { references: number }>();
   private readonly files = new Map<string, LoadedFile>();
+  private readonly listeners = new Set<() => void>();
   private sheets: readonly CSSStyleSheet[] = [];
   private revision = 0;
 
   constructor(private readonly load: PluginStylesheetLoader) {}
+
+  /** Subscribe to active sheet changes, after adoption in all registered roots. */
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
 
   /** Supply even a closed root by its retained reference. Release it on disconnection. */
   registerRoot(root: StyleRoot): () => void {
@@ -48,7 +55,7 @@ export class PluginStyleRegistry {
   /**
    * Input URLs must be absolute browser URLs. Ordering is independent of load timing.
    * Rejections are attributed to the contribution; callers must report them at the UI
-   * or plugin lifecycle boundary. A failed update never installs a partial batch.
+   * or plugin lifecycle boundary. Successful files are adopted even if others fail.
    */
   async setContributions(contributions: readonly ActivePluginStylesheet[]): Promise<void> {
     const ordered = [...contributions].sort((a, b) => (a.order ?? 1000) - (b.order ?? 1000) || compareIds(a.id, b.id));
@@ -77,7 +84,7 @@ export class PluginStyleRegistry {
     }
     this.replaceSheets(this.sheets.filter((sheet) => retainedSheets.has(sheet)));
 
-    const loaded = await Promise.all(ordered.map(async (contribution) => {
+    const loaded = await Promise.allSettled(ordered.map(async (contribution) => {
       let file = this.files.get(contribution.url);
       if (file === undefined) {
         const controller = new AbortController();
@@ -97,8 +104,18 @@ export class PluginStyleRegistry {
       }
     }));
     if (revision !== this.revision) return;
+    // Independent contributions must not block each other, especially theme files.
+    // Keep the requested order regardless of completion order or failures.
+    const sheets: CSSStyleSheet[] = [];
+    const errors: unknown[] = [];
+    for (const result of loaded) {
+      if (result.status === "fulfilled") sheets.push(result.value);
+      else errors.push(result.reason);
+    }
     // Multiple contributions can intentionally reference the same file.
-    this.replaceSheets([...new Set(loaded)]);
+    this.replaceSheets([...new Set(sheets)]);
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, "Failed to load plugin stylesheets");
   }
 
   /** Release all roots and pending file loads. The registry can subsequently be reused. */
@@ -112,8 +129,17 @@ export class PluginStyleRegistry {
 
   private replaceSheets(next: readonly CSSStyleSheet[]): void {
     const previous = this.sheets;
+    if (previous.length === next.length && previous.every((sheet, index) => sheet === next[index])) return;
     this.sheets = next;
     for (const root of this.roots.keys()) this.apply(root, previous, next);
+    for (const listener of [...this.listeners]) {
+      try {
+        listener();
+      } catch (error) {
+        // A consumer failure must not interrupt publication or other consumers.
+        console.error("Stylesheet change listener failed", error);
+      }
+    }
   }
 
   private apply(root: StyleRoot, previous: readonly CSSStyleSheet[], next: readonly CSSStyleSheet[]): void {

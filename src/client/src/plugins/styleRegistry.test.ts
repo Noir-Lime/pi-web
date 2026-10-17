@@ -88,7 +88,7 @@ describe("PluginStyleRegistry", () => {
     registry.clear();
   });
 
-  it("attributes failures, avoids partial adoption, and permits retry", async () => {
+  it("isolates failures from valid files and retries only failed loads", async () => {
     const failed = deferredSheet();
     const aSheet = new CSSStyleSheet();
     const bSheet = new CSSStyleSheet();
@@ -99,15 +99,100 @@ describe("PluginStyleRegistry", () => {
     const registry = new PluginStyleRegistry(load);
     const root = shadowRoot();
     registry.registerRoot(root);
+    const listener = vi.fn(() => { expect(root.adoptedStyleSheets).toContain(aSheet); });
+    const unsubscribe = registry.subscribe(listener);
     const update = registry.setContributions([a, b]);
     const failure = expect(update).rejects.toThrow("Failed to load stylesheet test:b (https://example.test/b.css)");
     failed.reject(new Error("network failed"));
     await failure;
-    expect(root.adoptedStyleSheets).toEqual([]);
+    expect(root.adoptedStyleSheets).toEqual([aSheet]);
     await registry.setContributions([a, b]);
     expect(load).toHaveBeenCalledTimes(3);
     expect(root.adoptedStyleSheets).toEqual([aSheet, bSheet]);
+    expect(listener).toHaveBeenCalledTimes(2);
+    unsubscribe();
     registry.clear();
+  });
+
+  it("reports all failed contributions while adopting successful sheets in order", async () => {
+    const aSheet = new CSSStyleSheet();
+    const c = { id: "test:c", url: "https://example.test/c.css" };
+    const registry = new PluginStyleRegistry((url) => url === a.url
+      ? Promise.resolve(aSheet)
+      : Promise.reject(new Error("unavailable")));
+    const root = shadowRoot();
+    registry.registerRoot(root);
+    let failure: unknown;
+    try {
+      await registry.setContributions([c, b, a]);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(AggregateError);
+    if (!(failure instanceof AggregateError)) throw new Error("Expected all stylesheet failures");
+    expect(failure.errors).toMatchObject([
+      { message: `Failed to load stylesheet ${b.id} (${b.url})` },
+      { message: `Failed to load stylesheet ${c.id} (${c.url})` },
+    ]);
+    expect(root.adoptedStyleSheets).toEqual([aSheet]);
+    registry.clear();
+  });
+
+  it("notifies after adoption in all roots, including removal, but not unchanged or obsolete loads", async () => {
+    const pending = deferredSheet();
+    const sheet = new CSSStyleSheet();
+    const registry = new PluginStyleRegistry((url) => url === a.url ? Promise.resolve(sheet) : pending.promise);
+    const root = shadowRoot();
+    registry.registerRoot(document);
+    registry.registerRoot(root);
+    const listener = vi.fn(() => {
+      expect(root.adoptedStyleSheets).toEqual(document.adoptedStyleSheets);
+    });
+    const release = registry.subscribe(listener);
+    expect(listener).not.toHaveBeenCalled();
+    await registry.setContributions([a]);
+    expect(listener).toHaveBeenCalledTimes(1);
+    await registry.setContributions([a]);
+    registry.registerRoot(shadowRoot("closed"));
+    expect(listener).toHaveBeenCalledTimes(1);
+    const obsolete = registry.setContributions([b]);
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(root.adoptedStyleSheets).toEqual([]);
+    await registry.setContributions([a]);
+    expect(listener).toHaveBeenCalledTimes(3);
+    pending.resolve(new CSSStyleSheet());
+    await obsolete;
+    expect(listener).toHaveBeenCalledTimes(3);
+    registry.clear();
+    expect(listener).toHaveBeenCalledTimes(4);
+    release();
+    release();
+    await registry.setContributions([a]);
+    expect(listener).toHaveBeenCalledTimes(4);
+    registry.clear();
+  });
+
+  it("isolates subscriber exceptions from adoption and other subscribers", async () => {
+    const sheet = new CSSStyleSheet();
+    const registry = new PluginStyleRegistry(() => Promise.resolve(sheet));
+    const root = shadowRoot();
+    registry.registerRoot(root);
+    const failure = new Error("consumer failed");
+    const report = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const releaseFailing = registry.subscribe(() => { throw failure; });
+    const listener = vi.fn();
+    const release = registry.subscribe(listener);
+    try {
+      await registry.setContributions([a]);
+      expect(root.adoptedStyleSheets).toEqual([sheet]);
+      expect(listener).toHaveBeenCalledOnce();
+      expect(report).toHaveBeenCalledWith("Stylesheet change listener failed", failure);
+    } finally {
+      releaseFailing();
+      release();
+      registry.clear();
+      report.mockRestore();
+    }
   });
 
   it("reference counts root registrations and invalidates old releases after clear", async () => {

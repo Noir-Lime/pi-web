@@ -28,6 +28,7 @@ describe("Files panel component boundary", () => {
         return () => { roots.delete(root); };
       },
       createController: vi.fn(),
+      subscribe: vi.fn(() => vi.fn()),
     };
     await vi.waitFor(() => { expect(roots.size).toBe(3); });
     const viewer = requiredElement(panel.shadowRoot?.querySelector("pi-web-files-viewer"), "viewer");

@@ -110,14 +110,19 @@ export function resolveStylesheetAssets(source: string, baseUrl: string): string
     } else if (type === tokenTypes.RightParenthesis || type === tokenTypes.RightSquareBracket || type === tokenTypes.RightCurlyBracket) {
       contexts.pop();
     } else if (type === tokenTypes.Url) {
-      replacements.push({ from, to, value: cssUrl.encode(new URL(cssUrl.decode(token), baseUrl).href) });
+      replacements.push({ from, to, value: cssUrl.encode(resolveResourceUrl(cssUrl.decode(token), baseUrl)) });
     } else if (type === tokenTypes.String && ["url", "image-set", "-webkit-image-set"].includes(contexts.at(-1) ?? "")) {
-      replacements.push({ from, to, value: string.encode(new URL(string.decode(token), baseUrl).href) });
+      replacements.push({ from, to, value: string.encode(resolveResourceUrl(string.decode(token), baseUrl)) });
     } else if (type === tokenTypes.BadUrl || type === tokenTypes.BadString) {
       throw new Error("Stylesheet contains an invalid URL or string");
     }
   });
   return replaceRanges(source, replacements);
+}
+
+function resolveResourceUrl(value: string, baseUrl: string): string {
+  // Fragment-only URLs refer to local SVG resources, not the stylesheet file.
+  return value.startsWith("#") ? value : new URL(value, baseUrl).href;
 }
 
 function replaceRanges(source: string, replacements: readonly Replacement[]): string {

@@ -75,7 +75,7 @@ describe("Workspace Tasks host UI styles", () => {
     instance.start({ signal: new AbortController().signal, capabilities: {
       resolve<Value>(token: PluginCapability<Value>): Value {
         requests(token);
-        return token.parse({ cssText: ".ui-button { color: red; }", registerRoot: vi.fn(() => vi.fn()), createController: vi.fn() });
+        return token.parse({ cssText: ".ui-button { color: red; }", registerRoot: vi.fn(() => vi.fn()), createController: vi.fn(), subscribe: vi.fn(() => vi.fn()) });
       },
     } });
     expect(requests).toHaveBeenCalledWith(requirement);

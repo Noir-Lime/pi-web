@@ -15,7 +15,8 @@ const stylesheetIntegrationCapability: PluginCapability<StylesheetIntegrationCap
 function isStylesheetIntegration(value: unknown): value is StylesheetIntegrationCapabilityV1 {
   return typeof value === "object" && value !== null
     && "registerRoot" in value && typeof value.registerRoot === "function"
-    && "createController" in value && typeof value.createController === "function";
+    && "createController" in value && typeof value.createController === "function"
+    && "subscribe" in value && typeof value.subscribe === "function";
 }
 
 const plugin = {

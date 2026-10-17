@@ -21,7 +21,7 @@ describe("Files plugin activation", () => {
     await result.start?.({ signal: new AbortController().signal, capabilities: {
       resolve<Value>(token: PluginCapability<Value>): Value {
         requests.push(token.id);
-        return token.parse({ cssText, listRenderers: vi.fn(), renderText: vi.fn(), renderMarkdown: vi.fn(), registerRoot: vi.fn(() => vi.fn()), createController: vi.fn() });
+        return token.parse({ cssText, listRenderers: vi.fn(), renderText: vi.fn(), renderMarkdown: vi.fn(), registerRoot: vi.fn(() => vi.fn()), createController: vi.fn(), subscribe: vi.fn(() => vi.fn()) });
       },
     } });
     expect(requests).toEqual(["content-rendering", "ui-styles", "stylesheet-integration"]);

@@ -37,7 +37,7 @@ function integration() {
     roots.add(root);
     return vi.fn(() => { roots.delete(root); });
   });
-  return { roots, registerRoot, createController: vi.fn() };
+  return { roots, registerRoot, createController: vi.fn(), subscribe: vi.fn(() => vi.fn()) };
 }
 
 afterEach(() => {
