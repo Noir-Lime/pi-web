@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
-import type { SessionQueueMessageMutation } from "../../shared/apiTypes.js";
+import type { McpAuthServerOption, McpAuthServersResponse, OAuthFlowState, SessionQueueMessageMutation } from "../../shared/apiTypes.js";
 import { QueueCompatibilityGuard, mirroredQueueEntries, mutableQueueAgent, mutableTextMirror, parseQueueMessageMutation, queuedMessageAttachmentCounts, queuedMessageAttachmentCount, snapshotAgentQueues, type QueueAgent } from "./queuedMessageMutation.js";
 import {
   createAgentSessionFromServices,
@@ -34,11 +34,13 @@ import {
   type ProjectTrustEvent,
   type ProjectTrustEventResult,
   type ResourceDiagnostic,
+  type RegisteredCommand,
 } from "@earendil-works/pi-coding-agent";
 import type { ClientArchiveSessionsResponse, ClientCommand, ClientCommandResult, ClientMessagePage, ClientSession, ClientSessionCleanupExecuteResponse, ClientSessionCleanupPreviewResponse, ClientSessionModel, ClientSessionModelCatalogEntry, ClientSessionStatus, ClientSessionTreeForkRequest, ClientSessionTreeForkResult, ClientSessionTreeNavigateRequest, ClientSessionTreeNavigateResult, ClientThinkingLevel, SessionStreamSnapshot, SessionTranscriptSnapshot, SessionUiEvent } from "../types.js";
 import { projectBrowserMessage } from "../browserMessageProjection.js";
 import { isSessionMediaId } from "../../shared/sessionMedia.js";
 import { getBuiltinExtensionFactories } from "./builtinExtensionFactories.js";
+import { McpAuthFlowService } from "./mcpAuthFlowService.js";
 import type { SessionMedia } from "./sessionMediaIndex.js";
 import { pageMessagesAtSafeBoundary } from "./messagePaging.js";
 import { clientSessionFirstMessagePreview } from "./clientSessionPreview.js";
@@ -468,6 +470,7 @@ export interface PiAgentSession {
    * workspace override is exposed separately and remains read-only.
    */
   settingsManager: {
+    isProjectTrusted?(): boolean;
     getWarnings(): { anthropicExtraUsage?: boolean };
     setWarnings(warnings: { anthropicExtraUsage?: boolean }): void;
     getEnabledModels(): string[] | undefined;
@@ -497,7 +500,7 @@ export interface PiAgentSession {
   isBashRunning: boolean;
   pendingMessageCount: number;
   extensionRunner: {
-    getRegisteredCommands(): readonly { invocationName: string; description?: string }[];
+    getRegisteredCommands(): readonly ({ invocationName: string; description?: string; sourceInfo?: { path: string } } & Pick<RegisteredCommand, "getArgumentCompletions">)[];
     getMarkdownTransformers(): MarkdownTransformer[];
     getUIContext(): ExtensionUIContext;
     setUIContext(uiContext?: ExtensionUIContext, mode?: "rpc"): void;
@@ -1200,6 +1203,7 @@ export class PiSessionService implements SessionRouteService {
   private readonly manualCompactionEnded = new WeakSet<PiAgentSession>();
   /** Exempt only a command's own prompt receipt while it invokes guarded session control. */
   private readonly extensionCommandExecution = new AsyncLocalStorage<ExtensionCommandExecution>();
+  readonly mcpAuthFlows = new McpAuthFlowService();
   private readonly runtimeMessageCounts = new WeakMap<PiAgentSession, number>();
   private readonly snapshotMessageCounts = new WeakMap<readonly unknown[], number>();
   private readonly pendingPromptEchoes = new WeakMap<PiAgentSession, { userIndex: number; message: ReturnType<typeof userMessage> }[]>();
@@ -1467,6 +1471,7 @@ export class PiSessionService implements SessionRouteService {
   }
 
   async dispose(): Promise<void> {
+    this.mcpAuthFlows.dispose();
     this.unreadPublicationStopped = true;
     this.clearUnreadPublicationRetry();
     clearInterval(this.heartbeat);
@@ -2860,6 +2865,95 @@ export class PiSessionService implements SessionRouteService {
     return commands.sort((a, b) => a.name.localeCompare(b.name));
   }
 
+  private async mcpAuthSession(ref: PiSessionRef): Promise<PiAgentSession> {
+    await this.assertWritable(ref);
+    const session = await this.getOrOpen(ref);
+    await this.assertWritable(ref);
+    this.assertCurrentExtensionSession(session);
+    if (session.sessionId !== ref.id || !cwdPathsEqual(ref.cwd, session.sessionManager.getCwd())) throw new Error("MCP authentication session workspace changed");
+    if (session.settingsManager.isProjectTrusted?.() !== true) throw new Error("MCP authentication requires a trusted workspace");
+    if (!session.extensionRunner.getRegisteredCommands().some((command) => command.invocationName === "mcp" && command.sourceInfo?.path === "builtin:mcp")) {
+      throw new Error("Pi's built-in MCP command is not available for this session");
+    }
+    if (this.hasActiveWork(session)) throw new Error("Wait for current session activity before authenticating MCP");
+    return session;
+  }
+
+  private assertMcpAuthIdentity(ref: PiSessionRef, session: PiAgentSession): void {
+    this.assertCurrentExtensionSession(session);
+    if (session.sessionId !== ref.id || !cwdPathsEqual(ref.cwd, session.sessionManager.getCwd())) throw new Error("MCP authentication session workspace changed");
+    if (session.settingsManager.isProjectTrusted?.() !== true) throw new Error("MCP authentication requires a trusted workspace");
+  }
+
+  private async discoverMcpAuthServers(ref: PiSessionRef, session: PiAgentSession): Promise<McpAuthServerOption[]> {
+    return this.mcpAuthFlows.discover({
+      sessionId: ref.id, identity: session,
+      isCurrent: () => this.isCurrentActiveSession(session),
+      run: async () => {
+        // The SDK has no public MCP readiness promise. In RPC mode this supported
+        // status command awaits startup without reconnecting or touching tokens.
+        await session.prompt("/mcp", { expandPromptTemplates: true });
+        await this.assertWritable(ref);
+        this.assertMcpAuthIdentity(ref, session);
+        const command = session.extensionRunner.getRegisteredCommands().find((candidate) => candidate.invocationName === "mcp" && candidate.sourceInfo?.path === "builtin:mcp");
+        if (!command) throw new Error("Pi's built-in MCP command is not available for this session");
+        const completions = await command.getArgumentCompletions?.("login ") ?? [];
+        await this.assertWritable(ref);
+        this.assertMcpAuthIdentity(ref, session);
+        if (completions.length > 200) throw new Error("Too many MCP authentication servers");
+        const servers: McpAuthServerOption[] = [];
+        for (const item of completions) {
+          const name = item.value.startsWith("login ") ? item.value.slice(6) : "";
+          // Commands split on whitespace. Never forward an arbitrary suffix or
+          // a name that could change the builtin command's argument structure.
+          if (name.length === 0 || name.length > 256 || /\s/u.test(name) || Array.from(name).some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) continue;
+          if ((item.description?.length ?? 0) > 32 * 1024) throw new Error("MCP server description is too large");
+          if (!servers.some((server) => server.name === name)) servers.push({ name, ...(item.description === undefined ? {} : { description: item.description }) });
+        }
+        return servers;
+      },
+    });
+  }
+
+  async mcpAuthServers(ref: PiSessionRef): Promise<McpAuthServersResponse> {
+    const session = await this.mcpAuthSession(ref);
+    if (this.hasActiveWork(session)) throw new Error("Wait for current session activity before listing MCP servers");
+    return this.runSessionEntryMutation(session, "list MCP authentication servers", async () => ({ servers: await this.discoverMcpAuthServers(ref, session) }));
+  }
+
+  async startMcpAuth(ref: PiSessionRef, mode: "login" | "logout", serverName?: string): Promise<OAuthFlowState> {
+    const session = await this.mcpAuthSession(ref);
+    if (this.hasActiveWork(session)) throw new Error("Wait for current session activity before authenticating MCP");
+    const servers = await this.runSessionEntryMutation(session, "discover MCP authentication servers", () => this.discoverMcpAuthServers(ref, session));
+    if (serverName !== undefined && !servers.some((server) => server.name === serverName)) throw new Error("Unknown or ineligible MCP authentication server");
+    this.assertMcpAuthIdentity(ref, session);
+    if (this.hasActiveWork(session)) throw new Error("Wait for current session activity before authenticating MCP");
+    return this.mcpAuthFlows.start({
+      sessionId: ref.id, mode,
+      identity: session,
+      isCurrent: () => this.isCurrentActiveSession(session) && session.sessionId === ref.id && cwdPathsEqual(ref.cwd, session.sessionManager.getCwd()),
+      // This is an awaited extension command, not a model prompt submission.
+      // Avoid prompt echoes/activity and the fire-and-forget command receipt.
+      run: () => this.runSessionEntryMutation(session, "authenticate MCP", async () => {
+        const operation = McpAuthFlowService.current(session);
+        if (!operation) throw new Error("MCP authentication session is no longer current");
+        if (servers.length === 0) {
+          operation.notify("No eligible MCP servers are available for this action.");
+          return;
+        }
+        const selected = serverName ?? await operation.selectServer(servers);
+        if (selected === undefined || operation.isCancelled()) return;
+        await this.assertWritable(ref);
+        this.assertMcpAuthIdentity(ref, session);
+        const fresh = await this.discoverMcpAuthServers(ref, session);
+        if (!fresh.some((server) => server.name === selected)) throw new Error("MCP authentication server is no longer eligible");
+        if (operation.isCancelled()) return;
+        operation.setServer(selected);
+        await session.prompt(`/mcp ${mode} ${selected}`, { expandPromptTemplates: true });
+      }),
+    });
+  }
+
   async prompt(ref: PiSessionRef, text: unknown, streamingBehavior?: unknown, attachments?: unknown, options?: { echoUserMessage?: boolean }): Promise<void> {
     const promptText = requirePromptText(text);
     // Command-forwarded prompts (e.g. /skill:*) are expanded by the agent, which
@@ -3855,6 +3949,7 @@ export class PiSessionService implements SessionRouteService {
     // Extension dialog waiters are parked Promises inside the dying runtime:
     // settle them rather than dropping them.
     this.endSessionExtensionDialogs(sessionId);
+    this.mcpAuthFlows.cancelSession(sessionId);
     this.active.delete(sessionId);
     this.events.mediaIndex.forgetSession({ id: sessionId, cwd: active.runtime.session.sessionManager.getCwd() });
     this.activities.delete(sessionId);
@@ -3899,6 +3994,7 @@ export class PiSessionService implements SessionRouteService {
 
   private async assertWritable(ref: PiSessionRef): Promise<void> {
     if (await this.getArchived(ref) !== undefined) throw new Error("Archived sessions are read-only. Restore the session to continue.");
+    this.mcpAuthFlows.assertSessionAvailable(ref.id);
   }
 
   private async getOrOpen(ref: PiSessionRef): Promise<PiAgentSession> {
@@ -4250,6 +4346,11 @@ export class PiSessionService implements SessionRouteService {
         commandContextActions: this.extensionCommandActions(session),
         onError: (error) => {
           const message = `${error.extensionPath}: ${error.error}`;
+          const operation = McpAuthFlowService.current(session);
+          if (operation) {
+            operation.error(message);
+            return;
+          }
           this.publishActivity(session, "extension error", "error", message);
           this.events.publish(session.sessionId, { type: "session.error", message });
         },
@@ -4351,6 +4452,11 @@ export class PiSessionService implements SessionRouteService {
   ): ExtensionUIContext {
     const baseUiContext = session.extensionRunner.getUIContext();
     const notify: ExtensionUIContext["notify"] = (message, type) => {
+      const operation = McpAuthFlowService.current(session);
+      if (operation) {
+        operation.notify(message);
+        return;
+      }
       if (generation === undefined) {
         this.events.publish(session.sessionId, {
           type: "command.output",
@@ -4373,15 +4479,18 @@ export class PiSessionService implements SessionRouteService {
         if (property === "theme") return plainTextTheme;
         if (property === "confirm") {
           return (title: string, message: string, opts?: ExtensionUIDialogOptions) =>
-            this.openExtensionDialog(session, { kind: "confirm", title, message }, opts, startupDialogs?.signal);
+            McpAuthFlowService.current(session)?.confirm(title, message, opts)
+              ?? this.openExtensionDialog(session, { kind: "confirm", title, message }, opts, startupDialogs?.signal);
         }
         if (property === "select") {
           return (title: string, options: string[], opts?: ExtensionUIDialogOptions) =>
-            this.openExtensionDialog(session, { kind: "select", title, options }, opts, startupDialogs?.signal);
+            McpAuthFlowService.current(session)?.select(title, options, opts)
+              ?? this.openExtensionDialog(session, { kind: "select", title, options }, opts, startupDialogs?.signal);
         }
         if (property === "input") {
           return (title: string, placeholder: string | undefined, opts?: ExtensionUIDialogOptions) =>
-            this.openExtensionDialog(session, { kind: "input", title, placeholder }, opts, startupDialogs?.signal);
+            McpAuthFlowService.current(session)?.input(title, placeholder, opts)
+              ?? this.openExtensionDialog(session, { kind: "input", title, placeholder }, opts, startupDialogs?.signal);
         }
         const value: unknown = Reflect.get(target, property, receiver);
         return value;
@@ -4917,6 +5026,7 @@ export class PiSessionService implements SessionRouteService {
   }
 
   private beginSessionEntryMutation(session: PiAgentSession, action: string): void {
+    this.mcpAuthFlows.assertSessionAvailable(session.sessionId);
     this.assertTreeNavigationInactive(session, action);
     this.sessionEntryMutationCounts.set(session, (this.sessionEntryMutationCounts.get(session) ?? 0) + 1);
     this.observeUnreadActivityState(session);

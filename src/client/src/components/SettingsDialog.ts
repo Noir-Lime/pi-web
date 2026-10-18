@@ -5,8 +5,11 @@ import { cache } from "lit/directives/cache.js";
 import { live } from "lit/directives/live.js";
 import type { AppAction } from "../actions";
 import { configApi, piPackagesApi, pluginsApi, type Machine, type MachineHealth, type MachineRuntime, type SessionModel, type PiPackageMutationResponse, type PiPackageScope, type PiPackagesResponse, type PiWebConfigResponse, type PiWebConfigValues, type PiWebPluginsResponse } from "../api";
+import type { McpAuthContext, McpAuthHandler } from "./settings/SettingsMcpPanel";
+import "./settings/SettingsMcpPanel";
 import type { SettingsSection } from "../settingsRoute";
 import "./ModalSurface";
+import type { ModalSurface } from "./ModalSurface";
 import { uiDialogStyles, uiSelectionStyles } from "./ui/dialogStyles";
 import "./settings/SettingsGeneralPanel";
 import type { SettingsGeneralPanel } from "./settings/SettingsGeneralPanel";
@@ -39,6 +42,8 @@ export class SettingsDialog extends LitElement {
   @property({ type: Boolean }) hasLocalThemeOverride = false;
   @property({ attribute: false }) onUseLocalTheme?: (preference: ThemePreference) => void;
   @property({ attribute: false }) onUseDefaultTheme?: () => void;
+  @property({ attribute: false }) mcpContext: McpAuthContext | undefined;
+  @property({ attribute: false }) onMcpAuth?: McpAuthHandler;
   @property({ attribute: false }) machine: Machine | undefined;
   @property({ attribute: false }) machineRuntime: MachineRuntime | undefined;
   @property({ attribute: false }) machines: Machine[] = [];
@@ -102,7 +107,11 @@ export class SettingsDialog extends LitElement {
 
   protected override updated(changed: PropertyValues<this>): void {
     if (changed.has("section")) {
-      this.renderRoot.querySelector(".settings-nav button.selected")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      // The surface must render its slot before the mobile tab row has layout.
+      const surface = this.renderRoot.querySelector<ModalSurface>("modal-surface");
+      void surface?.updateComplete.then(() => {
+        if (this.isConnected) this.renderRoot.querySelector(".settings-nav button.selected")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      });
     }
     if (this.isConnected) {
       const generalPanel = this.renderRoot.querySelector<SettingsGeneralPanel>("settings-general-panel");
@@ -145,6 +154,7 @@ export class SettingsDialog extends LitElement {
             ${this.renderNavButton("sessiond", "Session daemon", "Selected machine")}
             ${this.renderNavButton("packages", "Pi packages", "Selected machine")}
             ${this.renderNavButton("plugins", "PI WEB plugins", "Selected machine")}
+            ${this.renderNavButton("mcp", "MCP", "Selected session")}
             ${this.renderNavButton("shortcuts", "Keyboard shortcuts", "This gateway")}
           </nav>
           <main class="settings-main">
@@ -232,6 +242,16 @@ export class SettingsDialog extends LitElement {
     // Keep the section -> panel routing in sync with the public
     // `activeSettingsPanelTag` seam below, which tests assert against instead of
     // scraping this template's markup.
+    if (this.section === "mcp") {
+      const target = this.settingsTarget();
+      return html`
+        <settings-mcp-panel
+          .context=${this.mcpContext?.machineId === target.id ? this.mcpContext : undefined}
+          .targetLabel=${settingsMachineTargetLabel(target)}
+          .onMcpAuth=${this.onMcpAuth}
+        ></settings-mcp-panel>
+      `;
+    }
     if (this.section === "sessiond") {
       return html`
         <settings-sessiond-panel
@@ -834,7 +854,8 @@ export type SettingsPanelTag =
   | "settings-sessiond-panel"
   | "settings-packages-panel"
   | "settings-plugins-panel"
-  | "settings-shortcuts-panel";
+  | "settings-shortcuts-panel"
+  | "settings-mcp-panel";
 
 /**
  * The single custom-element panel the settings dialog renders for a section.
@@ -854,6 +875,8 @@ export function activeSettingsPanelTag(section: SettingsSection): SettingsPanelT
       return "settings-plugins-panel";
     case "shortcuts":
       return "settings-shortcuts-panel";
+    case "mcp":
+      return "settings-mcp-panel";
     case "general":
       return "settings-general-panel";
   }

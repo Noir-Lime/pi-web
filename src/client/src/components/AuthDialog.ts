@@ -84,6 +84,7 @@ export class AuthDialog extends LitElement {
           searchText: provider.name,
           run: () => { this.onLogoutProvider?.(provider.id); },
         }));
+      case "starting":
       case "oauth":
         return undefined;
     }
@@ -152,14 +153,22 @@ export class AuthDialog extends LitElement {
   private dialogTitle(state: AuthDialogState): string {
     switch (state.step) {
       case "method": return "Configure provider authentication";
+      case "starting": return state.title;
       case "providers": return state.authType === undefined ? "Select provider authentication" : state.authType === "oauth" ? "Select subscription provider" : "Select credential provider";
-      case "oauth": return `Login to ${state.flow.providerName}`;
+      case "oauth": return state.flow.target === "mcp"
+        ? state.flow.mcpMode === undefined ? "MCP authentication" : `MCP ${state.flow.mcpMode}${state.flow.select === undefined ? `: ${state.flow.providerName}` : ""}`
+        : `Login to ${state.flow.providerName}`;
       case "logout": return "Remove stored provider authentication";
     }
   }
 
   private renderBody(state: AuthDialogState) {
     if (state.step === "oauth") return this.renderOAuth(state);
+    if (state.step === "starting") return html`
+      <div class="ui-dialog-body ui-form-body">
+        ${state.error === undefined ? html`<p role="status">Starting MCP authentication…</p>` : html`<p class="ui-form-error" role="alert">${state.error}</p>`}
+        <div class="ui-form-actions"><button class="ui-button" @click=${() => { this.onCancel?.(); }}>${state.error === undefined ? "Cancel" : "Close"}</button></div>
+      </div>`;
     const options = this.optionsFor(state) ?? [];
     const visible = this.filteredOptions(options);
     return html`
@@ -189,25 +198,31 @@ export class AuthDialog extends LitElement {
 
   private renderOAuth(state: Extract<AuthDialogState, { step: "oauth" }>) {
     const flow = state.flow;
-    const prompt = flow.prompt;
-    const select = flow.select;
+    const isMcp = flow.target === "mcp";
+    const running = flow.status === "running";
+    const prompt = running && flow.cancelRequested !== true ? flow.prompt : undefined;
+    const select = running && flow.cancelRequested !== true ? flow.select : undefined;
+    const showAuthorization = flow.auth !== undefined && (!isMcp || (running && flow.cancelRequested !== true));
     const promptInputType = prompt === undefined ? undefined : oauthPromptInputType(prompt.promptType);
-    // Only a manual-code prompt accepts a pasted redirect URL, so the note stays out of
-    // device-code and browser-callback flows that offer the user nothing to paste.
-    const showPasteNote = isBrowserRemoteOAuthMachine(state.machineId, window.location.hostname)
+    // Pi's MCP bridge uses a text input for its redirect fallback; provider
+    // flows identify this interaction explicitly with manual_code.
+    const showPasteNote = (isMcp || isBrowserRemoteOAuthMachine(state.machineId, window.location.hostname))
       && flow.status === "running"
-      && prompt?.promptType === "manual_code";
+      && (isMcp ? prompt !== undefined && flow.auth !== undefined : prompt?.promptType === "manual_code");
     return html`
       <div class="form ui-dialog-body ui-form-body">
-        ${flow.auth !== undefined ? html`
-          <p>Open this authorization link:</p>
-          <p><a href=${flow.auth.url} target="_blank" rel="noreferrer">${flow.auth.url}</a></p>
+        ${showAuthorization && flow.auth !== undefined ? html`
+          <p>${isMcp ? "Approve access in your browser, then return here." : "Open this authorization link:"}</p>
+          <p><a class=${isMcp ? "ui-button ui-button--action" : nothing} href=${flow.auth.url} target="_blank" rel="noopener noreferrer">${isMcp ? "Open authorization page" : flow.auth.url}</a></p>
           ${flow.auth.deviceCode !== undefined ? html`
             <p class="warning">Enter code: <code>${flow.auth.deviceCode.userCode}</code></p>
           ` : flow.auth.instructions !== undefined ? html`<p class="warning">${flow.auth.instructions}</p>` : null}
-        ` : html`<p>Starting login flow…</p>`}
-        ${showPasteNote ? html`<p class="warning">After you approve, the redirect page will probably fail to load — that is expected. Copy the full URL from your browser's address bar and paste it below.</p>` : null}
-        ${flow.progress.length > 0 ? html`<ul class="progress">${flow.progress.map((line) => html`<li>${line}</li>`)}</ul>` : null}
+        ` : isMcp ? select !== undefined ? null : html`<p role="status">${flow.cancelRequested === true && running ? "Cancellation requested. Waiting for Pi to finish…" : !running ? "Operation finished" : "Waiting for Pi…"}</p>` : html`<p>Starting login flow…</p>`}
+        ${isMcp && flow.mcpMode === "logout" ? html`<p class="warning">Logout removes Pi’s saved credentials. It does not disable the server or revoke access at the provider. Other sessions using those credentials are also affected.</p>` : null}
+        ${isMcp && flow.mcpMode === "login" && flow.status === "complete" && flow.auth === undefined && flow.cancelRequested !== true ? html`<p>No browser authorization was requested. Pi may have reused existing credentials; read its result below.</p>` : null}
+        ${isMcp && flow.cancelRequested === true ? html`<p class="warning">Pi may already be completing authentication. Credentials may have been saved if approval happened before cancellation.</p>` : null}
+        ${showPasteNote ? html`<p class="warning">${isMcp ? "If the redirect page cannot load after approval, copy the full URL from your browser’s address bar and paste it below." : "After you approve, the redirect page will probably fail to load — that is expected. Copy the full URL from your browser's address bar and paste it below."}</p>` : null}
+        ${flow.progress.length > 0 ? html`<ul class="progress" aria-label="Authentication messages">${flow.progress.map((line) => html`<li>${line}</li>`)}</ul>` : null}
         ${flow.info?.map((item) => item.links === undefined || item.links.length === 0 ? null : html`
           <div class="info-links" aria-label="Related information">
             ${item.links.map((link) => html`<a href=${link.url} target="_blank" rel="noreferrer" title=${item.message}>${link.label ?? link.url}</a>`)}
@@ -223,15 +238,16 @@ export class AuthDialog extends LitElement {
         ${select !== undefined ? html`
           <p>${select.message}</p>
           <div class="inline-options ui-selection-list">${select.options.map((option) => html`
-            <button class="ui-button ui-selection-option" @click=${() => { this.onOAuthRespond?.(option.value); }}>
+            <button class="ui-button ui-selection-option" ?disabled=${state.responding === true} @click=${() => { this.onOAuthRespond?.(option.value); }}>
               <span>${option.label}</span>
               ${option.description === undefined ? null : html`<small class="ui-selection-detail">${option.description}</small>`}
             </button>
           `)}</div>
         ` : null}
         ${state.error !== undefined && state.error !== "" ? html`<div class="error-text ui-form-error">${state.error}</div>` : null}
-        ${flow.status === "error" || flow.status === "cancelled" ? html`<div class="error-text ui-form-error">${flow.error ?? flow.status}</div><div class="actions ui-form-actions"><button class="ui-button" @click=${() => { this.cancel(); }}>Close</button></div>` : null}
-        ${prompt === undefined && select === undefined && flow.status === "running" ? html`<div class="actions ui-form-actions"><button class="ui-button" @click=${() => { this.onOAuthCancel?.(); }}>Cancel</button></div>` : null}
+        ${flow.status === "error" || flow.status === "cancelled" ? html`<div class="error-text ui-form-error" role="alert">${flow.error ?? flow.status}</div>` : null}
+        ${!running ? html`<div class="actions ui-form-actions"><button class="ui-button" @click=${() => { this.cancel(); }}>Close</button></div>` : null}
+        ${prompt === undefined && (select === undefined || isMcp) && running ? html`<div class="actions ui-form-actions"><button class="ui-button" @click=${() => { if (flow.cancelRequested === true) this.onCancel?.(); else this.onOAuthCancel?.(); }}>${flow.cancelRequested === true ? "Close" : "Cancel"}</button></div>` : null}
       </div>
     `;
   }
@@ -265,7 +281,7 @@ export class AuthDialog extends LitElement {
 
   private cancel(): void {
     const state = this.state;
-    if (state?.step === "oauth") this.onOAuthCancel?.();
+    if (state?.step === "oauth" && state.flow.cancelRequested !== true) this.onOAuthCancel?.();
     else this.onCancel?.();
   }
 
@@ -337,6 +353,7 @@ function authDialogStateStep(value: unknown): AuthDialogState["step"] | undefine
   if (typeof value !== "object" || value === null || !("step" in value)) return undefined;
   switch (value.step) {
     case "method":
+    case "starting":
     case "providers":
     case "oauth":
     case "logout":

@@ -4,6 +4,7 @@ import { pluginStyles } from "../plugins/styles";
 import { ActionPalette } from "./ActionPalette";
 import type { ModalSurface } from "./ModalSurface";
 import { SettingsThemePanel } from "./settings/SettingsThemePanel";
+import { SettingsMcpPanel } from "./settings/SettingsMcpPanel";
 import { FormattedText } from "./FormattedText";
 
 const file = { id: "test:host", url: "https://plugins.test/host.css" };
@@ -34,10 +35,12 @@ it("shares contributed sheets across host and nested modal roots and releases th
 
   // Components connected after the file loads receive the same compiled sheet.
   const themePanel = new SettingsThemePanel();
+  const mcpPanel = new SettingsMcpPanel();
   const text = new FormattedText();
-  document.body.append(themePanel, text);
-  await Promise.all([themePanel.updateComplete, text.updateComplete]);
+  document.body.append(themePanel, mcpPanel, text);
+  await Promise.all([themePanel.updateComplete, mcpPanel.updateComplete, text.updateComplete]);
   expect(themePanel.shadowRoot?.adoptedStyleSheets).toContain(sheet);
+  expect(mcpPanel.shadowRoot?.adoptedStyleSheets).toContain(sheet);
   expect(text.shadowRoot?.adoptedStyleSheets).toContain(sheet);
   expect(fetchFile).toHaveBeenCalledTimes(1);
 
@@ -48,7 +51,7 @@ it("shares contributed sheets across host and nested modal roots and releases th
   await palette.updateComplete;
   for (const root of roots) expect(root?.adoptedStyleSheets).toContain(sheet);
   await pluginStyles.setContributions([]);
-  for (const root of [...roots, themePanel.shadowRoot, text.shadowRoot]) {
+  for (const root of [...roots, themePanel.shadowRoot, mcpPanel.shadowRoot, text.shadowRoot]) {
     expect(root?.adoptedStyleSheets).not.toContain(sheet);
   }
 });

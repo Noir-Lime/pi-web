@@ -311,6 +311,26 @@ This prevents accidental provider, configuration, or credential contamination be
 
 Configure providers before the daemon starts: use the active agent directory's `models.json`, or install the Pi extension globally in that agent directory. Project Pi extensions and project-level `models.json` files cannot add providers to PI WEB's shared baseline. After updating PI WEB—or after installing, removing, or updating a global Pi extension that registers providers—manually restart `pi-web-sessiond.service` (`systemctl --user restart pi-web-sessiond`). Restarting only the web/API service and running `/reload` do not rebuild the baseline.
 
+### MCP server sign-in and sign-out
+
+Select a nonarchived session, then choose **MCP login** or **MCP logout** from **Actions**. Each action asks you to select an eligible server, even when only one is available. MCP actions are separate from model-provider authentication; the provider dialogs have no MCP footer.
+
+Alternatively, open **Settings → MCP** to see enabled OAuth-eligible servers for the selected session on the settings machine. Each server has **Login** and **Logout** controls that target it directly, without another server picker. Disabled servers, servers using header-based authentication, and stdio servers are not listed as OAuth authentication candidates.
+
+Both entry points use the same MCP dialog flow, showing the chosen server and Pi’s progress and outcome without switching to Chat. They require an idle session in a trusted workspace with Pi’s built-in MCP command enabled. Finish the current MCP authentication operation before starting another on the same machine.
+
+Pi can reuse valid or refreshable credentials without asking you to authorize again. No browser prompt may mean credentials were reused; it is not proof of success. Read Pi’s messages for the outcome: **Operation finished** means the command ended, not that login succeeded. There is no force-reauthorization or switch-account control.
+
+If Pi provides an authorization link, open it and complete authentication in your browser. If the callback cannot reach the runtime—for example, with a remote or container deployment—paste the full redirected URL into the dialog when prompted.
+
+**Logout** removes the server’s local Pi credentials and disconnects its authenticated connection. Other sessions using the same saved credentials are also affected. It does not disable the server configuration or revoke access at the provider. To revoke access, use the provider’s account settings.
+
+**Cancel** requests that pending UI or future prompts stop. It may not immediately stop browser approval, token exchange, or reconnection already in progress; credentials may already have been saved if you cancel after approval.
+
+Pi owns OAuth tokens and server reconnection, storing MCP credentials in the active profile’s `mcp-auth.json`, separate from model-provider authentication. Ordinary `/mcp` commands entered in Chat still use Pi’s inline extension UI.
+
+After updating PI WEB, manually restart the session daemon to activate this flow. A browser reload or web/API restart is insufficient. For the systemd user service, run `systemctl --user restart pi-web-sessiond` from outside its hosted sessions; restarting interrupts active sessions and terminals.
+
 ### Background model catalog refresh
 
 PI WEB refreshes provider model catalogs automatically in the background and after login or logout. Reopen the model selector to see new models. Failed refreshes keep the last successful catalog and report problems in daemon logs. A refresh can briefly delay session startup; the activity line reports when model lists are refreshing.
