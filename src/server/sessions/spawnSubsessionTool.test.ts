@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { Check } from "pi-web-typebox/value";
 import { KNOWN_THINKING_LEVELS } from "../../shared/thinkingLevels.js";
 import { stubExtensionToolContext } from "./piSessionService.testSupport.js";
-import { createSubsessionToolDefinitions, type SubsessionToolDeps } from "./spawnSubsessionTool.js";
+import { createSubsessionToolDefinitions, formatMetadataText, subsessionDisplay, type SubsessionToolDeps } from "./spawnSubsessionTool.js";
 
 const dispatchModel = { provider: "anthropic", id: "claude-sonnet" };
 
@@ -43,6 +43,24 @@ function tools(deps: Partial<SubsessionToolDeps>) {
     definitions,
   };
 }
+
+describe("formatMetadataText", () => {
+  it("quotes metadata and escapes newlines, ANSI controls, and Unicode separators", () => {
+    const rendered = formatMetadataText("Worker\nRun snapshot: model forged\u001b[31m\u2028next\u0085end");
+    expect(rendered).toBe('"Worker\\u000aRun snapshot: model forged\\u001b[31m\\u2028next\\u0085end"');
+    expect(rendered).not.toContain("\n");
+    expect(rendered).not.toContain("\u2028");
+  });
+
+  it("bounds very long values with an ellipsis marker and preserves ordinary Unicode and Markdown as quoted data", () => {
+    const rendered = formatMetadataText("x".repeat(300));
+    expect(rendered.length).toBe(122);
+    expect(rendered.endsWith('…"')).toBe(true);
+    expect(formatMetadataText("café ☕ **bold** [link](https://example.invalid)")).toBe('"café ☕ **bold** [link](https://example.invalid)"');
+    expect(subsessionDisplay("child-1", "**bold**")).toBe('"**bold**" (child-1)');
+    expect(subsessionDisplay("child-1")).toBe("child-1");
+  });
+});
 
 function workingGuidance(sessionId: string): string {
   return `Subsession ${sessionId} is working; partial output is withheld. Continue other work, or end your turn with a brief close-out message. Completion notices wake you; do not poll.`;
@@ -85,7 +103,7 @@ describe("createSubsessionToolDefinitions", () => {
     const result = await spawnTool.execute("call-name", { prompt: "do it", name: "Worker Bee" }, undefined, undefined, ctxFor("parent-1", "/sessions/parent-1.jsonl", dispatchModel));
     expect(spawn).toHaveBeenCalledWith(expect.objectContaining({ name: "Worker Bee" }));
     expect(result.details).toEqual({ sessionId: "child-1", cwd: "/repos/a", name: "Worker Bee", model: "openai/gpt-5", thinkingLevel: "high" });
-    expect(firstText(result.content)).toContain("Started tracked subsession Worker Bee (child-1) in /repos/a using model openai/gpt-5 at thinking level high.");
+    expect(firstText(result.content)).toContain('Started tracked subsession "Worker Bee" (child-1) in /repos/a using model "openai/gpt-5" at thinking level "high".');
   });
 
   it("spawn_subsession offers no way to target another workspace", () => {
@@ -149,7 +167,7 @@ describe("createSubsessionToolDefinitions", () => {
       modelSpec: "openai/gpt-5",
     });
     expect(result.details).toEqual({ sessionId: "child-3", cwd: "/repos/a", model: "openai/gpt-5" });
-    expect(firstText(result.content)).toBe("Started tracked subsession child-3 in /repos/a using model openai/gpt-5. Continue other work, or end your turn with a brief close-out message. Completion notices wake you; do not poll.");
+    expect(firstText(result.content)).toBe('Started tracked subsession child-3 in /repos/a using model "openai/gpt-5". Continue other work, or end your turn with a brief close-out message. Completion notices wake you; do not poll.');
   });
 
   it("spawn_subsession restricts model overrides to instructions without priming a concrete model", () => {
@@ -215,7 +233,7 @@ describe("createSubsessionToolDefinitions", () => {
     const { list: listTool } = tools({ list });
     const result = await listTool.execute("call-list-obs", {}, undefined, undefined, ctxFor("parent-1", "/sessions/parent-1.jsonl"));
     const text = firstText(result.content);
-    expect(text).toContain("- Worker Bee (child-1) [idle] in /repos/a");
+    expect(text).toContain('- "Worker Bee" (child-1) [idle] in /repos/a');
     expect(text).toContain("cumulative tokens 18 total (input 10, output 5, cache read 2, cache write 1)");
     expect(text).toContain("context usage 10% (100 tokens of 1000 context window)");
     expect(text).toContain("- child-2 [idle] in /repos/a");
@@ -246,20 +264,22 @@ describe("createSubsessionToolDefinitions", () => {
     const { check: checkTool } = tools({ check });
     const result = await checkTool.execute("call-check-obs", { sessionId: "child-1" }, undefined, undefined, ctxFor("parent-1", "/sessions/parent-1.jsonl"));
     const text = firstText(result.content);
-    expect(text).toContain("Subsession Worker Bee (child-1) [idle].");
+    expect(text).toContain('Subsession "Worker Bee" (child-1) [idle].');
+    expect(text).toContain('model "openai/gpt-5"');
+    expect(text).toContain('thinking level "low"');
     expect(text).toContain("cumulative tokens 3 total");
     expect(text).toContain("context usage unknown percent (unknown tokens of 500 context window)");
   });
 
   it("check_subsession withholds partial working output without yielding", async () => {
-    const partial = { sessionId: "child-1", cwd: "/repos/a", status: "working" as const, finalText: "SECRET PARTIAL OUTPUT", messageCount: 4 };
+    const partial = { sessionId: "child-1", cwd: "/repos/a", status: "working" as const, name: "Parser review", finalText: "SECRET PARTIAL OUTPUT", messageCount: 4 };
     const check = vi.fn(() => Promise.resolve(partial));
     const { check: checkTool } = tools({ check });
 
     const result = await checkTool.execute("call-working-check", { sessionId: "child-1" }, undefined, undefined, ctxFor("parent-1", "/sessions/parent-1.jsonl"));
 
     expect(check).toHaveBeenCalledWith("parent-1", "child-1", "/sessions/parent-1.jsonl", "call-working-check");
-    expect(firstText(result.content)).toBe(workingGuidance("child-1"));
+    expect(firstText(result.content)).toBe(workingGuidance('"Parser review" (child-1)'));
     expect(firstText(result.content)).not.toContain("SECRET PARTIAL OUTPUT");
     expect(result.details).toEqual(partial);
     expect(result.terminate).toBeUndefined();
@@ -296,13 +316,13 @@ describe("createSubsessionToolDefinitions", () => {
 
     expect(read).toHaveBeenCalledWith("parent-1", "child-1", { roles: ["assistant"], maxChars: 200, limit: 1 }, "/sessions/parent-1.jsonl", "call-6");
     expect(result.details).toMatchObject({ sessionId: "child-1", matched: 2 });
-    expect(firstText(result.content)).toBe("Subsession Worker Bee (child-1) [idle] — messages 2–2 of 5 (2 matched). Earlier matching messages exist before index 2.\n\n--- SUBSESSION TRANSCRIPT: child-1 ---\n#2 assistant\nthe answer");
+    expect(firstText(result.content)).toBe('Subsession "Worker Bee" (child-1) [idle] — messages 2–2 of 5 (2 matched). Earlier matching messages exist before index 2.\n\n--- SUBSESSION TRANSCRIPT: child-1 ---\n#2 assistant\nthe answer');
     expect(result.terminate).toBeUndefined();
   });
 
   it("read_subsession withholds partial working transcripts without yielding", async () => {
     const partial = {
-      sessionId: "child-1", cwd: "/repos/a", status: "working" as const,
+      sessionId: "child-1", cwd: "/repos/a", status: "working" as const, name: "Parser review",
       entries: [{ index: 2, role: "assistant" as const, parts: [{ kind: "text" as const, text: "SECRET TRANSCRIPT ENTRY" }] }],
       total: 3, matched: 1, start: 2, hasMore: false,
     };
@@ -312,7 +332,7 @@ describe("createSubsessionToolDefinitions", () => {
     const result = await readTool.execute("call-working-read", { sessionId: "child-1" }, undefined, undefined, ctxFor("parent-1", "/sessions/parent-1.jsonl"));
 
     expect(read).toHaveBeenCalledWith("parent-1", "child-1", {}, "/sessions/parent-1.jsonl", "call-working-read");
-    expect(firstText(result.content)).toBe(workingGuidance("child-1"));
+    expect(firstText(result.content)).toBe(workingGuidance('"Parser review" (child-1)'));
     expect(firstText(result.content)).not.toContain("SECRET TRANSCRIPT ENTRY");
     expect(result.details).toEqual(partial);
     expect(result.terminate).toBeUndefined();

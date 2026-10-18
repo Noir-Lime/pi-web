@@ -125,7 +125,7 @@ export interface SubsessionToolDeps {
 
 const SpawnSubsessionParams = Type.Object({
   name: Type.Optional(Type.String({
-    description: "Optional name for the child session, shown as `name (id)` in spawn/list/check/read results and completion notices. Must be trimmed, non-empty, at most 60 characters, and contain no control characters (the ordinary session-naming rules). Duplicate names are allowed; the id remains the identity.",
+    description: "Optional name for the child session, shown as a quoted name followed by (id) in spawn/list/check/read results and completion notices. Must be trimmed, non-empty, at most 60 characters, and contain no control characters (the ordinary session-naming rules). Duplicate names are allowed; the id remains the identity.",
   })),
   thinkingLevel: Type.Optional(Type.Enum(KNOWN_THINKING_LEVELS, {
     description: "Thinking level override for the child session. Set this field only when instructed to use a specific thinking level or to choose an appropriate one. Otherwise omit it to inherit this session's thinking level. An unknown value is rejected; valid levels are clamped to the selected model's capabilities.",
@@ -185,16 +185,46 @@ const ReadSubsessionParams = Type.Object({
   })),
 });
 
-/** `name (id)` when a name is present, plain id otherwise. */
+/** Maximum rendered characters (excluding quotes) for one metadata value. */
+const METADATA_RENDER_LIMIT = 120;
+
+/**
+ * The one bounded, escaped formatter for identity metadata in model-facing
+ * text. Values are data, never raw notice text: quotes/backslashes are
+ * escaped, all control characters (C0, DEL, C1) and Unicode line/paragraph
+ * separators become `\uXXXX` literals, and the rendered value is bounded.
+ * Ordinary Unicode is preserved. Raw stored values are unchanged.
+ */
+export function formatMetadataText(value: string): string {
+  let escaped = "";
+  for (const ch of value) {
+    const cp = ch.codePointAt(0) ?? 0;
+    if (ch === "\\") escaped += "\\\\";
+    else if (ch === '"') escaped += '\\"';
+    else if (cp < 0x20 || (cp >= 0x7f && cp <= 0x9f) || cp === 0x2028 || cp === 0x2029) escaped += `\\u${cp.toString(16).padStart(4, "0")}`;
+    else escaped += ch;
+  }
+  // Bound by code points so a surrogate pair is never split.
+  let prefix = "";
+  let seen = 0;
+  for (const ch of escaped) {
+    seen += 1;
+    if (seen < METADATA_RENDER_LIMIT) prefix += ch;
+  }
+  const bounded = seen > METADATA_RENDER_LIMIT ? `${prefix}…` : escaped;
+  return `"${bounded}"`;
+}
+
+/** `"name" (id)` when a name is present, plain id otherwise. The name is quoted data. */
 export function subsessionDisplay(sessionId: string, name?: string): string {
-  return name === undefined || name === "" ? sessionId : `${name} (${sessionId})`;
+  return name === undefined || name === "" ? sessionId : `${formatMetadataText(name)} (${sessionId})`;
 }
 
 /** Model-facing one-line identity/usage label; cumulative tokens and context occupancy stay distinct. */
 export function observationLine(observation: SubsessionObservation): string {
   const parts: string[] = [];
-  if (observation.model !== undefined) parts.push(`model ${observation.model}`);
-  if (observation.thinkingLevel !== undefined) parts.push(`thinking level ${observation.thinkingLevel}`);
+  if (observation.model !== undefined) parts.push(`model ${formatMetadataText(observation.model)}`);
+  if (observation.thinkingLevel !== undefined) parts.push(`thinking level ${formatMetadataText(observation.thinkingLevel)}`);
   if (observation.tokens !== undefined) {
     const t = observation.tokens;
     parts.push(`cumulative tokens ${String(t.total)} total (input ${String(t.input)}, output ${String(t.output)}, cache read ${String(t.cacheRead)}, cache write ${String(t.cacheWrite)})`);
@@ -214,8 +244,8 @@ function statusLine(summary: SubsessionSummary): string {
   return `- ${subsessionDisplay(summary.sessionId, summary.name)} [${summary.status}] in ${summary.cwd}${observed === "" ? "" : ` — ${observed}`}`;
 }
 
-function workingInspectionGuidance(sessionId: string): string {
-  return `Subsession ${sessionId} is working; partial output is withheld. Continue other work, or end your turn with a brief close-out message. Completion notices wake you; do not poll.`;
+function workingInspectionGuidance(sessionId: string, name?: string): string {
+  return `Subsession ${subsessionDisplay(sessionId, name)} is working; partial output is withheld. Continue other work, or end your turn with a brief close-out message. Completion notices wake you; do not poll.`;
 }
 
 function renderEntry(entry: TranscriptEntry): string {
@@ -297,8 +327,8 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
         ...(params.model === undefined ? {} : { modelSpec: params.model }),
         ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
       });
-      const modelNote = result.model === undefined ? "" : ` using model ${result.model}`;
-      const thinkingNote = result.thinkingLevel === undefined ? "" : ` at thinking level ${result.thinkingLevel}`;
+      const modelNote = result.model === undefined ? "" : ` using model ${formatMetadataText(result.model)}`;
+      const thinkingNote = result.thinkingLevel === undefined ? "" : ` at thinking level ${formatMetadataText(result.thinkingLevel)}`;
       return {
         content: [{ type: "text", text: `Started tracked subsession ${subsessionDisplay(result.sessionId, result.name)} in ${result.cwd}${modelNote}${thinkingNote}. Continue other work, or end your turn with a brief close-out message. Completion notices wake you; do not poll.` }],
         details: result,
@@ -337,7 +367,7 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
       const observed = observationLine(result);
       const observedText = observed === "" ? "" : `${observed}\n\n`;
       const text = result.status === "working"
-        ? `${workingInspectionGuidance(result.sessionId)}\n\n${observedText}`.trimEnd()
+        ? `${workingInspectionGuidance(result.sessionId, result.name)}\n\n${observedText}`.trimEnd()
         : `Subsession ${subsessionDisplay(result.sessionId, result.name)} [${result.status}].\n\n${observedText}${result.errorDetail === undefined ? "" : `Error: ${result.errorDetail}\n\n`}--- SUBSESSION OUTPUT: ${result.sessionId} ---\n${body}`;
       return {
         content: [{ type: "text", text }],
@@ -358,7 +388,7 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
       const { sessionId, ...query } = params;
       const result = await deps.read(parentSessionId, sessionId, query, parentSessionFile, _toolCallId);
       const text = result.status === "working"
-        ? workingInspectionGuidance(result.sessionId)
+        ? workingInspectionGuidance(result.sessionId, result.name)
         : renderTranscript(result);
       return {
         content: [{ type: "text", text }],
