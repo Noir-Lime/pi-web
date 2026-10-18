@@ -7,11 +7,37 @@ import type { SubsessionCompletion } from "./subsessionCompletionInbox.js";
 /** Lifecycle phase of a tracked subsession as seen by its parent. */
 export type SubsessionStatus = "working" | "idle" | "error" | "unknown";
 
+/** Cumulative session token accounting, as in SessionStatus.tokens. Not context occupancy. */
+export interface SubsessionTokens { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }
+
+/** Current context occupancy, as in SessionStatus.contextUsage. Not cumulative usage. */
+export interface SubsessionContextUsage { tokens: number | null; contextWindow: number; percent: number | null }
+
+/**
+ * Optional runtime identity/usage snapshot for one child. Every field is
+ * absent when unknown (for example a persisted child that is not loaded);
+ * absent means unknown, never zero.
+ */
+export interface SubsessionObservation {
+  /** Configured/resolved model as `provider/id`; not a response-model claim. */
+  model?: string;
+  thinkingLevel?: string;
+  /** Cumulative session usage. */
+  tokens?: SubsessionTokens;
+  /** Context occupancy at observation time. */
+  contextUsage?: SubsessionContextUsage;
+  observedAt?: string;
+}
+
 export interface SpawnSubsessionResult {
   sessionId: string;
   cwd: string;
+  /** Explicit spawn name, when one was given. */
+  name?: string;
   /** Model the child session runs with, as `provider/id`; absent when unknown. */
   model?: string;
+  /** Actual thinking level after clamping to the child model's capabilities. */
+  thinkingLevel?: string;
 }
 
 export type SpawnSubsessionModel = NonNullable<ExtensionContext["model"]>;
@@ -28,6 +54,8 @@ export interface SpawnSubsessionInvocation {
   /** Session file of the parent, recorded in the child's `parentSession` header. */
   parentSessionFile: string | undefined;
   prompt: string;
+  /** Optional explicit session name; validated with the ordinary session-naming rules. */
+  name?: string;
   /**
    * Requested target workspace. The tool never sets it; other callers may, and
    * anything other than {@link spawningCwd} is refused rather than retargeted.
@@ -41,17 +69,19 @@ export interface SpawnSubsessionInvocation {
   thinkingLevel?: SpawnSubsessionThinkingLevel;
 }
 
-export interface SubsessionSummary {
+export interface SubsessionSummary extends SubsessionObservation {
   sessionId: string;
   cwd: string;
   status: SubsessionStatus;
+  name?: string;
 }
 
 /** Quick glance at a subsession: status plus its most recent assistant output. */
-export interface SubsessionCheckResult {
+export interface SubsessionCheckResult extends SubsessionObservation {
   sessionId: string;
   cwd: string;
   status: SubsessionStatus;
+  name?: string;
   finalText: string;
   messageCount: number;
   errorDetail?: string;
@@ -67,6 +97,7 @@ export interface SubsessionReadResult extends TranscriptView {
   sessionId: string;
   cwd: string;
   status: SubsessionStatus;
+  name?: string;
   errorDetail?: string;
 }
 
@@ -93,6 +124,9 @@ export interface SubsessionToolDeps {
 }
 
 const SpawnSubsessionParams = Type.Object({
+  name: Type.Optional(Type.String({
+    description: "Optional name for the child session, shown as `name (id)` in spawn/list/check/read results and completion notices. Must be trimmed, non-empty, at most 60 characters, and contain no control characters (the ordinary session-naming rules). Duplicate names are allowed; the id remains the identity.",
+  })),
   thinkingLevel: Type.Optional(Type.Enum(KNOWN_THINKING_LEVELS, {
     description: "Thinking level override for the child session. Set this field only when instructed to use a specific thinking level or to choose an appropriate one. Otherwise omit it to inherit this session's thinking level. An unknown value is rejected; valid levels are clamped to the selected model's capabilities.",
   })),
@@ -151,8 +185,33 @@ const ReadSubsessionParams = Type.Object({
   })),
 });
 
+/** `name (id)` when a name is present, plain id otherwise. */
+export function subsessionDisplay(sessionId: string, name?: string): string {
+  return name === undefined || name === "" ? sessionId : `${name} (${sessionId})`;
+}
+
+/** Model-facing one-line identity/usage label; cumulative tokens and context occupancy stay distinct. */
+export function observationLine(observation: SubsessionObservation): string {
+  const parts: string[] = [];
+  if (observation.model !== undefined) parts.push(`model ${observation.model}`);
+  if (observation.thinkingLevel !== undefined) parts.push(`thinking level ${observation.thinkingLevel}`);
+  if (observation.tokens !== undefined) {
+    const t = observation.tokens;
+    parts.push(`cumulative tokens ${String(t.total)} total (input ${String(t.input)}, output ${String(t.output)}, cache read ${String(t.cacheRead)}, cache write ${String(t.cacheWrite)})`);
+  }
+  if (observation.contextUsage !== undefined) {
+    const c = observation.contextUsage;
+    const percent = c.percent === null ? "unknown percent" : `${String(c.percent)}%`;
+    const tokens = c.tokens === null ? "unknown tokens" : `${String(c.tokens)} tokens`;
+    parts.push(`context usage ${percent} (${tokens} of ${String(c.contextWindow)} context window)`);
+  }
+  if (observation.observedAt !== undefined) parts.push(`observed at ${observation.observedAt}`);
+  return parts.join("; ");
+}
+
 function statusLine(summary: SubsessionSummary): string {
-  return `- ${summary.sessionId} [${summary.status}] in ${summary.cwd}`;
+  const observed = observationLine(summary);
+  return `- ${subsessionDisplay(summary.sessionId, summary.name)} [${summary.status}] in ${summary.cwd}${observed === "" ? "" : ` — ${observed}`}`;
 }
 
 function workingInspectionGuidance(sessionId: string): string {
@@ -204,7 +263,7 @@ function renderTranscript(result: SubsessionReadResult): string {
       ? "(no messages matched the filters)"
       : `(no messages before index ${String(result.start)}; all ${String(result.matched)} matches have later indexes)`);
   const error = result.errorDetail === undefined ? "" : `Error: ${result.errorDetail}\n\n`;
-  return `Subsession ${result.sessionId} [${result.status}] — ${range}.${more}\n\n${error}--- SUBSESSION TRANSCRIPT: ${result.sessionId} ---\n${body}`;
+  return `Subsession ${subsessionDisplay(result.sessionId, result.name)} [${result.status}] — ${range}.${more}\n\n${error}--- SUBSESSION TRANSCRIPT: ${result.sessionId} ---\n${body}`;
 }
 
 /**
@@ -233,13 +292,15 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
         parentSessionId,
         parentSessionFile,
         prompt: params.prompt,
+        ...(params.name === undefined ? {} : { name: params.name }),
         ...(ctx.model === undefined ? {} : { model: ctx.model }),
         ...(params.model === undefined ? {} : { modelSpec: params.model }),
         ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
       });
       const modelNote = result.model === undefined ? "" : ` using model ${result.model}`;
+      const thinkingNote = result.thinkingLevel === undefined ? "" : ` at thinking level ${result.thinkingLevel}`;
       return {
-        content: [{ type: "text", text: `Started tracked subsession ${result.sessionId} in ${result.cwd}${modelNote}. Continue other work, or end your turn with a brief close-out message. Completion notices wake you; do not poll.` }],
+        content: [{ type: "text", text: `Started tracked subsession ${subsessionDisplay(result.sessionId, result.name)} in ${result.cwd}${modelNote}${thinkingNote}. Continue other work, or end your turn with a brief close-out message. Completion notices wake you; do not poll.` }],
         details: result,
       };
     },
@@ -273,9 +334,11 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
       const parentSessionFile = ctx.sessionManager.getSessionFile() ?? undefined;
       const result = await deps.check(parentSessionId, params.sessionId, parentSessionFile, _toolCallId);
       const body = result.finalText === "" ? "(no output yet)" : result.finalText;
+      const observed = observationLine(result);
+      const observedText = observed === "" ? "" : `${observed}\n\n`;
       const text = result.status === "working"
-        ? workingInspectionGuidance(result.sessionId)
-        : `Subsession ${result.sessionId} [${result.status}].\n\n${result.errorDetail === undefined ? "" : `Error: ${result.errorDetail}\n\n`}--- SUBSESSION OUTPUT: ${result.sessionId} ---\n${body}`;
+        ? `${workingInspectionGuidance(result.sessionId)}\n\n${observedText}`.trimEnd()
+        : `Subsession ${subsessionDisplay(result.sessionId, result.name)} [${result.status}].\n\n${observedText}${result.errorDetail === undefined ? "" : `Error: ${result.errorDetail}\n\n`}--- SUBSESSION OUTPUT: ${result.sessionId} ---\n${body}`;
       return {
         content: [{ type: "text", text }],
         details: result,

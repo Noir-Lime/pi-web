@@ -78,6 +78,16 @@ describe("createSubsessionToolDefinitions", () => {
     expect(firstText(result.content)).toContain("Started tracked subsession child-1");
   });
 
+  it("spawn_subsession forwards an explicit name and renders name, model, and thinking level", async () => {
+    const spawn = vi.fn(() => Promise.resolve({ sessionId: "child-1", cwd: "/repos/a", name: "Worker Bee", model: "openai/gpt-5", thinkingLevel: "high" }));
+    const { spawn: spawnTool } = tools({ spawn });
+    expect(Check(spawnTool.parameters, { prompt: "do it", name: "Worker Bee" })).toBe(true);
+    const result = await spawnTool.execute("call-name", { prompt: "do it", name: "Worker Bee" }, undefined, undefined, ctxFor("parent-1", "/sessions/parent-1.jsonl", dispatchModel));
+    expect(spawn).toHaveBeenCalledWith(expect.objectContaining({ name: "Worker Bee" }));
+    expect(result.details).toEqual({ sessionId: "child-1", cwd: "/repos/a", name: "Worker Bee", model: "openai/gpt-5", thinkingLevel: "high" });
+    expect(firstText(result.content)).toContain("Started tracked subsession Worker Bee (child-1) in /repos/a using model openai/gpt-5 at thinking level high.");
+  });
+
   it("spawn_subsession offers no way to target another workspace", () => {
     const { spawn: spawnTool } = tools({});
 
@@ -197,6 +207,21 @@ describe("createSubsessionToolDefinitions", () => {
     expect(result.terminate).toBeUndefined();
   });
 
+  it("list_subsessions renders names and labels cumulative tokens separately from context usage", async () => {
+    const list = vi.fn(() => Promise.resolve([
+      { sessionId: "child-1", cwd: "/repos/a", status: "idle" as const, name: "Worker Bee", model: "openai/gpt-5", thinkingLevel: "high", tokens: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, total: 18 }, contextUsage: { tokens: 100, contextWindow: 1000, percent: 10 }, observedAt: "2026-01-01T00:02:00.000Z" },
+      { sessionId: "child-2", cwd: "/repos/a", status: "idle" as const },
+    ]));
+    const { list: listTool } = tools({ list });
+    const result = await listTool.execute("call-list-obs", {}, undefined, undefined, ctxFor("parent-1", "/sessions/parent-1.jsonl"));
+    const text = firstText(result.content);
+    expect(text).toContain("- Worker Bee (child-1) [idle] in /repos/a");
+    expect(text).toContain("cumulative tokens 18 total (input 10, output 5, cache read 2, cache write 1)");
+    expect(text).toContain("context usage 10% (100 tokens of 1000 context window)");
+    expect(text).toContain("- child-2 [idle] in /repos/a");
+    expect(text).not.toContain("Worker Bee (child-2)");
+  });
+
   it("list_subsessions reports an empty state", async () => {
     const { list: listTool } = tools({ list: vi.fn(() => Promise.resolve([])) });
     const result = await listTool.execute("call-3", {}, undefined, undefined, ctxFor("parent-1", undefined));
@@ -214,6 +239,16 @@ describe("createSubsessionToolDefinitions", () => {
     expect(result.details).toMatchObject({ sessionId: "child-1", status: "idle", finalText: "all done" });
     expect(firstText(result.content)).toBe("Subsession child-1 [idle].\n\n--- SUBSESSION OUTPUT: child-1 ---\nall done");
     expect(result.terminate).toBeUndefined();
+  });
+
+  it("check_subsession renders the name and observation labels", async () => {
+    const check = vi.fn(() => Promise.resolve({ sessionId: "child-1", cwd: "/repos/a", status: "idle" as const, name: "Worker Bee", model: "openai/gpt-5", thinkingLevel: "low", tokens: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, total: 3 }, contextUsage: { tokens: null, contextWindow: 500, percent: null }, finalText: "done", messageCount: 1 }));
+    const { check: checkTool } = tools({ check });
+    const result = await checkTool.execute("call-check-obs", { sessionId: "child-1" }, undefined, undefined, ctxFor("parent-1", "/sessions/parent-1.jsonl"));
+    const text = firstText(result.content);
+    expect(text).toContain("Subsession Worker Bee (child-1) [idle].");
+    expect(text).toContain("cumulative tokens 3 total");
+    expect(text).toContain("context usage unknown percent (unknown tokens of 500 context window)");
   });
 
   it("check_subsession withholds partial working output without yielding", async () => {
@@ -251,7 +286,7 @@ describe("createSubsessionToolDefinitions", () => {
 
   it("read_subsession forwards filter params and renders the transcript", async () => {
     const read = vi.fn(() => Promise.resolve({
-      sessionId: "child-1", cwd: "/repos/a", status: "idle" as const,
+      sessionId: "child-1", cwd: "/repos/a", status: "idle" as const, name: "Worker Bee",
       entries: [{ index: 2, role: "assistant" as const, parts: [{ kind: "text" as const, text: "the answer" }] }],
       total: 5, matched: 2, start: 2, hasMore: true,
     }));
@@ -261,7 +296,7 @@ describe("createSubsessionToolDefinitions", () => {
 
     expect(read).toHaveBeenCalledWith("parent-1", "child-1", { roles: ["assistant"], maxChars: 200, limit: 1 }, "/sessions/parent-1.jsonl", "call-6");
     expect(result.details).toMatchObject({ sessionId: "child-1", matched: 2 });
-    expect(firstText(result.content)).toBe("Subsession child-1 [idle] — messages 2–2 of 5 (2 matched). Earlier matching messages exist before index 2.\n\n--- SUBSESSION TRANSCRIPT: child-1 ---\n#2 assistant\nthe answer");
+    expect(firstText(result.content)).toBe("Subsession Worker Bee (child-1) [idle] — messages 2–2 of 5 (2 matched). Earlier matching messages exist before index 2.\n\n--- SUBSESSION TRANSCRIPT: child-1 ---\n#2 assistant\nthe answer");
     expect(result.terminate).toBeUndefined();
   });
 
