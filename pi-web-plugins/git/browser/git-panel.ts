@@ -5,6 +5,7 @@ import type {
   PluginContributions,
   PluginRuntimeContext,
   SvgTemplateTag,
+  StylesheetIntegrationCapabilityV1,
   Workspace,
   WorkspacePanelContext,
   WorkspacePanelContribution,
@@ -74,14 +75,14 @@ export function createGitBrowserContributions(
   runtimePluginId: string,
   html: HtmlTemplateTag,
   svg: SvgTemplateTag,
-  uiCssText: () => string,
+  stylesheetIntegration: () => StylesheetIntegrationCapabilityV1 | undefined,
 ): PluginContributions {
   const panelId = `${runtimePluginId}:${GIT_PANEL_LOCAL_ID}`;
   const controller = new GitUiController(sourcePluginId, createGitDiffRoute(panelId));
   defineGitPanelActivityElement();
   return {
     actions: createGitActions(panelId, controller),
-    workspacePanels: [createGitPanel(html, svg, controller, uiCssText)],
+    workspacePanels: [createGitPanel(html, svg, controller, stylesheetIntegration)],
   };
 }
 
@@ -391,7 +392,7 @@ function createGitPanel(
   html: HtmlTemplateTag,
   svg: SvgTemplateTag,
   controller: GitUiController,
-  uiCssText: () => string,
+  stylesheetIntegration: () => StylesheetIntegrationCapabilityV1 | undefined,
 ): WorkspacePanelContribution {
   return {
     id: GIT_PANEL_LOCAL_ID,
@@ -409,7 +410,7 @@ function createGitPanel(
     order: 20,
     visible: (context) => controller.isOwnedWorkspace(context.workspace),
     onInvalidate: (context) => controller.invalidate(context),
-    render: (context) => renderGitPanel(html, controller, context, uiCssText()),
+    render: (context) => renderGitPanel(html, controller, context, stylesheetIntegration()),
   };
 }
 
@@ -420,14 +421,13 @@ function requestGitBackend(context: WorkspacePanelContext, operation: string, in
   return context.peer.request(operation, input);
 }
 
-function renderGitPanel(html: HtmlTemplateTag, controller: GitUiController, context: WorkspacePanelContext, uiCssText: string) {
+function renderGitPanel(html: HtmlTemplateTag, controller: GitUiController, context: WorkspacePanelContext, stylesheetIntegration: StylesheetIntegrationCapabilityV1 | undefined) {
   const state = controller.state(context);
   const viewState = controller.viewState(state);
   return html`
     <section class="git-panel">
-      <style data-ui-styles .textContent=${uiCssText}></style>
       <style data-git-styles .textContent=${gitPanelStyles}></style>
-      <pi-web-git-panel-activity .controller=${controller} .context=${context}></pi-web-git-panel-activity>
+      <pi-web-git-panel-activity .stylesheetIntegration=${stylesheetIntegration} .controller=${controller} .context=${context}></pi-web-git-panel-activity>
       <section class="ui-toolbar git-toolbar">
         <strong>Git</strong>
         ${state.stale ? html`<span class="git-stale">stale</span>` : null}
@@ -641,6 +641,23 @@ function defineGitPanelActivityElement(): void {
     private controllerValue: GitUiController | undefined;
     private contextValue: WorkspacePanelContext | undefined;
     private pollTimer: number | undefined;
+    private integration: StylesheetIntegrationCapabilityV1 | undefined;
+    private releaseStyles: (() => void) | undefined;
+
+    set stylesheetIntegration(value: StylesheetIntegrationCapabilityV1 | undefined) {
+      if (this.integration === value) return;
+      this.releaseStyles?.();
+      this.releaseStyles = undefined;
+      this.integration = value;
+      this.registerStyles();
+    }
+
+    private registerStyles(): void {
+      if (!this.isConnected || this.releaseStyles !== undefined) return;
+      const root = this.getRootNode();
+      // The activity element shares the host panel's root; it owns only this opt-in.
+      if (root instanceof ShadowRoot) this.releaseStyles = this.integration?.registerRoot(root, { sharedUi: true });
+    }
 
     set controller(value: GitUiController | undefined) {
       if (this.controllerValue === value) return;
@@ -655,11 +672,14 @@ function defineGitPanelActivityElement(): void {
     }
 
     connectedCallback(): void {
+      this.registerStyles();
       window.addEventListener("popstate", this.onPopState);
       this.restart();
     }
 
     disconnectedCallback(): void {
+      this.releaseStyles?.();
+      this.releaseStyles = undefined;
       window.removeEventListener("popstate", this.onPopState);
       if (this.controllerValue !== undefined && this.contextValue !== undefined) this.controllerValue.disconnect(this.contextValue);
       this.stopTimer();

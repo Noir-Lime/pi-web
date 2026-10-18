@@ -7,8 +7,8 @@ import { baseThemeStyles } from "./styles";
 
 /**
  * Native controls keep their own events, focus, disabled state, and form semantics.
- * Public button/select/toolbar/tab patterns also serve host UI styles v1:
- * preserve the contract documented in docs/plugins.md#host-provided-ui-styles.
+ * Button/select/toolbar/tab patterns also serve the experimental host-injected
+ * shared UI bundle documented in docs/plugins.md#host-provided-ui-styles.
  */
 export const uiButtonStyles = baseThemeStyles(uiButtonCss);
 

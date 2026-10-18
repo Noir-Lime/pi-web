@@ -1,27 +1,34 @@
-import type { PiWebPlugin, PluginCapability, UiStylesCapabilityV1 } from "@jmfederico/pi-web/plugin-api";
+import type { PiWebPlugin, PluginCapability, StylesheetIntegrationCapabilityV1 } from "@jmfederico/pi-web/plugin-api";
 import { createGitBrowserContributions } from "./git-panel.js";
 
-const uiStylesCapability: PluginCapability<UiStylesCapabilityV1, 1> = {
-  pluginId: "pi-web", id: "ui-styles", version: 1,
+const stylesheetIntegrationCapability: PluginCapability<StylesheetIntegrationCapabilityV1, 1> = {
+  pluginId: "pi-web", id: "stylesheet-integration", version: 1,
   parse: (value) => {
-    if (typeof value !== "object" || value === null || !("cssText" in value) || typeof value.cssText !== "string") {
-      throw new Error("PI WEB UI styles capability v1 requires cssText");
+    if (!isStylesheetIntegration(value)) {
+      throw new Error("Invalid PI WEB stylesheet integration capability v1");
     }
-    return { cssText: value.cssText };
+    return value;
   },
 };
+
+function isStylesheetIntegration(value: unknown): value is StylesheetIntegrationCapabilityV1 {
+  return typeof value === "object" && value !== null
+    && "registerRoot" in value && typeof value.registerRoot === "function"
+    && "subscribe" in value && typeof value.subscribe === "function"
+    && "createController" in value && typeof value.createController === "function";
+}
 
 const plugin = {
   apiVersion: 4,
   name: "Git",
-  requires: [uiStylesCapability],
+  requires: [stylesheetIntegrationCapability],
   activate: ({ pluginId, runtimePluginId, html, svg }) => {
-    let uiCssText = "";
+    let stylesheetIntegration: StylesheetIntegrationCapabilityV1 | undefined;
     return {
       start: ({ capabilities }) => {
-        uiCssText = capabilities.resolve(uiStylesCapability).cssText;
+        stylesheetIntegration = capabilities.resolve(stylesheetIntegrationCapability);
       },
-      contributions: createGitBrowserContributions(pluginId, runtimePluginId, html, svg, () => uiCssText),
+      contributions: createGitBrowserContributions(pluginId, runtimePluginId, html, svg, () => stylesheetIntegration),
     };
   },
 } satisfies PiWebPlugin;

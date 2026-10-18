@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import type { FileContentResponse, FileTreeResponse, WorkspaceFilesCapabilityV1, WorkspacePanelContext, WorkspacePanelNavigationV1, WriteWorkspaceFileResponse } from "@jmfederico/pi-web/plugin-api";
+import type { StylesheetIntegrationCapabilityV1, FileContentResponse, FileTreeResponse, WorkspaceFilesCapabilityV1, WorkspacePanelContext, WorkspacePanelNavigationV1, WriteWorkspaceFileResponse } from "@jmfederico/pi-web/plugin-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceFilesPanel, startDirectWorkspaceUpload, uploadBatchProgressValue, uploadBatchStatusLabel, workspaceUploadReviewDefaults, workspaceUploadReviewError } from "./FilesPanel";
 import { FilesRuntime, type WorkspaceUploadBatchState } from "./FilesRuntime";
@@ -22,11 +22,12 @@ describe("Files panel component boundary", () => {
     });
     const panel = await mountPanel(context);
     const roots = new Set<ShadowRoot>();
+    const registerRoot = vi.fn<StylesheetIntegrationCapabilityV1["registerRoot"]>((root) => {
+      roots.add(root);
+      return () => { roots.delete(root); };
+    });
     panel.stylesheetIntegration = {
-      registerRoot: (root) => {
-        roots.add(root);
-        return () => { roots.delete(root); };
-      },
+      registerRoot,
       createController: vi.fn(),
       subscribe: vi.fn(() => vi.fn()),
     };
@@ -34,22 +35,29 @@ describe("Files panel component boundary", () => {
     const viewer = requiredElement(panel.shadowRoot?.querySelector("pi-web-files-viewer"), "viewer");
     const code = requiredElement(viewer.shadowRoot?.querySelector("pi-web-files-code-viewer"), "raw code");
     expect(roots).toEqual(new Set([panel.shadowRoot, viewer.shadowRoot, code.shadowRoot]));
+    expect(registerRoot).toHaveBeenCalledWith(panel.shadowRoot, { sharedUi: true });
+    expect(registerRoot).toHaveBeenCalledWith(viewer.shadowRoot);
+    expect(registerRoot).toHaveBeenCalledWith(code.shadowRoot);
     panel.remove();
     expect(roots.size).toBe(0);
     document.body.append(panel);
     await vi.waitFor(() => { expect(roots.size).toBe(3); });
+    expect(registerRoot).toHaveBeenCalledTimes(6);
   });
 
-  it("adopts host styles as text without replacing file rows", async () => {
+  it("releases replaced stylesheet integration without replacing file rows", async () => {
     const context = createContext({ files: createFiles({ listFiles: () => Promise.resolve(treeResponse("", [{ name: "README.md", path: "README.md", type: "file" }])) }) });
     const panel = await mountPanel(context);
     await vi.waitFor(() => { expect(panel.shadowRoot?.querySelector(".ui-file-row")).not.toBeNull(); });
     const row = panel.shadowRoot?.querySelector(".ui-file-row");
-    const cssText = '.ui-file-row { color: red; } /* </style><span id="injected"></span> */';
-    panel.uiCssText = cssText;
+    const release = vi.fn();
+    const integration = { registerRoot: vi.fn(() => release), createController: vi.fn(), subscribe: vi.fn(() => vi.fn()) };
+    panel.stylesheetIntegration = integration;
+    panel.stylesheetIntegration = integration;
+    expect(integration.registerRoot).toHaveBeenCalledExactlyOnceWith(panel.shadowRoot, { sharedUi: true });
+    panel.stylesheetIntegration = undefined;
+    expect(release).toHaveBeenCalledOnce();
     await panel.updateComplete;
-    expect(panel.shadowRoot?.querySelector("style[data-ui-styles]")?.textContent).toBe(cssText);
-    expect(panel.shadowRoot?.querySelector("#injected")).toBeNull();
     expect(panel.shadowRoot?.querySelector(".ui-file-row")).toBe(row);
   });
 

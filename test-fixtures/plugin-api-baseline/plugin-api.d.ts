@@ -166,15 +166,6 @@ export interface ContentMarkdownRenderRequest {
     /** Authorize manual fence previews; false/omitted retains automatic defaults. Never overrides user Raw. */
     allowManualPreview?: boolean;
 }
-/**
- * Host-owned native button/select/toolbar/tab and compact file/tree-row styles. Request the capability
- * { pluginId: "pi-web", id: "ui-styles", version: 1, parse } during plugin start.
- * Apply cssText with a style element inside the panel's own shadow root.
- * Class, markup, and state contract: https://pi-web.dev/plugins#host-provided-ui-styles.
- */
-export interface UiStylesCapabilityV1 {
-    readonly cssText: string;
-}
 /** Host capability token: { pluginId: "pi-web", id: "content-rendering", version: 1, parse }. */
 export interface ContentRenderingCapability {
     /** Eligible choices in source plugin ID order, then local contribution ID order. */
@@ -193,14 +184,20 @@ export interface ContentRenderingCapability {
      */
     renderMarkdown(request: ContentMarkdownRenderRequest): TemplateResult;
 }
+/** Styling is experimental: shared classes, tokens and presentation may change between releases. */
+export interface StylesheetRootOptions {
+    /** Inject the host's shared controls and file/tree-row styles into this root. Defaults to false. */
+    readonly sharedUi?: boolean;
+}
 /**
  * Host capability token: { pluginId: "pi-web", id: "stylesheet-integration", version: 1, parse }.
  * Direct stylesheet rules reach only explicitly registered roots; custom properties can inherit further.
- * Internal host selectors/markup are not stable APIs. Existing shared UI primitives remain the base.
+ * Opt into shared UI styles per root; the host owns injection, ordering and cleanup.
+ * Styling, including shared classes and internal host markup, is experimental rather than a stable API.
  */
 export interface StylesheetIntegrationCapabilityV1 {
     /** Register a retained open or closed root. Release on disconnect; register again on reconnect. */
-    readonly registerRoot: (root: ShadowRoot) => () => void;
+    readonly registerRoot: (root: ShadowRoot, options?: StylesheetRootOptions) => () => void;
     /**
      * Subscribe to active stylesheet changes after adoption in all registered roots.
      * Includes removal, not initial subscription or root registration. Read initial values
@@ -211,7 +208,7 @@ export interface StylesheetIntegrationCapabilityV1 {
     /** Installs a Lit lifecycle controller; call once when constructing the component. */
     readonly createController: (host: ReactiveControllerHost & {
         readonly renderRoot?: HTMLElement | DocumentFragment;
-    }) => void;
+    }, options?: StylesheetRootOptions) => void;
 }
 /** A CSS file, normally new URL("./custom.css", import.meta.url).href. Inline CSS and runtime @import are unsupported. */
 export interface StylesheetContribution {

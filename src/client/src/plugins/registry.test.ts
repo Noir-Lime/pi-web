@@ -10,10 +10,8 @@ import type { PiWebPlugin, PluginActivationResult, PluginCapability, PluginRunti
 import { createPluginPeer } from "./pluginPeer";
 import { adaptPublicPlugin, publicPluginState } from "./publicContext";
 import type { PluginBackendRequestTarget } from "../api/pluginBackends";
-import type { PluginCapability as PublicPluginCapability, UiStylesCapabilityV1 } from "../../../plugin-api";
-import { uiButtonStyles, uiTabStyles, uiToolbarStyles } from "../components/ui/controlStyles";
-import { uiFileListStyles } from "../components/ui/fileListStyles";
-import { uiStylesCapability, uiStylesCapabilityToken } from "./uiStyles";
+import type { PluginCapability as PublicPluginCapability, StylesheetIntegrationCapabilityV1 } from "../../../plugin-api";
+import { stylesheetIntegrationCapability, stylesheetIntegrationCapabilityToken } from "./styles";
 
 it("resolves file-opening panels by availability, applicability, order and scoped context", async () => {
   let enabled = true;
@@ -140,30 +138,17 @@ describe("PluginRegistry v5 host services", () => {
   });
 });
 
-describe("PluginRegistry UI styles capability", () => {
-  // External plugins construct their own token using only the public structural API.
-  const request: PublicPluginCapability<UiStylesCapabilityV1> = {
-    pluginId: "pi-web", id: "ui-styles", version: 1,
-    parse: (value) => {
-      if (typeof value !== "object" || value === null || !("cssText" in value) || typeof value.cssText !== "string") {
-        throw new Error("Expected UI styles cssText");
-      }
-      return { cssText: value.cssText };
-    },
+describe("PluginRegistry stylesheet integration capability", () => {
+  const request: PublicPluginCapability<StylesheetIntegrationCapabilityV1> = {
+    pluginId: "pi-web", id: "stylesheet-integration", version: 1,
+    parse: stylesheetIntegrationCapabilityToken.parse,
   };
 
-  it("supplies host-owned shared styles to an external v1 requirement during start", async () => {
+  it("supplies host-managed styling through the public requirement during start", async () => {
     const registry = new PluginRegistry();
     const start = vi.fn((context: import("../../../plugin-api").PluginStartContext) => {
-      const styles = context.capabilities.resolve(request);
-      expect(styles.cssText).toBe(uiStylesCapability.cssText);
-      expect(styles.cssText).toBe([uiButtonStyles, uiToolbarStyles, uiTabStyles, uiFileListStyles].map((styles) => styles.cssText).join("\n"));
-      // Public class hooks are a versioned contract; appearance declarations may evolve freely.
-      for (const name of ["ui-button", "ui-button--compact", "ui-button--icon", "ui-button--primary", "ui-select", "ui-toolbar", "ui-toolbar--primary", "ui-toolbar-title", "ui-toolbar-group", "ui-toolbar-group--bounded", "ui-tabs", "ui-tabs--primary", "ui-tab", "ui-file-list", "ui-file-row", "ui-file-leading", "ui-file-label", "ui-file-meta"]) {
-        expect(styles.cssText).toMatch(new RegExp(`\\.${name}(?![\\w-])`));
-      }
-      expect(Object.isFrozen(uiStylesCapability)).toBe(true);
-      expect(() => context.capabilities.resolve({ ...request, version: 2 })).toThrow("did not declare required capability pi-web/ui-styles v2");
+      expect(context.capabilities.resolve(request)).toBe(stylesheetIntegrationCapability);
+      expect(() => context.capabilities.resolve({ ...request, version: 2 })).toThrow("did not declare required capability pi-web/stylesheet-integration v2");
     });
     try {
       await registry.register({ id: "external-styles", plugin: adaptPublicPlugin({
@@ -176,29 +161,28 @@ describe("PluginRegistry UI styles capability", () => {
     }
   });
 
-  it("rejects an external v2 requirement before start", async () => {
+  it("rejects an unavailable integration version before start", async () => {
     const registry = new PluginRegistry();
     const start = vi.fn();
     try {
       await expect(registry.register({ id: "external-styles", plugin: adaptPublicPlugin({
         apiVersion: 5, name: "External styles", requires: [{ ...request, version: 2 }],
         activate: () => ({ contributions: {}, start }),
-      }) })).rejects.toThrow("requires unavailable capability pi-web/ui-styles v2");
+      }) })).rejects.toThrow("requires unavailable capability pi-web/stylesheet-integration v2");
       expect(start).not.toHaveBeenCalled();
     } finally {
       await registry.dispose();
     }
   });
 
-  it("does not expose styles through the resolver without a declared requirement", async () => {
+  it("does not resolve styling without a declared requirement", async () => {
     const registry = new PluginRegistry();
     const start = vi.fn((context: import("../../../plugin-api").PluginStartContext) => {
-      expect(() => context.capabilities.resolve(request)).toThrow("did not declare required capability pi-web/ui-styles v1");
+      expect(() => context.capabilities.resolve(request)).toThrow("did not declare required capability pi-web/stylesheet-integration v1");
     });
     try {
       await registry.register({ id: "external-styles", plugin: adaptPublicPlugin({
-        apiVersion: 5, name: "External styles",
-        activate: () => ({ contributions: {}, start }),
+        apiVersion: 5, name: "External styles", activate: () => ({ contributions: {}, start }),
       }) });
       expect(start).toHaveBeenCalledOnce();
     } finally {
@@ -206,10 +190,10 @@ describe("PluginRegistry UI styles capability", () => {
     }
   });
 
-  it("validates the host token value", () => {
-    expect(uiStylesCapabilityToken.parse(uiStylesCapability)).toEqual(uiStylesCapability);
-    for (const value of [undefined, null, "css", {}, { cssText: 1 }]) {
-      expect(() => uiStylesCapabilityToken.parse(value)).toThrow("UI styles capability v1 is unavailable");
+  it("validates the host integration value", () => {
+    expect(stylesheetIntegrationCapabilityToken.parse(stylesheetIntegrationCapability)).toBe(stylesheetIntegrationCapability);
+    for (const value of [undefined, null, "css", {}, { registerRoot: 1 }]) {
+      expect(() => stylesheetIntegrationCapabilityToken.parse(value)).toThrow("Stylesheet integration capability v1 is unavailable");
     }
   });
 });

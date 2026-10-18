@@ -37,14 +37,13 @@ export class PiWebTasksPanel extends HTMLElement {
     this.releaseStyles?.();
     this.releaseStyles = undefined;
     this.integration = value;
-    if (this.isConnected) this.releaseStyles = value?.registerRoot(this.root);
+    if (this.isConnected) this.releaseStyles = value?.registerRoot(this.root, { sharedUi: true });
   }
 
   private contextValue: WorkspacePanelContext | undefined;
   private runningTaskId: string | undefined;
   private status: TaskStatus | undefined;
   private readonly root: ShadowRoot;
-  private readonly uiStyle = document.createElement("style");
   private readonly localStyle = document.createElement("style");
   private readonly onConfigChanged = () => {
     this.render();
@@ -53,19 +52,14 @@ export class PiWebTasksPanel extends HTMLElement {
   constructor() {
     super();
     this.root = this.attachShadow({ mode: "open" });
-    this.uiStyle.setAttribute("data-ui-styles", "");
     this.localStyle.textContent = taskStyles();
-    this.root.append(this.uiStyle, this.localStyle);
-  }
-
-  set uiCssText(value: string) {
-    this.uiStyle.textContent = value;
+    this.root.append(this.localStyle);
   }
 
   private setContent(markup: string): void {
     const template = document.createElement("template");
     template.innerHTML = markup;
-    this.root.replaceChildren(this.uiStyle, this.localStyle, template.content);
+    this.root.replaceChildren(this.localStyle, template.content);
   }
 
   set context(value: WorkspacePanelContext | undefined) {
@@ -81,7 +75,7 @@ export class PiWebTasksPanel extends HTMLElement {
   }
 
   connectedCallback(): void {
-    this.releaseStyles ??= this.integration?.registerRoot(this.root);
+    this.releaseStyles ??= this.integration?.registerRoot(this.root, { sharedUi: true });
     window.addEventListener(configChangedEvent, this.onConfigChanged);
     this.render();
   }

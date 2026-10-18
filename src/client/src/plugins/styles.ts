@@ -1,17 +1,25 @@
-import type { StylesheetIntegrationCapabilityV1 } from "../../../plugin-api";
+import type { StylesheetIntegrationCapabilityV1, StylesheetRootOptions } from "../../../plugin-api";
 import { createPluginStylesheetLoader } from "./styleLoader";
 import { PluginStyleRegistry, PluginStylesController, type ActivePluginStylesheet } from "./styleRegistry";
 import type { PluginCapability } from "../../../shared/pluginApiTypes";
+import { sharedUiStyles } from "./sharedUiStyles";
 
 // Shared by the application owner, host components and the public capability. No
 // network, DOM registration or stylesheet compilation occurs until explicitly used.
-export const pluginStyles = new PluginStyleRegistry((url, signal) => createPluginStylesheetLoader()(url, signal));
+export const pluginStyles = new PluginStyleRegistry(
+  (url, signal) => createPluginStylesheetLoader()(url, signal),
+  () => {
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(sharedUiStyles.cssText);
+    return sheet;
+  }
+);
 
 export const stylesheetIntegrationCapability: StylesheetIntegrationCapabilityV1 = Object.freeze({
-  registerRoot: (root: ShadowRoot) => pluginStyles.registerRoot(root),
+  registerRoot: (root: ShadowRoot, options?: StylesheetRootOptions) => pluginStyles.registerRoot(root, options),
   subscribe: (listener: () => void) => pluginStyles.subscribe(listener),
-  createController: (host: Parameters<StylesheetIntegrationCapabilityV1["createController"]>[0]) => {
-    new PluginStylesController(host, pluginStyles);
+  createController: (host: Parameters<StylesheetIntegrationCapabilityV1["createController"]>[0], options?: StylesheetRootOptions) => {
+    new PluginStylesController(host, pluginStyles, options);
   },
 });
 

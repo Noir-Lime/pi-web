@@ -1,4 +1,4 @@
-import type { StylesheetIntegrationCapabilityV1, ContentRenderingCapability, PluginCapability, PiWebPlugin, PluginActivationContext, PluginActivationResult, UiStylesCapabilityV1 } from "@jmfederico/pi-web/plugin-api";
+import type { StylesheetIntegrationCapabilityV1, ContentRenderingCapability, PluginCapability, PiWebPlugin, PluginActivationContext, PluginActivationResult } from "@jmfederico/pi-web/plugin-api";
 import { FilesCodeViewer } from "./FilesCodeViewer";
 import { WorkspaceFilesPanel } from "./FilesPanel";
 import { FilesRuntime } from "./FilesRuntime";
@@ -31,16 +31,6 @@ function isContentRenderingCapability(value: unknown): value is ContentRendering
     && "renderMarkdown" in value && typeof value.renderMarkdown === "function";
 }
 
-const uiStylesCapability: PluginCapability<UiStylesCapabilityV1, 1> = {
-  pluginId: "pi-web", id: "ui-styles", version: 1,
-  parse: (value) => {
-    if (typeof value !== "object" || value === null || !("cssText" in value) || typeof value.cssText !== "string") {
-      throw new Error("Files requires UI styles capability v1");
-    }
-    return { cssText: value.cssText };
-  },
-};
-
 const stylesheetIntegrationCapability: PluginCapability<StylesheetIntegrationCapabilityV1, 1> = {
   pluginId: "pi-web", id: "stylesheet-integration", version: 1,
   parse(value) {
@@ -59,7 +49,7 @@ function isStylesheetIntegration(value: unknown): value is StylesheetIntegration
 }
 
 const plugin = {
-  requires: [stylesheetIntegrationCapability, contentRenderingCapability, uiStylesCapability],
+  requires: [stylesheetIntegrationCapability, contentRenderingCapability],
   apiVersion: 4,
   name: "Files",
   activate: (context) => activateFilesPlugin(context, new FilesRuntime()),
@@ -70,7 +60,6 @@ export default plugin;
 export function activateFilesPlugin(context: PluginActivationContext, filesRuntime: FilesRuntime): PluginActivationResult {
   defineFilesCustomElements();
   let contentRendering: ContentRenderingCapability | undefined;
-  let uiCssText = "";
   let stylesheetIntegration: StylesheetIntegrationCapabilityV1 | undefined;
   const panelId = `${context.runtimePluginId}:workspace.files`;
   const icon = context.svg`
@@ -81,7 +70,6 @@ export function activateFilesPlugin(context: PluginActivationContext, filesRunti
   return {
     start: ({ capabilities }) => {
       contentRendering = capabilities.resolve(contentRenderingCapability);
-      uiCssText = capabilities.resolve(uiStylesCapability).cssText;
       stylesheetIntegration = capabilities.resolve(stylesheetIntegrationCapability);
     },
     contributions: {
@@ -93,7 +81,7 @@ export function activateFilesPlugin(context: PluginActivationContext, filesRunti
         invalidationResources: ["workspace.files"],
         fileOpenQuery: (_workspaceContext, path) => ({ file: path }),
         onInvalidate: (workspaceContext, invalidation) => filesRuntime.invalidate(workspaceContext, invalidation),
-        render: (workspaceContext) => context.html`<pi-web-files-panel .stylesheetIntegration=${stylesheetIntegration} .context=${workspaceContext} .runtime=${filesRuntime} .contentRendering=${contentRendering} .uiCssText=${uiCssText}></pi-web-files-panel>`,
+        render: (workspaceContext) => context.html`<pi-web-files-panel .stylesheetIntegration=${stylesheetIntegration} .context=${workspaceContext} .runtime=${filesRuntime} .contentRendering=${contentRendering}></pi-web-files-panel>`,
       }],
       actions: [
         {

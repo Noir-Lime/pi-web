@@ -58,11 +58,11 @@ class PiWebRelaysPanel extends HTMLElement {
     this.releaseStyles?.();
     this.releaseStyles = undefined;
     this.integration = value;
-    if (this.isConnected) this.releaseStyles = value?.registerRoot(this.root);
+    if (this.isConnected) this.releaseStyles = value?.registerRoot(this.root, { sharedUi: true });
   }
 
   connectedCallback(): void {
-    this.releaseStyles ??= this.integration?.registerRoot(this.root);
+    this.releaseStyles ??= this.integration?.registerRoot(this.root, { sharedUi: true });
   }
 
   disconnectedCallback(): void {
@@ -80,7 +80,6 @@ class PiWebRelaysPanel extends HTMLElement {
   private expandedDirs = new Set<string>();
   private scanToken = 0;
   private readonly root: ShadowRoot;
-  private readonly uiStyles: HTMLStyleElement;
   private readonly toolbar: HTMLElement;
   private readonly tabStrip: HTMLElement;
   private readonly viewer: HTMLElement;
@@ -94,9 +93,6 @@ class PiWebRelaysPanel extends HTMLElement {
       <nav class="document-tabs ui-tabs" aria-label="Relay documents" hidden></nav>
       <section class="viewer"><div class="empty">Select a workspace.</div></section>
     `;
-    this.uiStyles = document.createElement("style");
-    this.uiStyles.dataset["uiStyles"] = "";
-    this.root.prepend(this.uiStyles);
     this.toolbar = requiredRegion(this.root, ".toolbar");
     this.tabStrip = requiredRegion(this.root, "nav.document-tabs");
     this.viewer = requiredRegion(this.root, ".viewer");
@@ -127,14 +123,6 @@ class PiWebRelaysPanel extends HTMLElement {
       const context = this.contextValue;
       if (context !== undefined && documentPath !== null) void this.openDocument(context, documentPath);
     });
-  }
-
-  get uiCssText(): string {
-    return this.uiStyles.textContent;
-  }
-
-  set uiCssText(value: string) {
-    this.uiStyles.textContent = value;
   }
 
   set context(value: WorkspacePanelContext | undefined) {

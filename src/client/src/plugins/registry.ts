@@ -1,6 +1,5 @@
 import { html, svg } from "lit";
 import { createPluginCatalog } from "./catalog";
-import { uiStylesCapability, uiStylesCapabilityToken } from "./uiStyles";
 import { stylesheetIntegrationCapability, stylesheetIntegrationCapabilityToken } from "./styles";
 import type { QualifiedStylesheetContribution, StylesheetContribution } from "./types";
 import { createPluginBackend } from "./pluginPeer";
@@ -244,7 +243,6 @@ export class PluginRegistry {
     this.lifecycleTimeoutMs = positiveInteger(options.lifecycleTimeoutMs, DEFAULT_LIFECYCLE_TIMEOUT_MS, "lifecycleTimeoutMs");
     for (const provision of snapshotCapabilityProvisions([
       { capability: contentRenderingCapabilityToken, value: this.contentRendering },
-      { capability: uiStylesCapabilityToken, value: uiStylesCapability },
       { capability: stylesheetIntegrationCapabilityToken, value: stylesheetIntegrationCapability },
       ...(options.hostCapabilities ?? []),
     ], undefined, "Browser host capability provisions")) {

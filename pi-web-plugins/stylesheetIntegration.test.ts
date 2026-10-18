@@ -62,7 +62,7 @@ describe("bundled stylesheet capability participation", () => {
       resolve<Value>(requirement: PluginCapability<Value>): Value {
         requests.push(requirement.id);
         return requirement.parse(requirement.id === "stylesheet-integration" ? styles : {
-          cssText: "", listRenderers: () => [], renderText: () => undefined, renderMarkdown: () => html``,
+          listRenderers: () => [], renderText: () => undefined, renderMarkdown: () => html``,
         });
       },
     } });
@@ -89,7 +89,11 @@ describe("bundled stylesheet capability participation", () => {
     expect(styles.roots.size).toBe(0);
     document.body.append(panel);
     await panel.updateComplete;
-    expect(styles.registerRoot).toHaveBeenCalledExactlyOnceWith(panel.shadowRoot);
+    if ([FILES_PANEL_ELEMENT, "pi-web-workspace-tasks-panel", "pi-web-relays-panel"].includes(tag)) {
+      expect(styles.registerRoot).toHaveBeenCalledExactlyOnceWith(panel.shadowRoot, { sharedUi: true });
+    } else {
+      expect(styles.registerRoot).toHaveBeenCalledExactlyOnceWith(panel.shadowRoot);
+    }
     panel.stylesheetIntegration = styles;
     expect(styles.registerRoot).toHaveBeenCalledTimes(1);
 

@@ -1,4 +1,5 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
+import type { StylesheetRootOptions } from "../../../plugin-api";
 
 /** One active file contribution. Owners select plugin/theme eligibility before publishing. */
 export interface ActivePluginStylesheet {
@@ -21,13 +22,14 @@ interface LoadedFile {
  * asset URL resolution and import policy; this registry owns adoption and lifetime.
  */
 export class PluginStyleRegistry {
-  private readonly roots = new Map<StyleRoot, { references: number }>();
+  private readonly roots = new Map<StyleRoot, { references: number; sharedUiReferences: number }>();
+  private sharedUiSheet: CSSStyleSheet | undefined;
   private readonly files = new Map<string, LoadedFile>();
   private readonly listeners = new Set<() => void>();
   private sheets: readonly CSSStyleSheet[] = [];
   private revision = 0;
 
-  constructor(private readonly load: PluginStylesheetLoader) {}
+  constructor(private readonly load: PluginStylesheetLoader, private readonly createSharedUiSheet?: () => CSSStyleSheet) {}
 
   /** Subscribe to active sheet changes, after adoption in all registered roots. */
   subscribe(listener: () => void): () => void {
@@ -36,9 +38,15 @@ export class PluginStyleRegistry {
   }
 
   /** Supply even a closed root by its retained reference. Release it on disconnection. */
-  registerRoot(root: StyleRoot): () => void {
-    const registration = this.roots.get(root) ?? { references: 0 };
+  registerRoot(root: StyleRoot, options: StylesheetRootOptions = {}): () => void {
+    const sharedUi = options.sharedUi === true;
+    if (sharedUi && this.sharedUiSheet === undefined) {
+      if (this.createSharedUiSheet === undefined) throw new Error("Shared UI styles are not configured");
+      this.sharedUiSheet = this.createSharedUiSheet();
+    }
+    const registration = this.roots.get(root) ?? { references: 0, sharedUiReferences: 0 };
     registration.references++;
+    if (sharedUi) registration.sharedUiReferences++;
     this.roots.set(root, registration);
     this.apply(root, [], this.sheets);
     let released = false;
@@ -46,9 +54,10 @@ export class PluginStyleRegistry {
       if (released) return;
       released = true;
       if (this.roots.get(root) !== registration) return;
-      if (--registration.references > 0) return;
-      this.roots.delete(root);
-      this.apply(root, this.sheets, []);
+      registration.references--;
+      if (sharedUi) registration.sharedUiReferences--;
+      if (registration.references === 0) this.roots.delete(root);
+      this.apply(root, this.sheets, registration.references === 0 ? [] : this.sheets);
     };
   }
 
@@ -121,8 +130,10 @@ export class PluginStyleRegistry {
   /** Release all roots and pending file loads. The registry can subsequently be reused. */
   clear(): void {
     this.revision++;
-    this.replaceSheets([]);
+    // Remove both shared defaults and contributions, even when no files are active.
+    for (const root of this.roots.keys()) this.apply(root, this.sheets, [], false);
     this.roots.clear();
+    this.replaceSheets([]);
     for (const file of this.files.values()) file.controller.abort();
     this.files.clear();
   }
@@ -142,9 +153,10 @@ export class PluginStyleRegistry {
     }
   }
 
-  private apply(root: StyleRoot, previous: readonly CSSStyleSheet[], next: readonly CSSStyleSheet[]): void {
-    const owned = new Set([...previous, ...next]);
-    root.adoptedStyleSheets = [...root.adoptedStyleSheets.filter((sheet) => !owned.has(sheet)), ...next];
+  private apply(root: StyleRoot, previous: readonly CSSStyleSheet[], next: readonly CSSStyleSheet[], sharedUi = (this.roots.get(root)?.sharedUiReferences ?? 0) > 0): void {
+    const owned = new Set([...previous, ...next, ...(this.sharedUiSheet === undefined ? [] : [this.sharedUiSheet])]);
+    const shared = sharedUi && this.sharedUiSheet !== undefined ? [this.sharedUiSheet] : [];
+    root.adoptedStyleSheets = [...root.adoptedStyleSheets.filter((sheet) => !owned.has(sheet)), ...shared, ...next];
   }
 }
 
@@ -158,7 +170,7 @@ type StyleControllerHost = ReactiveControllerHost & { readonly renderRoot?: HTML
 export class PluginStylesController implements ReactiveController {
   private release: (() => void) | undefined;
 
-  constructor(private readonly host: StyleControllerHost, private readonly styles: PluginStyleRegistry) {
+  constructor(private readonly host: StyleControllerHost, private readonly styles: PluginStyleRegistry, private readonly options: StylesheetRootOptions = {}) {
     host.addController(this);
   }
 
@@ -166,7 +178,7 @@ export class PluginStylesController implements ReactiveController {
     this.release?.();
     const root = this.host.renderRoot;
     this.release = root instanceof ShadowRoot
-      ? this.styles.registerRoot(root)
+      ? this.styles.registerRoot(root, this.options)
       : undefined;
   }
 

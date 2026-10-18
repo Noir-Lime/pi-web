@@ -227,6 +227,95 @@ describe("PluginStyleRegistry", () => {
   });
 });
 
+describe("shared UI root opt-in", () => {
+  it("compiles once on demand and keeps local, shared, and theme sheets in order", async () => {
+    const shared = new CSSStyleSheet();
+    const theme = new CSSStyleSheet();
+    const createShared = vi.fn(() => shared);
+    const registry = new PluginStyleRegistry(() => Promise.resolve(theme), createShared);
+    const plain = shadowRoot();
+    const root = shadowRoot();
+    const local = new CSSStyleSheet();
+    root.adoptedStyleSheets = [local];
+    registry.registerRoot(plain);
+    const releasePlain = registry.registerRoot(root);
+    expect(createShared).not.toHaveBeenCalled();
+    const releaseFirst = registry.registerRoot(root, { sharedUi: true });
+    const releaseSecond = registry.registerRoot(root, { sharedUi: true });
+    expect(root.adoptedStyleSheets).toEqual([local, shared]);
+    await registry.setContributions([a]);
+    expect(root.adoptedStyleSheets).toEqual([local, shared, theme]);
+    expect(plain.adoptedStyleSheets).toEqual([theme]);
+    const late = shadowRoot("closed");
+    registry.registerRoot(late, { sharedUi: true });
+    expect(late.adoptedStyleSheets).toEqual([shared, theme]);
+    expect(createShared).toHaveBeenCalledOnce();
+    releaseFirst();
+    releaseFirst();
+    expect(root.adoptedStyleSheets).toEqual([local, shared, theme]);
+    releaseSecond();
+    expect(root.adoptedStyleSheets).toEqual([local, theme]);
+    releasePlain();
+    expect(root.adoptedStyleSheets).toEqual([local]);
+    await registry.setContributions([]);
+    expect(late.adoptedStyleSheets).toEqual([shared]);
+    registry.clear();
+    expect(late.adoptedStyleSheets).toEqual([]);
+  });
+
+  it("clears shared-only roots and ignores stale releases after registration is renewed", () => {
+    const shared = new CSSStyleSheet();
+    const registry = new PluginStyleRegistry(() => Promise.resolve(new CSSStyleSheet()), () => shared);
+    const root = shadowRoot();
+    const oldRelease = registry.registerRoot(root, { sharedUi: true });
+    registry.clear();
+    expect(root.adoptedStyleSheets).toEqual([]);
+    const release = registry.registerRoot(root, { sharedUi: true });
+    oldRelease();
+    expect(root.adoptedStyleSheets).toEqual([shared]);
+    release();
+    expect(root.adoptedStyleSheets).toEqual([]);
+  });
+
+  it("does not retain a registration when shared stylesheet creation fails", () => {
+    const shared = new CSSStyleSheet();
+    const createShared = vi.fn<() => CSSStyleSheet>()
+      .mockImplementationOnce(() => { throw new Error("Cannot compile shared styles"); })
+      .mockReturnValue(shared);
+    const registry = new PluginStyleRegistry(() => Promise.resolve(new CSSStyleSheet()), createShared);
+    const root = shadowRoot();
+    expect(() => registry.registerRoot(root, { sharedUi: true })).toThrow("Cannot compile shared styles");
+    const release = registry.registerRoot(root, { sharedUi: true });
+    expect(root.adoptedStyleSheets).toEqual([shared]);
+    release();
+    expect(root.adoptedStyleSheets).toEqual([]);
+  });
+
+  it("restores the shared opt-in when a Lit element reconnects", async () => {
+    const shared = new CSSStyleSheet();
+    const registry = new PluginStyleRegistry(() => Promise.resolve(new CSSStyleSheet()), () => shared);
+    class SharedStyledElement extends LitElement {
+      constructor() {
+        super();
+        new PluginStylesController(this, registry, { sharedUi: true });
+      }
+    }
+    customElements.define("test-shared-ui-lifecycle", SharedStyledElement);
+    const element = new SharedStyledElement();
+    document.body.append(element);
+    await element.updateComplete;
+    const root = element.shadowRoot;
+    if (root === null) throw new Error("Lit did not create its root");
+    expect(root.adoptedStyleSheets).toEqual([shared]);
+    element.remove();
+    expect(root.adoptedStyleSheets).toEqual([]);
+    document.body.append(element);
+    await element.updateComplete;
+    expect(root.adoptedStyleSheets).toEqual([shared]);
+    registry.clear();
+  });
+});
+
 it("integrates with the normal Lit root lifecycle, including reconnecting", async () => {
   const registry = new PluginStyleRegistry(() => Promise.resolve(new CSSStyleSheet()));
   class StyledElement extends LitElement {

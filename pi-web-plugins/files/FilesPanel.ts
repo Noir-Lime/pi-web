@@ -28,13 +28,12 @@ export class WorkspaceFilesPanel extends LitElement {
     this.releaseStyles?.();
     this.releaseStyles = undefined;
     this.integration = value;
-    if (this.isConnected && this.renderRoot instanceof ShadowRoot) this.releaseStyles = value?.registerRoot(this.renderRoot);
+    if (this.isConnected && this.renderRoot instanceof ShadowRoot) this.releaseStyles = value?.registerRoot(this.renderRoot, { sharedUi: true });
   }
 
   @property({ attribute: false }) context: WorkspacePanelContext | undefined;
   @property({ attribute: false }) runtime: FilesRuntime | undefined;
   @property({ attribute: false }) contentRendering: ContentRenderingCapability | undefined;
-  @property({ attribute: false }) uiCssText = "";
   @query("#workspace-upload-input") private uploadInput?: HTMLInputElement;
   @query("dialog.upload-dialog") private uploadDialog?: HTMLDialogElement;
   @state() private pendingUpload: PendingWorkspaceUploadReview | undefined;
@@ -71,7 +70,7 @@ export class WorkspaceFilesPanel extends LitElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    if (this.renderRoot instanceof ShadowRoot) this.releaseStyles ??= this.integration?.registerRoot(this.renderRoot);
+    if (this.renderRoot instanceof ShadowRoot) this.releaseStyles ??= this.integration?.registerRoot(this.renderRoot, { sharedUi: true });
     window.addEventListener("resize", this.handleResponsiveVisibilityChange);
     if (typeof ResizeObserver !== "undefined") {
       this.visibilityObserver ??= new ResizeObserver(this.handleResponsiveVisibilityChange);
@@ -117,7 +116,6 @@ export class WorkspaceFilesPanel extends LitElement {
       return options?.download === true ? files.downloadUrl(path, reference) : files.previewUrl(path, reference);
     };
     return html`
-      <style data-ui-styles>${this.uiCssText}</style>
       <section
         class=${this.dragActive ? "files-panel dragging" : "files-panel"}
         @dragenter=${this.handleDragEnter}

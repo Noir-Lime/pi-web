@@ -2,16 +2,16 @@
 
 PI WEB separates component behaviour from a built-in base theme. Selected themes extend the base with CSS, including layout rules, rather than being limited to colour palettes.
 
-This is an internal architecture under development. Existing public UI styles v1 patterns retain their compatibility boundary; additional selectors, host names, and layout arrangements described here are not yet a stable public contract.
+**Styling is experimental.** The base theme, visual design, layout, shared classes, theme properties, and internal selectors may evolve between releases. There is no stable styling contract yet; custom themes may require updates. Capability version numbers describe integration methods, not frozen CSS or appearance.
 
 ## Ownership
 
 - **Components:** markup, semantic states, event handling, focus management, disclosure state, and scroll controllers.
 - **Base theme:** default layout, typography, spacing, control treatments, transcript presentation, responsive arrangements, and CSS feedback for interaction states.
 - **Selected theme:** palette properties and optional CSS overrides of base presentation and layout.
-- **Feature plugins:** their own domain markup and local styles; plugins can reuse host-provided primitives and register their shadow roots for theme stylesheets.
+- **Feature plugins:** their own domain markup and local styles; plugins register roots with `stylesheet-integration` and opt in to the shared primitive bundle using `{ sharedUi: true }`. The host owns injection, ordering, and cleanup.
 
-The base lives in `src/client/src/theme/base/`. Each component imports only the style modules its shadow root needs. The base is bundled with the host and available synchronously, so loading or changing a selected theme does not remove the default layout. There is no network request or new inheritance manifest for the base.
+The base lives in `src/client/src/theme/base/`. Core components import the style modules their shadow roots need. Plugin roots receive one host-managed shared-UI bundle on opt-in, followed by contributed theme/plugin sheets. The bundle contains controls and file rows, not shell/chat layout. Omit `sharedUi` for roots that only need contributed CSS. The base is bundled with the host and available synchronously, so loading or changing a selected theme does not remove the default layout. There is no network request or new inheritance manifest for the base.
 
 Style modules under `components/` are internal import bridges during migration. Behaviour helpers, such as warning-icon rendering, remain outside the theme.
 

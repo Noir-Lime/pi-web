@@ -1,13 +1,27 @@
 // @vitest-environment happy-dom
 import { afterEach, expect, it, vi } from "vitest";
 import { PluginStyleRegistry } from "./styleRegistry";
-import { PluginStyleRuntime } from "./styles";
+import { PluginStyleRuntime, pluginStyles, stylesheetIntegrationCapability } from "./styles";
 
 const plugin = { id: "plugin:global", url: "https://plugins.test/global.css" };
 const dark = { id: "themes:dark:file", url: "https://plugins.test/dark.css" };
 const light = { id: "themes:light:file", url: "https://plugins.test/light.css" };
 
-afterEach(() => { document.adoptedStyleSheets = []; });
+afterEach(() => { pluginStyles.clear(); document.adoptedStyleSheets = []; vi.restoreAllMocks(); });
+
+it("injects shared UI through the public root opt-in without passing CSS text", () => {
+  // Observe compilation input: happy-dom does not parse cascade-layer CSS.
+  const compile = vi.spyOn(CSSStyleSheet.prototype, "replaceSync");
+  const root = document.createElement("div").attachShadow({ mode: "closed" });
+  const release = stylesheetIntegrationCapability.registerRoot(root, { sharedUi: true });
+  const [sheet] = root.adoptedStyleSheets;
+  expect(sheet).toBeDefined();
+  expect(compile).toHaveBeenCalledWith(expect.stringContaining(".ui-button"));
+  expect(compile).toHaveBeenCalledWith(expect.stringContaining(".ui-file-row"));
+  expect(stylesheetIntegrationCapability).not.toHaveProperty("cssText");
+  release();
+  expect(root.adoptedStyleSheets).toEqual([]);
+});
 
 it("publishes plugin and selected-theme files to the document and participating roots, then cleans up", async () => {
   const sheets = new Map([plugin, dark, light].map((file) => [file.url, new CSSStyleSheet()]));

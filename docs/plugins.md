@@ -347,52 +347,27 @@ The current browser and server contracts are both **API v5**. Browser v4 and ser
 
 ### Host-provided UI styles
 
-Browser plugins can reuse PI WEB's button, toolbar, tab, and file/tree-row styles without bundling a stylesheet or a UI framework. Request the host capability `{ pluginId: "pi-web", id: "ui-styles", version: 1 }` in `requires`, then resolve it in `start`. The value is `UiStylesCapabilityV1`, containing a read-only `cssText` string.
+**Styling is experimental.** Shared classes, theme properties, visual design, and layout may change between releases. There is no stable styling contract yet; test custom styling when upgrading PI WEB.
+
+Plugins can reuse the host's button, select, toolbar, tab, and file/tree-row styles without receiving CSS text or creating stylesheet elements. Request `{ pluginId: "pi-web", id: "stylesheet-integration", version: 1 }`, resolve it in `start`, and opt each participating shadow root into the single shared UI bundle. See [integrating plugin components](#integrating-plugin-components) for the complete capability setup.
+
+For Lit, call once in the component constructor:
 
 ```ts
-import type { PiWebPlugin, PluginCapability, UiStylesCapabilityV1 } from "@jmfederico/pi-web/plugin-api";
-
-const uiStylesV1: PluginCapability<UiStylesCapabilityV1> = {
-  pluginId: "pi-web", id: "ui-styles", version: 1,
-  parse(value) {
-    if (typeof value !== "object" || value === null || !("cssText" in value)
-        || typeof value.cssText !== "string") throw new Error("UI styles v1 unavailable");
-    return { cssText: value.cssText };
-  },
-};
-
-export default {
-  apiVersion: 5,
-  name: "Example panel",
-  requires: [uiStylesV1],
-  activate({ html }) {
-    let uiCssText = "";
-    return {
-      start({ capabilities }) {
-        uiCssText = capabilities.resolve(uiStylesV1).cssText;
-      },
-      contributions: {
-        workspacePanels: [{
-          id: "example", title: "Example",
-          render: () => html`<my-panel .uiCssText=${uiCssText}></my-panel>`,
-        }],
-      },
-    };
-  },
-} satisfies PiWebPlugin;
+styles.createController(this, { sharedUi: true });
 ```
 
-Your panel applies the string inside its own shadow root:
+For plain DOM, register on connection and release on disconnection:
 
 ```ts
-const style = document.createElement("style");
-style.textContent = uiCssText;
-shadowRoot.prepend(style);
+const release = styles.registerRoot(shadowRoot, { sharedUi: true });
+// On disconnect:
+release();
 ```
 
-Set `textContent` (or use an escaped text binding in a template library), rather than building HTML strings containing CSS. Reuse or update that style element when the property changes; do not recreate the panel's content just to apply styles. No runtime package import is needed; the public import above supplies build-time types only. The shipped [Relay panel](https://github.com/jmfederico/pi-web/tree/main/pi-packages/relays) is a plain-DOM example.
+The host compiles one shared sheet on demand, adopts it before contributed theme/plugin sheets, and removes it when the last shared-UI registration for that root is released. The same sheet serves existing and later roots; theme changes do not remove these defaults. A registration without `sharedUi: true` receives contributed stylesheets only. The bundle contains shared primitives, not shell or chat layouts. No private client imports or additional plugin manifest fields are needed.
 
-Version 1 supports these native HTML patterns:
+The current bundle provides these native HTML patterns:
 
 | Pattern | Classes and states |
 | --- | --- |
@@ -405,7 +380,7 @@ Version 1 supports these native HTML patterns:
 
 Toolbars and tabs use compact 32px desktop controls by default. Primary variants use 44px controls; coarse-pointer targets grow to at least 44px. Icon-only buttons need an accessible name. Keep grouped controls gapless and let the shared styles provide separators and hover/focus states. Use existing `--pi-*` colour tokens in plugin-specific content styles so theme changes continue to propagate through shadow roots.
 
-Version 1 also provides compact file/tree lists:
+The shared bundle also provides compact file/tree lists:
 
 ```html
 <div class="ui-file-list">
@@ -419,9 +394,9 @@ Version 1 also provides compact file/tree lists:
 
 File rows are gapless and **32px high for every pointer type**, intentionally remaining compact on touch devices too. The leading slot is 16px wide; integer `--depth` adds 16px indentation per level. `.ui-file-label` truncates long names; provide the full path through `title`. `.ui-file-meta` is optional trailing metadata. Use `.selected` or `aria-current="page"` for the active file, and `aria-expanded` on folder buttons. The Files and Git plugins use this pattern without sharing their controllers or viewer layout.
 
-These are appearance patterns: the plugin still owns events, selection, keyboard navigation, and ARIA semantics. Styling a row as tabs does not implement an ARIA tab widget. Do not deep-import client source files. Menu, form, and dialog styles are not part of the versioned `ui-styles` contract. You can target internal selectors through [contributed CSS files](#css-files-and-shadow-roots), but those selectors and markup may change between releases.
+These are appearance patterns: the plugin still owns events, selection, keyboard navigation, and ARIA semantics. Styling a row as tabs does not implement an ARIA tab widget. Do not deep-import client source files. Menu, form, and dialog styles are not currently included in the shared bundle. You can target internal selectors through [contributed CSS files](#css-files-and-shadow-roots), but those selectors and markup may change between releases.
 
-The capability works with supported browser APIs v4 and v5. A host without the requested `ui-styles` version rejects the plugin, rather than silently rendering an unstyled fallback. Compatible visual improvements arrive with the running PI WEB frontend after reload; the plugin does not need rebuilding. Breaking changes to this shared UI contract require a new capability version. For plugin and theme CSS files, use the separate contribution mechanism below.
+Stylesheet integration works with supported browser APIs v4 and v5. Its capability version describes the integration interface, not a stable set of CSS classes or a promise of unchanged appearance. Shared styling follows the running PI WEB frontend after reload. The earlier unreleased `ui-styles` CSS-text capability has been replaced by this root opt-in.
 
 ### CSS files and shadow roots
 
@@ -472,7 +447,7 @@ Loading is asynchronous. Requests require a successful HTTP response with `Conte
 
 The document, host shadow roots, and bundled plugin-owned shadow roots participate already. External plugins choose their depth: register every root for direct rules, register just a top-level root and map inherited variables into internal or third-party components, or do not participate. A rule cannot cross another shadow boundary without participation at that root. Unregistered descendants can still inherit custom properties. There is no automatic root discovery or `attachShadow` patching.
 
-Request the `stylesheet-integration` v1 capability, then pass its value to your components. This is independent of `ui-styles`: that capability supplies reusable base styles; this one lets contributed files reach your roots. Both work with supported browser APIs v4 and v5. The public import supplies types only; no private client import is needed.
+Request the `stylesheet-integration` v1 capability, then pass its value to your components. It handles both contributed files and optional shared UI injection. The public import supplies types only; no private client import is needed.
 
 ```ts
 import type {
@@ -512,7 +487,7 @@ export default {
 } satisfies PiWebPlugin;
 ```
 
-For Lit, implement `definePanel` alongside that plugin and call `createController(this)` once in the constructor. The controller registers after Lit creates the shadow root, releases it on disconnect, and registers again on reconnect:
+For Lit, implement `definePanel` alongside that plugin and call `createController(this, { sharedUi: true })` once in the constructor. The controller registers after Lit creates the shadow root, releases it on disconnect, and registers again on reconnect:
 
 ```ts
 import { LitElement, html } from "lit";
@@ -522,16 +497,16 @@ function definePanel(styles: StylesheetIntegrationCapabilityV1) {
   customElements.define("my-styled-panel", class extends LitElement {
     constructor() {
       super();
-      styles.createController(this);
+      styles.createController(this, { sharedUi: true });
     }
     render() {
-      return html`<p>Styles reach this shadow root.</p>`;
+      return html`<button class="ui-button">Example action</button>`;
     }
   });
 }
 ```
 
-For a framework-independent alternative, use `registerRoot(root)` and keep its cleanup function. A retained closed root works too; open roots are not required:
+For a framework-independent alternative, use `registerRoot(root, { sharedUi: true })` and keep its cleanup function. A retained closed root works too; open roots are not required:
 
 ```ts
 function definePanel(styles: StylesheetIntegrationCapabilityV1) {
@@ -542,13 +517,14 @@ function definePanel(styles: StylesheetIntegrationCapabilityV1) {
 
     constructor() {
       super();
-      const paragraph = document.createElement("p");
-      paragraph.textContent = "Styles reach this closed shadow root.";
-      this.root.append(paragraph);
+      const button = document.createElement("button");
+      button.className = "ui-button";
+      button.textContent = "Example action";
+      this.root.append(button);
     }
     connectedCallback() {
       this.releaseStyles?.();
-      this.releaseStyles = styles.registerRoot(this.root);
+      this.releaseStyles = styles.registerRoot(this.root, { sharedUi: true });
     }
     disconnectedCallback() {
       this.releaseStyles?.();
@@ -628,7 +604,7 @@ Themes can override these properties independently of the base palette:
 | `--pi-chat-system-bg` | System-message surface |
 | `--pi-chat-activity-bg`, `--pi-chat-compacting-bg` | Session activity and compaction surfaces |
 
-Define these on `:root`, alongside the base palette. Font properties accept font-family stacks, not complete `font` shorthands; keep `--pi-mono` monospaced for code alignment. The terminal's xterm grid and copy-selection overlay retain their configured font so cell geometry stays aligned. Existing themes may omit them: components fall back to base palette colours, existing colour mixes, and system fonts. Built-in themes declare them explicitly; most colours alias or mix base palette properties. Syntax deletions default to `--pi-danger`; the legacy `--pi-error` property remains a fallback for older external themes. Theme properties control appearance; direct CSS rules can also customise migrated base layouts. Components retain interaction and scroll controllers, while the base theme supplies default responsive CSS and visual accessibility treatments. These properties do not expand the public UI styles v1 class contract.
+Define these on `:root`, alongside the base palette. Font properties accept font-family stacks, not complete `font` shorthands; keep `--pi-mono` monospaced for code alignment. The terminal's xterm grid and copy-selection overlay retain their configured font so cell geometry stays aligned. Existing themes may omit them: components fall back to base palette colours, existing colour mixes, and system fonts. Built-in themes declare them explicitly; most colours alias or mix base palette properties. Syntax deletions default to `--pi-danger`; the legacy `--pi-error` property remains a fallback for older external themes. Theme properties control appearance; direct CSS rules can also customise migrated base layouts. Components retain interaction and scroll controllers, while the base theme supplies default responsive CSS and visual accessibility treatments. These properties, like shared UI classes, remain experimental.
 
 The example above is a partial palette. Use the [built-in palette files](https://github.com/jmfederico/pi-web/tree/main/src/client/src/plugins/themes) as a reference for the shared `--pi-*` vocabulary. `colorScheme` remains required metadata for native controls and browser appearance; declaring CSS alone does not set it. Theme pair `light` and `dark` values are local theme IDs from the same plugin. Auto mode follows the device preference within the pair; unpaired themes stay selected. See [theme selection and defaults](config.md#theme-default-and-device-choices) for device choices, fallback, and the preserved built-in IDs. Machine-bound remote theme contributions remain ignored; themes are app-wide.
 
