@@ -59,16 +59,71 @@ describe("PiSessionService", () => {
 
       const result = await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "do the slice" });
 
-      expect(result).toEqual({ sessionId: "child-1", cwd: "/workspace" });
+      expect(result).toEqual({ sessionId: "child-1", cwd: "/workspace", thinkingLevel: "off" });
       const created = events.globalEvents.filter((event) => event.type === "session.created");
       expect(created).toHaveLength(2);
       expect(created[0]?.session).not.toHaveProperty("agentSubsession");
       expect(created[1]?.session).toMatchObject({ id: "child-1", agentSubsession: true });
       expect((await service.list("/workspace")).find((session) => session.id === "child-1")?.agentSubsession).toBe(true);
       expect(child.calls.prompt).toEqual([{ text: "do the slice", options: undefined }]);
-      await expect(service.listSubsessions("parent-1")).resolves.toEqual([
-        { sessionId: "child-1", cwd: "/workspace", status: "idle" },
-      ]);
+      const summaries = await service.listSubsessions("parent-1");
+      expect(summaries).toHaveLength(1);
+      expect(summaries[0]).toMatchObject({ sessionId: "child-1", cwd: "/workspace", status: "idle", thinkingLevel: "off", tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } });
+      expect(typeof summaries[0]?.observedAt).toBe("string");
+      await service.dispose();
+    });
+
+    it("returns an explicit spawn name and rejects names that violate the ordinary naming rules", async () => {
+      const { service } = subsessionService({ allowed: true, cwd: "/workspace" });
+      await service.start("/workspace");
+      await expect(service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "go", name: "Worker Bee" }))
+        .resolves.toEqual({ sessionId: "child-1", cwd: "/workspace", name: "Worker Bee", thinkingLevel: "off" });
+      for (const name of ["", "   ", "bad\nname", "x".repeat(61)]) {
+        await expect(service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "go", name }))
+          .rejects.toThrow("Initial session name must be trimmed, non-empty, at most 60 characters, and contain no control characters");
+      }
+      await service.dispose();
+    });
+
+    it("allows duplicate names and shows name, model, and distinct usage fields in check, list, and read", async () => {
+      const { child, children, service } = subsessionService({ allowed: true, cwd: "/workspace" }, 60_000, ["child-1", "child-2"]);
+      await service.start("/workspace");
+      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "one", name: "Worker Bee" });
+      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "two", name: "Worker Bee" });
+      for (const fixture of children) fixture.session.sessionName = "Worker Bee";
+      child.session.model = testModel();
+      child.session.getSessionStats = () => ({ sessionId: "child-1", totalMessages: 1, userMessages: 1, assistantMessages: 0, toolCalls: 0, tokens: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, total: 18 }, cost: 0, contextUsage: { tokens: 100, contextWindow: 1000, percent: 10 } });
+      const list = await service.listSubsessions("parent-1");
+      expect(list.map((entry) => entry.name)).toEqual(["Worker Bee", "Worker Bee"]);
+      const checked = await service.checkSubsession("parent-1", "child-1");
+      expect(checked).toMatchObject({
+        name: "Worker Bee", model: "anthropic/claude-sonnet-4-5-20250929", thinkingLevel: "off",
+        tokens: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, total: 18 },
+        contextUsage: { tokens: 100, contextWindow: 1000, percent: 10 },
+      });
+      expect(typeof checked.observedAt).toBe("string");
+      await expect(service.readSubsession("parent-1", "child-1", {})).resolves.toMatchObject({ name: "Worker Bee" });
+      await service.dispose();
+    });
+
+    it("snapshots name, model, and usage into the completion notice at completion time", async () => {
+      const { parent, child, service } = subsessionService({ allowed: true, cwd: "/workspace" });
+      const branch: { type: string; message: { role: string; content: string } }[] = [];
+      child.session.sessionManager.getBranch = () => branch;
+      await service.start("/workspace");
+      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "go", name: "Worker Bee" });
+      child.session.sessionName = "Worker Bee";
+      child.session.model = testModel();
+      child.session.isStreaming = true;
+      child.emit({ type: "agent_start" });
+      branch.push({ type: "message", message: { role: "assistant", content: "all done" } });
+      child.session.isStreaming = false;
+      child.emit({ type: "agent_end" });
+      await vi.waitFor(() => { expect(parent.calls.sendCustomMessage).toHaveLength(1); });
+      const content = parent.calls.sendCustomMessage[0]?.message.content ?? "";
+      expect(content).toContain("Subsession Worker Bee (child-1) stopped working");
+      expect(content).toContain("model anthropic/claude-sonnet-4-5-20250929");
+      expect(content).toContain("cumulative tokens 0 total");
       await service.dispose();
     });
 
@@ -121,7 +176,7 @@ describe("PiSessionService", () => {
 
       const result = await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "do the slice", cwd: "/workspace/" });
 
-      expect(result).toEqual({ sessionId: "child-1", cwd: "/workspace" });
+      expect(result).toEqual({ sessionId: "child-1", cwd: "/workspace", thinkingLevel: "off" });
       await service.dispose();
     });
 
@@ -199,7 +254,7 @@ describe("PiSessionService", () => {
       const result = await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "do the slice", modelSpec: "anthropic/claude-sonnet-4-5-20250929" });
 
       expect(initialModels[1]).toBe(scoped);
-      expect(result).toEqual({ sessionId: "child-1", cwd: "/workspace", model: "anthropic/claude-sonnet-4-5-20250929" });
+      expect(result).toEqual({ sessionId: "child-1", cwd: "/workspace", model: "anthropic/claude-sonnet-4-5-20250929", thinkingLevel: "off" });
       await service.dispose();
     });
 
@@ -294,14 +349,51 @@ describe("PiSessionService", () => {
 
         await service.start("/workspace");
 
-        await expect(service.checkSubsession("parent-1", "child-1")).resolves.toEqual({
+        const checked = await service.checkSubsession("parent-1", "child-1");
+        expect(checked).toMatchObject({
           sessionId: "child-1",
           cwd: "/workspace-feature",
           status: "idle",
+          thinkingLevel: "off",
+          tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
           finalText: "finished",
           messageCount: 1,
         });
+        expect(typeof checked.observedAt).toBe("string");
         expect(open).toHaveBeenCalledWith(childFile);
+        await service.dispose();
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it("lists a persisted unloaded child by its stored name without opening its runtime", async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), "pi-web-subsession-persisted-name-"));
+      const parentFile = join(tempDir, "parent.jsonl");
+      const childFile = join(tempDir, "child.jsonl");
+      await writeFile(parentFile, `${JSON.stringify({ type: "session", version: 3, id: "parent-1", timestamp: "2026-01-01T00:00:00.000Z", cwd: "/workspace" })}\n`, "utf8");
+      await writeFile(childFile, `${JSON.stringify({ type: "session", version: 3, id: "child-1", timestamp: "2026-01-01T00:00:00.000Z", cwd: "/workspace-feature", parentSession: parentFile })}\n`, "utf8");
+      try {
+        const parent = fakeRuntime("parent-1", {
+          sessionFile: parentFile,
+          sessionManager: fakeSessionManager("/workspace", {
+            getEntries: () => [{ type: "custom", customType: "pi-web.subsession.link", data: { version: 1, spawnedBySessionId: "parent-1", spawnedSessionId: "child-1", spawnedSessionFile: childFile, cwd: "/workspace-feature" } }],
+          }),
+        });
+        let runtimeCount = 0;
+        const service = new PiSessionService(new CapturingSessionEventHub(), {
+          agentDir: TEST_AGENT_DIR,
+          modelRuntime: testModelRuntime,
+          createAgentRuntime: () => { runtimeCount += 1; return Promise.resolve(parent.runtime); },
+          sessionManager: { create: () => parent.session.sessionManager, list: () => Promise.resolve([{ ...sessionRecord("child-1", "/workspace-feature"), name: "Persisted Bee" }]), listAll: () => Promise.resolve([]), invalidateSessionFile: () => undefined, resolveSessionFile: () => Promise.resolve(undefined), open: () => fakeSessionManager("/workspace-feature", { getHeader: () => ({ type: "session", version: 3, id: "child-1", timestamp: "2026-01-01T00:00:00.000Z", cwd: "/workspace-feature", parentSession: parentFile }) }) },
+          archiveStore: emptyArchiveStore(),
+          heartbeatIntervalMs: 60_000,
+        });
+        await service.start("/workspace");
+        await expect(service.listSubsessions("parent-1")).resolves.toEqual([
+          { sessionId: "child-1", cwd: "/workspace-feature", status: "idle", name: "Persisted Bee" },
+        ]);
+        expect(runtimeCount).toBe(1);
         await service.dispose();
       } finally {
         await rm(tempDir, { recursive: true, force: true });
@@ -1001,7 +1093,7 @@ describe("PiSessionService", () => {
       try {
         await service.start("/workspace");
         await expect(service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: text }))
-          .resolves.toEqual({ sessionId: "child-1", cwd: "/workspace" });
+          .resolves.toEqual({ sessionId: "child-1", cwd: "/workspace", thinkingLevel: "off" });
         expect(parent.calls.sendCustomMessage).toHaveLength(0);
 
         // The child was accepted, but model/auth validation rejects without

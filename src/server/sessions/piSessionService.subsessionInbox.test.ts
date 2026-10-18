@@ -129,7 +129,9 @@ describe("PiSessionService shared subsession completion inbox", () => {
 
     // Omitted and explicit parent-file arguments must reach the same inbox.
     const joined = await service.joinSubsessions(PARENT_ID);
-    expect(joined.subsessions).toEqual([{ sessionId: "child-1", cwd: CWD, status: "idle" }]);
+    expect(joined.subsessions).toHaveLength(1);
+    expect(joined.subsessions[0]).toMatchObject({ sessionId: "child-1", cwd: CWD, status: "idle", thinkingLevel: "off", tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } });
+    expect(typeof joined.subsessions[0]?.observedAt).toBe("string");
     expect(joined.completions).toMatchObject([{ sessionId: "child-1", status: "idle", finalText: "final answer", messageCount: 1 }]);
     expect(joined.completions[0]?.completionId).toEqual(expect.any(String));
     const ids = joined.completions.map(({ completionId }) => completionId);
@@ -241,7 +243,10 @@ describe("PiSessionService shared subsession completion inbox", () => {
     finishChildRun(first, "first child answer");
 
     const joined = await service.joinSubsessions(PARENT_ID, PARENT_FILE);
-    expect(joined.subsessions).toEqual([{ sessionId: "child-1", cwd: CWD, status: "idle" }, { sessionId: "child-2", cwd: CWD, status: "working" }]);
+    expect(joined.subsessions.map((entry) => entry.sessionId)).toEqual(["child-1", "child-2"]);
+    expect(joined.subsessions[0]).toMatchObject({ sessionId: "child-1", cwd: CWD, status: "idle", thinkingLevel: "off", tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } });
+    expect(joined.subsessions[1]).toMatchObject({ sessionId: "child-2", cwd: CWD, status: "working", thinkingLevel: "off", tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } });
+    expect(typeof joined.subsessions[0]?.observedAt).toBe("string");
     expect(joined.completions).toMatchObject([{ sessionId: "child-1", finalText: "first child answer" }]);
     await settleParent(parent);
     expect(parent.calls.sendCustomMessage).toHaveLength(0);

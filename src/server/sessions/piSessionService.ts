@@ -102,7 +102,7 @@ import { DEFAULT_EXTENSION_DIALOGS_TIMEOUT_MS } from "../../config.js";
 import { createSpawnSessionToolDefinition, type SpawnSessionInvocation, type SpawnSessionResult } from "./spawnSessionTool.js";
 import type { SessionUiMetadata } from "../../shared/pluginApiTypes.js";
 import { readSessionUiMetadata, requireSessionUiMetadata, SESSION_UI_METADATA_CUSTOM_TYPE } from "./sessionMetadata.js";
-import { createSendParentMessageToolDefinition, createSubsessionToolDefinitions, type SpawnSubsessionInvocation, type SpawnSubsessionResult, type SubsessionCheckResult, type SubsessionJoinResult, type SubsessionReadQuery, type SubsessionReadResult, type SubsessionStatus, type SubsessionSummary, type SubsessionToolDeps } from "./spawnSubsessionTool.js";
+import { createSendParentMessageToolDefinition, createSubsessionToolDefinitions, type SpawnSubsessionInvocation, type SpawnSubsessionResult, type SubsessionCheckResult, type SubsessionJoinResult, type SubsessionObservation, type SubsessionReadQuery, type SubsessionReadResult, type SubsessionStatus, type SubsessionSummary, type SubsessionToolDeps } from "./spawnSubsessionTool.js";
 import { buildTranscriptView, type TranscriptView } from "./subsessionTranscript.js";
 import { createSubsessionCompletionDelivery, type SubsessionCompletionDeliveryDeps } from "./subsessionCompletionDelivery.js";
 import { completionReceiptIds, persistedSubsessionCompletions, renderSubsessionCompletions, SUBSESSION_COMPLETION_ENTRY_TYPE, SUBSESSION_NOTIFICATION_CUSTOM_TYPE, SUBSESSION_RECEIPT_ENTRY_TYPE, SubsessionCompletionInbox, type SubsessionCompletion } from "./subsessionCompletionInbox.js";
@@ -1730,14 +1730,17 @@ export class PiSessionService implements SessionRouteService {
     const model = input.modelSpec === undefined
       ? input.model
       : await this.resolveSpawnModel({ id: input.parentSessionId, cwd: input.spawningCwd }, input.modelSpec);
+    const name = input.name === undefined ? undefined : requireInitialSessionName(input.name);
     const created = await this.startSession(decision.cwd, {
       ...(input.parentSessionFile === undefined ? {} : { parentSession: input.parentSessionFile }),
+      ...(name === undefined ? {} : { name }),
       ...(model === undefined ? {} : { initialModel: model }),
       ...(input.thinkingLevel === undefined ? {} : { initialThinkingLevel: input.thinkingLevel }),
       creationProvenance: "tracked-subsession",
       deferAnnouncement: true,
     });
     const modelUsed = this.active.get(created.id)?.runtime.session.model;
+    const thinkingLevelUsed = this.active.get(created.id)?.runtime.session.thinkingLevel;
     const parentSessionFile = nonEmptyString(input.parentSessionFile);
     const link: TrackedSubsessionLink = {
       parentSessionId: input.parentSessionId,
@@ -1763,7 +1766,9 @@ export class PiSessionService implements SessionRouteService {
     return {
       sessionId: created.id,
       cwd: decision.cwd,
+      ...(name === undefined ? {} : { name }),
       ...(modelUsed === undefined ? {} : { model: modelSpecOf(modelUsed) }),
+      ...(thinkingLevelUsed === undefined ? {} : { thinkingLevel: thinkingLevelUsed }),
     };
   }
 
@@ -2110,6 +2115,8 @@ export class PiSessionService implements SessionRouteService {
       sessionId,
       cwd: session.sessionManager.getCwd(),
       status,
+      ...(session.sessionName === undefined ? {} : { name: session.sessionName }),
+      ...this.subsessionObservation(session),
       finalText: finalAssistantText(messages),
       messageCount: messages.length,
       ...(status === "working" || completion?.errorDetail === undefined ? {} : { errorDetail: completion.errorDetail }),
@@ -2129,7 +2136,7 @@ export class PiSessionService implements SessionRouteService {
       && (transcriptReturnsFinalOutput(messages, view, completion.finalText) || (completion.finalText === "" && errorDetail !== undefined))) {
       this.receiveSubsessionCompletions(parentSessionId, parentSessionFile, [completion], toolCallId);
     }
-    return { sessionId, cwd: session.sessionManager.getCwd(), status, ...view, ...(errorDetail === undefined ? {} : { errorDetail }) };
+    return { sessionId, cwd: session.sessionManager.getCwd(), status, ...(session.sessionName === undefined ? {} : { name: session.sessionName }), ...view, ...(errorDetail === undefined ? {} : { errorDetail }) };
   }
 
   private subsessionInbox(parentSessionId: string, parentSessionFile?: string): SubsessionCompletionInbox {
@@ -2456,14 +2463,48 @@ export class PiSessionService implements SessionRouteService {
     throw new Error("Session not found");
   }
 
-  private async subsessionSummaryFields(childSessionId: string): Promise<{ cwd: string; status: SubsessionStatus }> {
+  /**
+   * Light identity/usage projection for one loaded child, reusing the same
+   * sources as SessionStatus (getSessionStats, session model/thinking,
+   * context usage) without building a full UI status or transcript.
+   */
+  private subsessionObservation(session: PiAgentSession): SubsessionObservation {
+    const stats = session.getSessionStats();
+    const contextUsage = "contextUsage" in stats ? stats.contextUsage : session.getContextUsage();
+    return {
+      ...(session.model === undefined ? {} : { model: modelSpecOf(session.model) }),
+      thinkingLevel: session.thinkingLevel,
+      tokens: stats.tokens,
+      ...(contextUsage === undefined ? {} : { contextUsage }),
+      observedAt: this.now().toISOString(),
+    };
+  }
+
+  /** Name from existing listing metadata; never opens a child runtime. */
+  private async persistedSubsessionName(childSessionId: string, cwd: string | undefined): Promise<string | undefined> {
+    if (cwd === undefined || cwd === "") return undefined;
+    try {
+      const entries = await this.sessionManager.list(cwd);
+      return entries.find((entry) => entry.id === childSessionId)?.name;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async subsessionSummaryFields(childSessionId: string): Promise<{ cwd: string; status: SubsessionStatus; name?: string } & SubsessionObservation> {
     const link = this.subsessionLinks.get(childSessionId);
     const active = link === undefined ? undefined : this.activeChildForSubsessionLink(link);
     if (active !== undefined) {
-      return { cwd: active.runtime.cwd, status: this.subsessionStatus(active.runtime.session) };
+      const session = active.runtime.session;
+      return {
+        cwd: active.runtime.cwd, status: this.subsessionStatus(session),
+        ...(session.sessionName === undefined ? {} : { name: session.sessionName }),
+        ...this.subsessionObservation(session),
+      };
     }
     if (link?.childSessionFile !== undefined && (await sessionFileHeaderMatches(link.childSessionFile, { sessionId: childSessionId, parentSessionFile: link.parentSessionFile }))) {
-      return { cwd: link.cwd ?? "", status: "idle" };
+      const name = await this.persistedSubsessionName(childSessionId, link.cwd);
+      return { cwd: link.cwd ?? "", status: "idle", ...(name === undefined ? {} : { name }) };
     }
     if (link?.cwd !== undefined) return { cwd: link.cwd, status: "unknown" };
     return { cwd: "", status: "unknown" };
@@ -2509,11 +2550,20 @@ export class PiSessionService implements SessionRouteService {
     const branch = session.sessionManager.getBranch();
     const runEntries = branch.length >= armed.startEntryCount ? branch.slice(armed.startEntryCount) : [];
     const messages = historyMessagesFromEntries(runEntries);
+    const observed = this.subsessionObservation(session);
+    const runSnapshot: Pick<SubsessionObservation, "model" | "thinkingLevel" | "tokens" | "contextUsage"> = {
+      ...(observed.model === undefined ? {} : { model: observed.model }),
+      ...(observed.thinkingLevel === undefined ? {} : { thinkingLevel: observed.thinkingLevel }),
+      ...(observed.tokens === undefined ? {} : { tokens: observed.tokens }),
+      ...(observed.contextUsage === undefined ? {} : { contextUsage: observed.contextUsage }),
+    };
     const completion: SubsessionCompletion = {
       completionId: randomUUID(), sessionId: childId, cwd: session.sessionManager.getCwd(),
       status: activity?.phase === "error" ? "error" : "idle",
       startedAt: armed.startedAt, completedAt: this.now().toISOString(),
       finalText: finalAssistantText(messages), messageCount: historyMessages(session).length,
+      ...(session.sessionName === undefined ? {} : { name: session.sessionName }),
+      ...runSnapshot,
       ...(activity?.phase !== "error" || activity.detail === undefined ? {} : { errorDetail: activity.detail }),
     };
     try {
