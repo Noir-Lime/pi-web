@@ -2089,7 +2089,9 @@ export class PiSessionService implements SessionRouteService {
     const childIds = this.subsessionChildren.get(parentSessionId);
     if (childIds === undefined) return [];
     const authorizedChildIds = [...childIds].filter((childId) => this.subsessionLinkBelongsToParent(parentSessionId, parentFile, childId));
-    return Promise.all(authorizedChildIds.map(async (childId) => ({ sessionId: childId, ...(await this.subsessionSummaryFields(childId)) })));
+    // One metadata listing per cwd serves every unloaded row in this call.
+    const metadataListings = new Map<string, Promise<PiSessionListEntry[]>>();
+    return Promise.all(authorizedChildIds.map(async (childId) => ({ sessionId: childId, ...(await this.subsessionSummaryFields(childId, metadataListings)) })));
   }
 
   /** Collect ready answers before deciding whether the parent needs to wait. */
@@ -2155,7 +2157,9 @@ export class PiSessionService implements SessionRouteService {
   }
 
   private subsessionCompletionForOutput(parentId: string, parentFile: string | undefined, child: PiAgentSession, messages: readonly unknown[]): SubsessionCompletion | undefined {
-    const branch = persistedSubsessionCompletions(child.sessionManager.getBranch()).filter(({ sessionId }) => sessionId === child.sessionId);
+    const branch = persistedSubsessionCompletions(child.sessionManager.getBranch(), (field) => {
+      this.logger.info({ sessionId: child.sessionId, field }, "Dropped present-but-invalid subsession completion metadata field");
+    }).filter(({ sessionId }) => sessionId === child.sessionId);
     // A child can be rewound independently of its parent. Never acknowledge an
     // abandoned branch's newer result while returning the current branch's text.
     const completion = branch.at(-1) ?? (child.sessionManager.appendCustomEntry === undefined
@@ -2307,7 +2311,9 @@ export class PiSessionService implements SessionRouteService {
     const childManager = this.activeChildForSubsessionLink(link)?.runtime.session.sessionManager
       ?? (link.childSessionFile === undefined ? undefined : this.sessionManager.open(link.childSessionFile));
     if (childManager !== undefined) {
-      for (const completion of persistedSubsessionCompletions(childManager.getEntries?.() ?? childManager.getBranch())) {
+      for (const completion of persistedSubsessionCompletions(childManager.getEntries?.() ?? childManager.getBranch(), (field) => {
+        this.logger.info({ sessionId: childSessionId, field }, "Dropped present-but-invalid subsession completion metadata field");
+      })) {
         if (completion.sessionId === childSessionId) this.subsessionInbox(parentSessionId, link.parentSessionFile).record(completion);
       }
     }
@@ -2480,18 +2486,32 @@ export class PiSessionService implements SessionRouteService {
     };
   }
 
-  /** Name from existing listing metadata; never opens a child runtime. */
-  private async persistedSubsessionName(childSessionId: string, cwd: string | undefined): Promise<string | undefined> {
+  /** Name from existing listing metadata; never opens a child runtime. Listings are shared per cwd within one list operation. */
+  private async persistedSubsessionName(childSessionId: string, cwd: string | undefined, metadataListings?: Map<string, Promise<PiSessionListEntry[]>>): Promise<string | undefined> {
     if (cwd === undefined || cwd === "") return undefined;
     try {
-      const entries = await this.sessionManager.list(cwd);
+      let listing = metadataListings?.get(cwd);
+      if (listing === undefined) {
+        listing = this.sessionManager.list(cwd);
+        metadataListings?.set(cwd, listing);
+      }
+      const entries = await listing;
       return entries.find((entry) => entry.id === childSessionId)?.name;
     } catch {
       return undefined;
     }
   }
 
-  private async subsessionSummaryFields(childSessionId: string): Promise<{ cwd: string; status: SubsessionStatus; name?: string } & SubsessionObservation> {
+  /** Status only, for completion-notice suffixes; never resolves names or usage. */
+  private async subsessionStatusOnly(childSessionId: string): Promise<SubsessionStatus> {
+    const link = this.subsessionLinks.get(childSessionId);
+    const active = link === undefined ? undefined : this.activeChildForSubsessionLink(link);
+    if (active !== undefined) return this.subsessionStatus(active.runtime.session);
+    if (link?.childSessionFile !== undefined && (await sessionFileHeaderMatches(link.childSessionFile, { sessionId: childSessionId, parentSessionFile: link.parentSessionFile }))) return "idle";
+    return "unknown";
+  }
+
+  private async subsessionSummaryFields(childSessionId: string, metadataListings?: Map<string, Promise<PiSessionListEntry[]>>): Promise<{ cwd: string; status: SubsessionStatus; name?: string } & SubsessionObservation> {
     const link = this.subsessionLinks.get(childSessionId);
     const active = link === undefined ? undefined : this.activeChildForSubsessionLink(link);
     if (active !== undefined) {
@@ -2503,7 +2523,7 @@ export class PiSessionService implements SessionRouteService {
       };
     }
     if (link?.childSessionFile !== undefined && (await sessionFileHeaderMatches(link.childSessionFile, { sessionId: childSessionId, parentSessionFile: link.parentSessionFile }))) {
-      const name = await this.persistedSubsessionName(childSessionId, link.cwd);
+      const name = await this.persistedSubsessionName(childSessionId, link.cwd, metadataListings);
       return { cwd: link.cwd ?? "", status: "idle", ...(name === undefined ? {} : { name }) };
     }
     if (link?.cwd !== undefined) return { cwd: link.cwd, status: "unknown" };
@@ -2604,7 +2624,7 @@ export class PiSessionService implements SessionRouteService {
 
   private async renderSubsessionCompletionNotice(parentId: string, completions: readonly SubsessionCompletion[]): Promise<string> {
     const statuses = await Promise.all(completions.map(async ({ sessionId }) => {
-      const { status } = await this.subsessionSummaryFields(sessionId);
+      const status = await this.subsessionStatusOnly(sessionId);
       return `Current status of subsession ${sessionId} when this notice was sent: ${status}.`;
     }));
     return `${renderSubsessionCompletions(completions, this.workingSubsessionIds(parentId))}\n\n${statuses.join("\n")}`;

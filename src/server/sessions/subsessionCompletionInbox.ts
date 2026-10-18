@@ -1,5 +1,4 @@
-import { requireInitialSessionName } from "./sessionNameGenerator.js";
-import { subsessionDisplay, type SubsessionContextUsage, type SubsessionStatus, type SubsessionTokens } from "./spawnSubsessionTool.js";
+import { formatMetadataText, subsessionDisplay, type SubsessionContextUsage, type SubsessionStatus, type SubsessionTokens } from "./spawnSubsessionTool.js";
 
 export const SUBSESSION_COMPLETION_ENTRY_TYPE = "pi-web.subsession.completed";
 export const SUBSESSION_RECEIPT_ENTRY_TYPE = "pi-web.subsession.received";
@@ -121,7 +120,14 @@ export function completionReceiptIds(value: unknown): string[] {
   return value["completionIds"].filter((id): id is string => typeof id === "string");
 }
 
-export function persistedSubsessionCompletions(entries: readonly unknown[]): SubsessionCompletion[] {
+/**
+ * Decode persisted completions. Optional display metadata that is present but
+ * invalid is dropped as unknown (the completion and receipt stay valid) and
+ * reported by field name only through `reportDroppedField`, so corruption is
+ * distinguishable from a genuinely absent legacy field. Absent fields are not
+ * reported and are never filled with invented values.
+ */
+export function persistedSubsessionCompletions(entries: readonly unknown[], reportDroppedField?: (field: string) => void): SubsessionCompletion[] {
   return entries.flatMap((entry) => {
     if (!isRecord(entry) || entry["type"] !== "custom" || entry["customType"] !== SUBSESSION_COMPLETION_ENTRY_TYPE) return [];
     const data = entry["data"];
@@ -132,6 +138,15 @@ export function persistedSubsessionCompletions(entries: readonly unknown[]): Sub
     const name = persistedName(data["name"]);
     const tokens = persistedTokens(data["tokens"]);
     const contextUsage = persistedContextUsage(data["contextUsage"]);
+    const model = typeof data["model"] === "string" && data["model"] !== "" ? data["model"] : undefined;
+    const thinkingLevel = typeof data["thinkingLevel"] === "string" && data["thinkingLevel"] !== "" ? data["thinkingLevel"] : undefined;
+    if (reportDroppedField !== undefined) {
+      if ("name" in data && name === undefined) reportDroppedField("name");
+      if ("tokens" in data && tokens === undefined) reportDroppedField("tokens");
+      if ("contextUsage" in data && contextUsage === undefined) reportDroppedField("contextUsage");
+      if ("model" in data && model === undefined) reportDroppedField("model");
+      if ("thinkingLevel" in data && thinkingLevel === undefined) reportDroppedField("thinkingLevel");
+    }
     return [{
       completionId: data["completionId"], sessionId: data["sessionId"], cwd: data["cwd"], status: data["status"],
       finalText: data["finalText"], messageCount: data["messageCount"],
@@ -139,18 +154,22 @@ export function persistedSubsessionCompletions(entries: readonly unknown[]): Sub
       ...(typeof data["completedAt"] === "string" ? { completedAt: data["completedAt"] } : {}),
       ...(typeof data["errorDetail"] === "string" ? { errorDetail: data["errorDetail"] } : {}),
       ...(name === undefined ? {} : { name }),
-      ...(typeof data["model"] === "string" && data["model"] !== "" ? { model: data["model"] } : {}),
-      ...(typeof data["thinkingLevel"] === "string" && data["thinkingLevel"] !== "" ? { thinkingLevel: data["thinkingLevel"] } : {}),
+      ...(model === undefined ? {} : { model }),
+      ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
       ...(tokens === undefined ? {} : { tokens }),
       ...(contextUsage === undefined ? {} : { contextUsage }),
     }];
   });
 }
 
-/** Bound automatic notices; deliberate inspection still returns the complete run output. */
-/** A persisted name is display text: accept only the ordinary naming shape, so a crafted record cannot inject lines into a notice. */
+/**
+ * A persisted name is display text, kept raw. It is NOT gated by the stricter
+ * 60-character initial-spawn validator: names set later (e.g. `/name`, SDK
+ * rename) have no such cap and must survive reopen. Safety lives in the
+ * rendering formatter (quoted, escaped, bounded), not in dropping the name.
+ */
 function persistedName(value: unknown): string | undefined {
-  try { return requireInitialSessionName(value); } catch { return undefined; }
+  return typeof value === "string" && value !== "" ? value : undefined;
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -161,6 +180,8 @@ function persistedTokens(value: unknown): SubsessionTokens | undefined {
   if (!isRecord(value)) return undefined;
   const { input, output, cacheRead, cacheWrite, total } = value;
   if (!isFiniteNumber(input) || !isFiniteNumber(output) || !isFiniteNumber(cacheRead) || !isFiniteNumber(cacheWrite) || !isFiniteNumber(total)) return undefined;
+  // Counters cannot be negative. Derived totals are not re-checked for equality.
+  if (input < 0 || output < 0 || cacheRead < 0 || cacheWrite < 0 || total < 0) return undefined;
   return { input, output, cacheRead, cacheWrite, total };
 }
 
@@ -169,9 +190,11 @@ function persistedContextUsage(value: unknown): SubsessionContextUsage | undefin
   const contextWindow = value["contextWindow"];
   const tokens = value["tokens"];
   const percent = value["percent"];
-  if (!isFiniteNumber(contextWindow)) return undefined;
-  if (tokens !== null && !isFiniteNumber(tokens)) return undefined;
-  if (percent !== null && !isFiniteNumber(percent)) return undefined;
+  // The window must be positive and occupancy non-negative. Percent is not
+  // capped at 100 and is not required to match the token counts.
+  if (!isFiniteNumber(contextWindow) || contextWindow <= 0) return undefined;
+  if (tokens !== null && (!isFiniteNumber(tokens) || tokens < 0)) return undefined;
+  if (percent !== null && (!isFiniteNumber(percent) || percent < 0)) return undefined;
   return { tokens, contextWindow, percent };
 }
 
@@ -179,8 +202,8 @@ export function renderSubsessionCompletion(completion: SubsessionCompletion): st
   const { sessionId, status, finalText, errorDetail, startedAt, completedAt } = completion;
   const error = errorDetail === undefined ? "" : `Error: ${errorDetail}\n\n`;
   const snapshotParts: string[] = [];
-  if (completion.model !== undefined) snapshotParts.push(`model ${completion.model}`);
-  if (completion.thinkingLevel !== undefined) snapshotParts.push(`thinking level ${completion.thinkingLevel}`);
+  if (completion.model !== undefined) snapshotParts.push(`model ${formatMetadataText(completion.model)}`);
+  if (completion.thinkingLevel !== undefined) snapshotParts.push(`thinking level ${formatMetadataText(completion.thinkingLevel)}`);
   if (completion.tokens !== undefined) snapshotParts.push(`cumulative tokens ${String(completion.tokens.total)} total`);
   if (completion.contextUsage !== undefined) {
     const percent = completion.contextUsage.percent === null ? "unknown percent" : `${String(completion.contextUsage.percent)}%`;
