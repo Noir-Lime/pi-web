@@ -52,6 +52,7 @@ function createContext(statePatch: Partial<AppState> = {}) {
     },
     piWebUnstable: {
       openSettings: vi.fn(() => { calls.push("openSettings"); }),
+      openMcpAuth: vi.fn((mode: "login" | "logout") => { calls.push(`openMcpAuth:${mode}`); }),
     },
     openActionPalette: vi.fn(() => { calls.push("openActionPalette"); }),
     focusPrompt: vi.fn(() => { calls.push("focusPrompt"); }),
@@ -1492,6 +1493,23 @@ describe("PluginRegistry", () => {
     if (thinkingAction !== undefined) void thinkingAction.run();
 
     expect(calls).toEqual(["openModelPicker", "openThinkingLevelPicker"]);
+  });
+
+  it("offers separate MCP actions requiring a selected nonarchived session", async () => {
+    const registry = new PluginRegistry();
+    await registry.register({ id: "core", plugin: corePlugin });
+    const unavailable = registry.getActions(createContext().context);
+    expect(unavailable.find((action) => action.id === "core:mcp.login")?.enabled).toBe(false);
+    const archived = registry.getActions(createContext({ selectedSession: { ...testSession(), archived: true } }).context);
+    expect(archived.find((action) => action.id === "core:mcp.logout")?.enabled).toBe(false);
+    const { context, calls } = createContext({ selectedSession: testSession() });
+    const actions = registry.getActions(context);
+    expect(actions.find((action) => action.id === "core:mcp.login")).toMatchObject({ title: "MCP login", enabled: true });
+    expect(actions.find((action) => action.id === "core:mcp.logout")).toMatchObject({ title: "MCP logout", enabled: true });
+    await actions.find((action) => action.id === "core:mcp.login")?.run();
+    await actions.find((action) => action.id === "core:mcp.logout")?.run();
+    expect(calls).toEqual(["openMcpAuth:login", "openMcpAuth:logout"]);
+    await registry.dispose();
   });
 
   it("routes app reload and settings actions through the runtime context", async () => {

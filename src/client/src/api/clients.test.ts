@@ -48,6 +48,31 @@ afterEach(() => {
 });
 
 describe("machine-scoped runtime API", () => {
+  it("starts and controls a scoped MCP auth flow with encoded identifiers", async () => {
+    const flow = { flowId: "flow /1", target: "mcp", providerId: "mcp", providerName: "MCP server", status: "running", progress: [] };
+    const fetchMock = stubSequenceFetch(Array.from({ length: 4 }, () => jsonResponse(flow)));
+    const session = { id: "session /1", cwd: "/repo" };
+    await sessionsApi.startMcpAuth(session, "login", "remote a", "Budgeter");
+    await sessionsApi.mcpAuthFlow(flow.flowId, "remote a");
+    await sessionsApi.respondMcpAuthFlow(flow.flowId, "request-1", "http://localhost/callback?code=abc", "remote a");
+    await sessionsApi.cancelMcpAuthFlow(flow.flowId, "remote a");
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      "https://pi.example.test/api/machines/remote%20a/sessions/session%20%2F1/mcp/auth",
+      "https://pi.example.test/api/machines/remote%20a/auth/mcp/flow%20%2F1",
+      "https://pi.example.test/api/machines/remote%20a/auth/mcp/flow%20%2F1/respond",
+      "https://pi.example.test/api/machines/remote%20a/auth/mcp/flow%20%2F1/cancel",
+    ]);
+    expect(JSON.parse(requestBody(fetchCall(fetchMock, 0)[1]))).toEqual({ cwd: "/repo", mode: "login", serverName: "Budgeter" });
+    expect(JSON.parse(requestBody(fetchCall(fetchMock, 2)[1]))).toEqual({ requestId: "request-1", value: "http://localhost/callback?code=abc" });
+  });
+
+  it("lists MCP authentication candidates for the exact session and machine", async () => {
+    const response = { servers: [{ name: "Budgeter", description: "connected" }] };
+    const fetchMock = stubJsonFetch(response);
+    await expect(sessionsApi.mcpAuthServers({ id: "session /1", cwd: "/work repo" }, "remote a")).resolves.toEqual(response);
+    expect(fetchCall(fetchMock, 0)[0]).toBe("https://pi.example.test/api/machines/remote%20a/sessions/session%20%2F1/mcp/auth/servers?cwd=%2Fwork+repo");
+  });
+
   it("reads scoped notices and dismisses them through the selected machine route", async () => {
     const snapshot = {
       daemonInstanceId: "daemon-a",

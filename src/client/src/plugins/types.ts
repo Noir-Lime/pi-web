@@ -210,6 +210,7 @@ export interface WorkspacePanelTerminal {
 
 export interface PiWebUnstableRuntimeContext {
   openSettings?: (section?: SettingsSection) => void;
+  openMcpAuth?: (mode: "login" | "logout") => void | Promise<void>;
 }
 
 export type { PluginPromptEditor } from "../../../plugin-api";

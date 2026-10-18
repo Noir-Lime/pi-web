@@ -14,6 +14,7 @@ import { registerServerNoticeRoutes } from "./notices/serverNoticeRoutes.js";
 import { AuthService } from "./sessions/authService.js";
 import { bootstrapAndFreezeGlobalExtensionProviders } from "./sessions/globalProviderPolicy.js";
 import { registerAuthRoutes } from "./sessions/authRoutes.js";
+import { registerMcpAuthRoutes } from "./sessions/mcpAuthRoutes.js";
 import { ModelCatalogRefresher } from "./sessions/modelCatalogRefresher.js";
 import { PiSessionService } from "./sessions/piSessionService.js";
 import { createPiSessionManagerGateway } from "./sessions/piSessionManagerGateway.js";
@@ -458,6 +459,7 @@ function registerSessionDaemonRoutes({ eventHub, machineStatus, statusAttributio
   registerMachineStatusRoutes(app, machineStatus);
   registerServerNoticeRoutes(app, serverNotices);
   registerAuthRoutes(app, auth);
+  registerMcpAuthRoutes(app, sessions);
   registerSessionRoutes(app, sessions, eventHub);
   registerWorkspaceCatalogRoutes(app, {
     projects,
