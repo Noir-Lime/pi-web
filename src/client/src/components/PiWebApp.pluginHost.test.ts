@@ -7,7 +7,7 @@ import { TerminalBrowserRuntime } from "../../../../pi-web-plugins/terminal/Term
 import { TERMINAL_BROWSER_FACADE_CAPABILITY, TerminalFacade, type RequiredTerminalBrowserFacadeV1, type RequiredTerminalWorkspaceBindingV1 } from "../../../../pi-web-plugins/terminal/TerminalFacade";
 import { InMemoryTerminalSelectionMemory } from "../../../../pi-web-plugins/terminal/terminalSelection";
 import type { QualifiedContributionId, WorkspaceFilesCapabilityV1, WorkspacePanelContext as PublicWorkspacePanelContext } from "../../../plugin-api";
-import type { Machine, Project, SessionInfo, TerminalCommandRun, Workspace } from "../api";
+import type { Machine, Project, SessionInfo, TerminalCommandRun, Workspace, WorkspaceProviderResolution } from "../api";
 import { machineScopedBundledPluginId, machineScopedPluginId } from "../../../shared/machinePluginIds";
 import { initialAppState } from "../appState";
 import { AppShellController } from "../appShell/appShellController";
@@ -518,7 +518,7 @@ describe("PiWebApp plugin host", () => {
     const loadSessions = vi.fn().mockReturnValue(sessionLoad.promise);
     const controller: unknown = Reflect.get(app, "workspaces");
     if (typeof controller !== "object" || controller === null) throw new Error("PiWebApp workspace controller was unavailable");
-    if (!Reflect.set(controller, "api", { workspaces: loadWorkspaces, sessions: loadSessions })) throw new Error("Could not stub workspace APIs");
+    if (!Reflect.set(controller, "api", { workspaceResolution: workspaceResolutionLoader(loadWorkspaces), sessions: loadSessions })) throw new Error("Could not stub workspace APIs");
 
     const selection = callAsyncAppMethod(app, "selectWorkspaceFromNavigation", nextWorkspace);
     await vi.waitFor(() => {
@@ -599,7 +599,7 @@ describe("PiWebApp plugin host", () => {
     const loadSessions = vi.fn().mockReturnValue(sessionListReload.promise);
     const workspaceController: unknown = Reflect.get(app, "workspaces");
     if (typeof workspaceController !== "object" || workspaceController === null) throw new Error("PiWebApp workspace controller was unavailable");
-    if (!Reflect.set(workspaceController, "api", { workspaces: loadWorkspaces, sessions: loadSessions })) throw new Error("Could not stub workspace APIs");
+    if (!Reflect.set(workspaceController, "api", { workspaceResolution: workspaceResolutionLoader(loadWorkspaces), sessions: loadSessions })) throw new Error("Could not stub workspace APIs");
 
     const selectedSessionRefresh = deferred<undefined>();
     const sessionController: unknown = Reflect.get(app, "sessions");
@@ -1232,9 +1232,9 @@ describe("PiWebApp plugin host", () => {
     const controller: unknown = Reflect.get(app, "workspaces");
     if (typeof controller !== "object" || controller === null) throw new Error("Missing workspace controller");
     Reflect.set(controller, "api", {
-      workspaces: scenario === "workspace load failure"
+      workspaceResolution: workspaceResolutionLoader(scenario === "workspace load failure"
         ? vi.fn().mockRejectedValue(new Error(message))
-        : vi.fn().mockResolvedValue(scenario === "missing workspace" ? [] : [workspace]),
+        : vi.fn().mockResolvedValue(scenario === "missing workspace" ? [] : [workspace])),
       sessions: scenario === "session list failure"
         ? vi.fn().mockRejectedValue(new Error(message))
         : vi.fn().mockResolvedValue([{ id: "another-session", cwd: workspace.path, path: "/repo/another.jsonl", created: "now", modified: "now", messageCount: 0, firstMessage: "Not the requested session" } satisfies SessionInfo]),
@@ -1307,7 +1307,7 @@ describe("PiWebApp plugin host", () => {
     const controller: unknown = Reflect.get(app, "workspaces");
     if (typeof controller !== "object" || controller === null) throw new Error("Missing workspace controller");
     Reflect.set(controller, "api", {
-      workspaces: vi.fn().mockResolvedValue([workspace]),
+      workspaceResolution: workspaceResolutionLoader(vi.fn().mockResolvedValue([workspace])),
       sessions: vi.fn().mockResolvedValue([]),
     });
     await callAsyncAppMethod(app, "restoreRoute", false);
@@ -1450,7 +1450,7 @@ describe("PiWebApp plugin host", () => {
     const workspaces: unknown = Reflect.get(app, "workspaces");
     if (typeof workspaces !== "object" || workspaces === null) throw new Error("Missing workspace controller");
     if (!Reflect.set(workspaces, "api", {
-      workspaces: async () => { await waitAt("workspaces"); return [workspace]; },
+      workspaceResolution: workspaceResolutionLoader(async () => { await waitAt("workspaces"); return [workspace]; }),
       sessions: async () => { await waitAt("sessions"); return [session]; },
     })) throw new Error("Could not stub workspace API");
     const sessions: unknown = Reflect.get(app, "sessions");
@@ -1626,7 +1626,7 @@ describe("PiWebApp plugin host", () => {
     const loadSessions = vi.fn<(path: string, machineId?: string) => Promise<SessionInfo[]>>().mockResolvedValue([]);
     const controller: unknown = Reflect.get(app, "workspaces");
     if (typeof controller !== "object" || controller === null) throw new Error("PiWebApp workspace controller was unavailable");
-    if (!Reflect.set(controller, "api", { workspaces: loadWorkspaces, sessions: loadSessions })) throw new Error("Could not stub workspace APIs");
+    if (!Reflect.set(controller, "api", { workspaceResolution: workspaceResolutionLoader(loadWorkspaces), sessions: loadSessions })) throw new Error("Could not stub workspace APIs");
 
     const firstRestore = callAsyncAppMethod(app, "restoreRouteFor", {
       machineId: undefined,
@@ -1680,7 +1680,7 @@ describe("PiWebApp plugin host", () => {
       : vi.fn().mockResolvedValue([]);
     const controller: unknown = Reflect.get(app, "workspaces");
     if (typeof controller !== "object" || controller === null) throw new Error("Workspace controller unavailable");
-    if (!Reflect.set(controller, "api", { workspaces: loadWorkspaces, sessions: loadSessions })) throw new Error("Could not stub workspace APIs");
+    if (!Reflect.set(controller, "api", { workspaceResolution: workspaceResolutionLoader(loadWorkspaces), sessions: loadSessions })) throw new Error("Could not stub workspace APIs");
     const route = { projectId: project.id, workspaceId: workspace.id, sessionId: "missing", view: "chat" };
     const first = callAsyncAppMethod(app, "restoreRouteFor", route, false, {}, undefined, "deferred");
     const pendingLoad = phase === "workspaces" ? loadWorkspaces : loadSessions;
@@ -1766,7 +1766,7 @@ describe("PiWebApp plugin host", () => {
     const workspaces: unknown = Reflect.get(app, "workspaces");
     if (typeof workspaces !== "object" || workspaces === null) throw new Error("PiWebApp workspace controller was unavailable");
     if (!Reflect.set(workspaces, "api", {
-      workspaces: vi.fn().mockResolvedValue([workspace]),
+      workspaceResolution: workspaceResolutionLoader(vi.fn().mockResolvedValue([workspace])),
       sessions: vi.fn().mockResolvedValue([restoredSession]),
     })) throw new Error("Could not stub workspace APIs");
 
@@ -3653,7 +3653,7 @@ describe("PiWebApp plugin host", () => {
       return pendingWorkspaces.promise;
     });
     const loadSessions = vi.fn(() => Promise.resolve([]));
-    if (!Reflect.set(workspaceController, "api", { ...controllerApi, workspaces: loadWorkspaces, sessions: loadSessions })) {
+    if (!Reflect.set(workspaceController, "api", { ...controllerApi, workspaceResolution: workspaceResolutionLoader(loadWorkspaces), sessions: loadSessions })) {
       throw new Error("Could not control workspace reconciliation requests");
     }
 
@@ -4686,7 +4686,7 @@ async function installRuntimeRecoveryBoundaries(
   const workspaces: unknown = Reflect.get(app, "workspaces");
   if (typeof workspaces !== "object" || workspaces === null) throw new Error("Missing workspace controller");
   if (!Reflect.set(workspaces, "api", {
-    workspaces: loadWorkspaces,
+    workspaceResolution: workspaceResolutionLoader(loadWorkspaces),
     sessions: () => Promise.resolve([session]),
   })) throw new Error("Could not stub workspace API");
   const sessions: unknown = Reflect.get(app, "sessions");
@@ -4775,6 +4775,13 @@ function stubCommittedRouteRestore(app: PiWebApp, applySelection: () => void): v
     applySelection();
     return Promise.resolve();
   })) throw new Error("Could not stub committed route reconciliation");
+}
+
+function workspaceResolutionLoader<Args extends unknown[]>(load: (...args: Args) => Promise<Workspace[]>): (...args: Args) => Promise<WorkspaceProviderResolution> {
+  return async (...args) => {
+    const workspaces = await load(...args);
+    return { projectId: workspaces[0]?.projectId ?? project.id, status: "provider", ownerPluginId: "git", diagnostics: [], workspaces };
+  };
 }
 
 function stubWorkspaceProjectSelection(app: PiWebApp, applySelection: () => void): void {

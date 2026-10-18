@@ -28,6 +28,7 @@ export class AppNavigationPanel extends LitElement {
   @property({ attribute: false }) machineStatusSnapshots: Record<string, MachineStatusSnapshot> = {};
   @property({ attribute: false }) projects: Project[] = [];
   @property({ attribute: false }) selectedProject?: Project;
+  @property({ type: Boolean }) workspaceSelectionVisible = true;
   @property({ attribute: false }) workspaces: Workspace[] = [];
   @property({ attribute: false }) selectedWorkspace?: Workspace;
   @property({ attribute: false }) sessions: SessionInfo[] = [];
@@ -102,7 +103,7 @@ export class AppNavigationPanel extends LitElement {
     switch (section) {
       case "machines": return await this.focusNavigableSection(this.compact ? this.machineList : this.machineSwitcher);
       case "projects": return await this.focusNavigableSection(this.projectList);
-      case "workspaces": return await this.focusNavigableSection(this.workspaceList);
+      case "workspaces": return this.workspaceSelectionVisible && await this.focusNavigableSection(this.workspaceList);
       case "sessions": return await this.focusNavigableSection(this.sessionList);
     }
   }
@@ -199,7 +200,7 @@ export class AppNavigationPanel extends LitElement {
         .onFocusNextSection=${this.childCallbacks.nextFromProjects}
         .onCancelKeyboardNavigation=${this.childCallbacks.cancelKeyboardNavigation}
       ></project-list>
-      <workspace-list
+      ${this.workspaceSelectionVisible ? html`<workspace-list
         .workspaces=${this.workspaces}
         .selected=${this.selectedWorkspace}
         .machineId=${this.selectedMachine?.id ?? "local"}
@@ -215,7 +216,7 @@ export class AppNavigationPanel extends LitElement {
         .onFocusPreviousSection=${this.childCallbacks.previousFromWorkspaces}
         .onFocusNextSection=${this.childCallbacks.nextFromWorkspaces}
         .onCancelKeyboardNavigation=${this.childCallbacks.cancelKeyboardNavigation}
-      ></workspace-list>
+      ></workspace-list>` : null}
       <session-list
         .sessions=${this.sessions}
         .pinnedRootIds=${this.pinnedRootIds}
@@ -273,12 +274,12 @@ export class AppNavigationPanel extends LitElement {
   }
 
   private focusPreviousFrom(section: NavigationSection): void {
-    const target = previousVisibleNavigationTarget(section, this.machines);
+    const target = previousVisibleNavigationTarget(section, this.machines, this.workspaceSelectionVisible);
     if (target !== undefined) void this.onFocusNavigationTarget?.(target);
   }
 
   private focusNextFrom(section: NavigationSection): void {
-    void this.onFocusNavigationTarget?.(nextVisibleNavigationTarget(section, this.machines));
+    void this.onFocusNavigationTarget?.(nextVisibleNavigationTarget(section, this.machines, this.workspaceSelectionVisible));
   }
 
   private cancelKeyboardNavigation(): void {
@@ -314,18 +315,19 @@ export function shouldShowMachinesSection(machines: readonly Machine[]): boolean
   return machines.length > 1;
 }
 
-function previousVisibleNavigationTarget(section: NavigationSection, machines: readonly Machine[]): NavigationSection | undefined {
-  const sections = visibleNavigationSections(machines);
+function previousVisibleNavigationTarget(section: NavigationSection, machines: readonly Machine[], workspaceSelectionVisible: boolean): NavigationSection | undefined {
+  const sections = visibleNavigationSections(machines, workspaceSelectionVisible);
   return sections[sections.indexOf(section) - 1];
 }
 
-function nextVisibleNavigationTarget(section: NavigationSection, machines: readonly Machine[]): NavigationFocusTarget {
-  const sections = visibleNavigationSections(machines);
+function nextVisibleNavigationTarget(section: NavigationSection, machines: readonly Machine[], workspaceSelectionVisible: boolean): NavigationFocusTarget {
+  const sections = visibleNavigationSections(machines, workspaceSelectionVisible);
   return sections[sections.indexOf(section) + 1] ?? "chat";
 }
 
 // Only a machine choice makes the machines section navigable: with a single
 // machine the switcher is a static identity, and compact mode has no list.
-function visibleNavigationSections(machines: readonly Machine[]): NavigationSection[] {
-  return NAVIGATION_SECTION_ORDER.filter((section) => section !== "machines" || shouldShowMachinesSection(machines));
+function visibleNavigationSections(machines: readonly Machine[], workspaceSelectionVisible: boolean): NavigationSection[] {
+  return NAVIGATION_SECTION_ORDER.filter((section) => (section !== "machines" || shouldShowMachinesSection(machines))
+    && (section !== "workspaces" || workspaceSelectionVisible));
 }

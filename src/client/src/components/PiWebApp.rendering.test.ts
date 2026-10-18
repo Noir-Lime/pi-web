@@ -870,6 +870,31 @@ function dismissActivityNotice(app: PiWebApp): void {
   button.click();
 }
 
+it.each([false, true])("hides only folder workspace UI and retains its workspace context (mobile=%s)", async (mobile) => {
+  const app = await mountApp({
+    selectedProject: { id: "project", name: "Project", path: "/repo/subdir", createdAt: "now" },
+    selectedWorkspace: { ...workspace, path: "/repo/subdir" }, workspaces: [workspace],
+    workspaceResolution: { projectId: "project", status: "folder", diagnostics: [], workspaces: [workspace] },
+    mainView: "navigation",
+  }, (context) => html`<p>${context.state.selectedWorkspace?.path}</p>`);
+  const shell: unknown = Reflect.get(app, "appShell");
+  if (!(shell instanceof AppShellController)) throw new Error("Expected shell controller");
+  shell.isMobileNavigationLayout = mobile;
+  app.requestUpdate();
+  await settle(app);
+  const navigation = () => app.shadowRoot?.querySelector("app-navigation-panel");
+  expect(navigation()?.shadowRoot?.querySelector("workspace-list")).toBeNull();
+  if (mobile) expect(app.shadowRoot?.querySelector("app-context-bar")?.shadowRoot?.querySelector('button[aria-label^="Workspace:"]')).toBeNull();
+  expect(app.shadowRoot?.querySelector("workspace-panel")?.shadowRoot?.textContent).toContain("/repo/subdir");
+
+  for (const status of ["provider", "degraded"] as const) {
+    patchState(app, { workspaceResolution: { projectId: "project", status, diagnostics: [], workspaces: [workspace] } });
+    await settle(app);
+    expect(navigation()?.shadowRoot?.querySelector("workspace-list")).toBeInstanceOf(WorkspaceList);
+    if (mobile) expect(app.shadowRoot?.querySelector("app-context-bar")?.shadowRoot?.querySelector('button[aria-label^="Workspace:"]')).not.toBeNull();
+  }
+});
+
 async function mountApp(patch: Partial<AppState>, panelRender?: (context: WorkspacePanelContext) => ReturnType<typeof html>, label?: () => string): Promise<RenderOnlyApp> {
   const app = new RenderOnlyApp();
   if (panelRender !== undefined) {

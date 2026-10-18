@@ -114,6 +114,34 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe("WorkspaceController resolution state", () => {
+  it.each(["folder", "provider", "degraded"] as const)("retains %s resolution during project selection", async (status) => {
+    const repo = project("p1", "/repo/subdir");
+    const folder = workspace(repo.id, repo.path, { isMain: true });
+    const resolution: WorkspaceProviderResolution = {
+      projectId: repo.id, status, workspaces: status === "degraded" ? [] : [folder],
+      ...(status === "provider" ? { ownerPluginId: "git" } : {}),
+      diagnostics: status === "degraded" ? [{ code: "list-failed", tier: "primary", pluginId: "git", message: "Git is temporarily unavailable" }] : [],
+    };
+    const test = harness({ projects: [repo] }, vi.fn(), {
+      loadWorkspaceResolution: vi.fn().mockResolvedValue(resolution),
+    });
+
+    const error = await test.controller.selectProject(repo);
+
+    expect(test.state().workspaceResolution).toBe(resolution);
+    if (status === "degraded") {
+      expect(error).toContain("Git is temporarily unavailable");
+      expect(test.state().selectedWorkspace).toBeUndefined();
+    } else {
+      expect(error).toBeUndefined();
+      expect(test.state().selectedWorkspace?.path).toBe("/repo/subdir");
+    }
+    test.controller.clearSelection();
+    expect(test.state().workspaceResolution).toBeUndefined();
+  });
+});
+
 describe("WorkspaceController route selection freshness", () => {
   it("keeps the newest project and workspace after overlapping project responses complete out of order", async () => {
     const firstProject = project("p1", "/first");
@@ -272,6 +300,8 @@ describe("WorkspaceController.refreshSelectedProjectTopology", () => {
 
     await test.controller.refreshSelectedProjectTopology();
 
+    expect(test.state().workspaceResolution?.status).toBe("degraded");
+    expect(test.state().workspaceResolution?.diagnostics[0]?.message).toBe("Git is temporarily unavailable");
     expect(test.state().workspaces).toBe(workspaces);
     expect(test.state().workspacesByProjectId["p"]).toBe(workspaces);
     expect(test.state().selectedWorkspace).toBe(selectedWorkspace);
@@ -822,12 +852,14 @@ describe("WorkspaceController.refreshSelectedProjectTopology", () => {
     const main = workspace(repo.id, repo.path, { isMain: true });
     let resolveNavigationList!: (workspaces: Workspace[]) => void;
     const navigationList = new Promise<Workspace[]>((resolve) => { resolveNavigationList = resolve; });
-    const loadTopology = vi.fn();
+    const loadTopology = vi.fn(async (): Promise<WorkspaceProviderResolution> => ({
+      projectId: repo.id, status: "provider", ownerPluginId: "git", diagnostics: [], workspaces: await navigationList,
+    }));
     const test = harness({ projects: [repo] }, () => navigationList, { loadWorkspaceResolution: loadTopology });
 
     const selecting = test.controller.selectProject(repo);
     await test.controller.refreshSelectedProjectTopology();
-    expect(loadTopology).not.toHaveBeenCalled();
+    expect(loadTopology).toHaveBeenCalledTimes(1);
     resolveNavigationList([main]);
     await selecting;
 

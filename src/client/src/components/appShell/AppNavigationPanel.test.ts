@@ -28,6 +28,27 @@ describe("shouldShowMachinesSection", () => {
   });
 });
 
+describe("folder workspace navigation", () => {
+  it.each([false, true])("skips hidden workspace controls in both keyboard directions (compact=%s)", async (compact) => {
+    const panel = await mountPanel({}, machine("local"));
+    panel.compact = compact;
+    panel.workspaceSelectionVisible = false;
+    panel.sessions = [session("root")];
+    panel.onFocusNavigationTarget = vi.fn();
+    await panel.updateComplete;
+    const projects = section(panel, "project-list", ProjectList);
+    const sessions = section(panel, "session-list", SessionList);
+    await Promise.all([projects.updateComplete, sessions.updateComplete]);
+
+    expect(panel.shadowRoot?.querySelector("workspace-list")).toBeNull();
+    expect(await panel.focusSection("workspaces")).toBe(false);
+    control(projects, ".action-row").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    expect(panel.onFocusNavigationTarget).toHaveBeenLastCalledWith("sessions");
+    control(sessions, ".action-row").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    expect(panel.onFocusNavigationTarget).toHaveBeenLastCalledWith("projects");
+  });
+});
+
 describe("header identity", () => {
   it("leaves header identity to the machine switcher without a separate brand title", async () => {
     const panel = await mountHeaderPanel([machine("local")]);

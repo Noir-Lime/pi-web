@@ -13,6 +13,7 @@ export class AppContextBar extends LitElement {
   /** PWA display mode: surfaces the machine location identity in the breadcrumb. */
   @property({ type: Boolean }) locationIndicator = false;
   @property({ attribute: false }) project?: Project;
+  @property({ type: Boolean }) workspaceSelectionVisible = true;
   @property({ attribute: false }) workspace?: Workspace;
   @property({ attribute: false }) session?: SessionInfo;
   @property({ attribute: false }) refreshControl: unknown;
@@ -77,12 +78,12 @@ export class AppContextBar extends LitElement {
               <span class="context-value">${projectLabel}</span>
             </button>
           </li>
-          <li class="context-item">
+          ${this.workspaceSelectionVisible ? html`<li class="context-item">
             <button type="button" class=${this.workspace === undefined ? "context-chip empty" : "context-chip"} title=${workspaceContextTitle(this.workspace)} aria-label=${`Workspace: ${workspaceLabel}. Open workspace selection.`} @click=${() => { this.onOpenSection?.("workspaces"); }}>
               <span class="context-kind">Workspace</span>
               <span class="context-value">${workspaceLabel}</span>
             </button>
-          </li>
+          </li>` : null}
           <li class="context-item">
             <button type="button" class=${this.session === undefined ? "context-chip empty" : "context-chip"} title=${sessionContextTitle(this.session)} aria-label=${`Session: ${sessionLabel}. Open session selection.`} @click=${() => { this.onOpenSection?.("sessions"); }}>
               <span class="context-kind">Session</span>
