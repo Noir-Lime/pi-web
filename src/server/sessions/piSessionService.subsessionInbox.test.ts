@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PiSessionService } from "./piSessionService.js";
-import { CapturingSessionEventHub, emptyArchiveStore, fakeRuntime, fakeSessionManager, sessionGateway, sessionRecord, sessionRef, testModelRuntime } from "./piSessionService.testSupport.js";
+import { CapturingSessionEventHub, emptyArchiveStore, fakeRuntime, fakeSessionManager, sessionGateway, sessionRecord, sessionRef, testModel, testModelRuntime } from "./piSessionService.testSupport.js";
 import type { SubsessionReadQuery } from "./spawnSubsessionTool.js";
 import { completionReceiptIds, persistedSubsessionCompletions, SUBSESSION_COMPLETION_ENTRY_TYPE, SUBSESSION_NOTIFICATION_CUSTOM_TYPE, SUBSESSION_RECEIPT_ENTRY_TYPE, type SubsessionCompletion } from "./subsessionCompletionInbox.js";
 
@@ -120,6 +120,41 @@ afterEach(async () => {
 });
 
 describe("PiSessionService shared subsession completion inbox", () => {
+  it("delivers the settlement snapshot, not live identity mutated while the parent was busy", async () => {
+    const { service, parent, child } = await inboxService();
+    // Identity/usage as captured at settlement.
+    child.session.sessionName = "Worker Bee";
+    child.session.model = testModel();
+    child.session.thinkingLevel = "low";
+    child.session.getSessionStats = () => ({ sessionId: "child-1", totalMessages: 1, userMessages: 1, assistantMessages: 0, toolCalls: 0, tokens: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, total: 18 }, cost: 0, contextUsage: { tokens: 100, contextWindow: 1000, percent: 10 } });
+    startChildRun(child);
+    finishChildRun(child);
+    await vi.advanceTimersByTimeAsync(0);
+    // Parent is still busy, so nothing has been delivered yet.
+    expect(parent.calls.sendCustomMessage).toHaveLength(0);
+    // Mutate live identity and advance usage after settlement.
+    child.session.sessionName = "Renamed Later";
+    child.session.model = undefined;
+    child.session.thinkingLevel = "xhigh";
+    child.session.getSessionStats = () => ({ sessionId: "child-1", totalMessages: 9, userMessages: 9, assistantMessages: 0, toolCalls: 0, tokens: { input: 900, output: 900, cacheRead: 0, cacheWrite: 0, total: 1800 }, cost: 0, contextUsage: { tokens: 900, contextWindow: 1000, percent: 90 } });
+    // The persisted completion records the same old snapshot.
+    const persisted = persistedSubsessionCompletions(child.journal.entries);
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]).toMatchObject({ name: "Worker Bee", model: "anthropic/claude-sonnet-4-5-20250929", thinkingLevel: "low", tokens: { total: 18 }, contextUsage: { percent: 10 } });
+    // Release parent delivery; the notice must show the captured values.
+    await settleParent(parent);
+    expect(parent.calls.sendCustomMessage).toHaveLength(1);
+    const content = parent.calls.sendCustomMessage[0]?.message.content ?? "";
+    expect(content).toContain('Subsession "Worker Bee" (child-1) stopped working');
+    expect(content).toContain('model "anthropic/claude-sonnet-4-5-20250929"');
+    expect(content).toContain('thinking level "low"');
+    expect(content).toContain("cumulative tokens 18 total");
+    expect(content).toContain("context usage 10% of 1000 context window");
+    expect(content).not.toContain("Renamed Later");
+    expect(content).not.toContain("1800");
+    void service;
+  });
+
   it("returns ready answers at the yield/join point without later automatic replay", async () => {
     const { service, parent, child } = await inboxService();
     startChildRun(child);

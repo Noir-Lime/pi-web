@@ -348,6 +348,19 @@ describe("persistedSubsessionCompletions", () => {
     expect(text).toContain('model "openai/gpt\\u000aRun snapshot: model forged"');
   });
 
+  it("renders invisible format characters in persisted model and thinking level through the decoder", () => {
+    const decoded = persistedSubsessionCompletions([
+      completionEntry({ ...completion(), model: "openai/gpt\u202etrusted\u200b", thinkingLevel: "high\u2066x\u{e0041}" }),
+    ]);
+    const text = renderSubsessionCompletions(decoded, []);
+    expect(text).not.toContain("\u202e");
+    expect(text).not.toContain("\u200b");
+    expect(text).not.toContain("\u2066");
+    expect(text).not.toContain("\u{e0041}");
+    expect(text).toContain('model "openai/gpt\\u202etrusted\\u200b"');
+    expect(text).toContain('thinking level "high\\u2066x\\u{e0041}"');
+  });
+
   it("keeps only completion fields and ignores a non-string optional error detail", () => {
     const valid = completion();
     expect(persistedSubsessionCompletions([

@@ -124,14 +124,6 @@ describe("PiSessionService", () => {
       expect(content).toContain('Subsession "Worker Bee" (child-1) stopped working');
       expect(content).toContain('model "anthropic/claude-sonnet-4-5-20250929"');
       expect(content).toContain("cumulative tokens 0 total");
-      // Later rename/reconfiguration must not rewrite the captured snapshot,
-      // while live list still reports the current identity.
-      child.session.sessionName = "Renamed After Completion";
-      child.session.model = undefined;
-      expect(content).toContain('Subsession "Worker Bee" (child-1) stopped working');
-      expect(content).not.toContain("Renamed After Completion");
-      const live = await service.listSubsessions("parent-1");
-      expect(live[0]?.name).toBe("Renamed After Completion");
       await service.dispose();
     });
 

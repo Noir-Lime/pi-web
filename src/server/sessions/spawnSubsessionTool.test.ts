@@ -52,6 +52,36 @@ describe("formatMetadataText", () => {
     expect(rendered).not.toContain("\u2028");
   });
 
+  it("visibly escapes Unicode Cf, Zl, and Zp code points, including supplementary tag characters", () => {
+    expect(formatMetadataText("Worker\u202etrusted")).toBe('"Worker\\u202etrusted"'); // RLO
+    expect(formatMetadataText("a\u2066b")).toBe('"a\\u2066b"'); // LRI
+    expect(formatMetadataText("a\u200eb")).toBe('"a\\u200eb"'); // LRM
+    expect(formatMetadataText("a\u200bb\ufeffc")).toBe('"a\\u200bb\\ufeffc"'); // ZWSP, BOM/ZWNBSP
+    expect(formatMetadataText("tag\u{e0041}end")).toBe('"tag\\u{e0041}end"'); // supplementary Cf tag char
+    expect(formatMetadataText("soft\u00adhyphen")).toBe('"soft\\u00adhyphen"'); // soft hyphen (Cf)
+  });
+
+  it("preserves plain accents, CJK, and emoji unchanged", () => {
+    expect(formatMetadataText("café 北京 ☕ 🎉")).toBe('"café 北京 ☕ 🎉"');
+  });
+
+  it("never truncates inside an escape sequence", () => {
+    // 117 x's + newline escape (6 chars) would cross the 119-char prefix cap
+    // mid-escape; the whole escape is omitted instead.
+    const rendered = formatMetadataText(`${"x".repeat(117)}\nmore text here`);
+    expect(rendered).toBe(`"${"x".repeat(117)}…"`);
+    expect(rendered).not.toContain("\\u");
+  });
+
+  it("stops before an escape that would be split at the truncation boundary", () => {
+    // The 6-character RLO escape starts after 116 plain characters; a naive
+    // 119-code-point cut would include a partial \\u202 sequence.
+    const rendered = formatMetadataText(`${"x".repeat(116)}\u202e${"y".repeat(20)}`);
+    expect(rendered).toBe(`"${"x".repeat(116)}…"`);
+    expect(rendered).not.toContain("\\u202");
+    expect(rendered.length).toBe(119);
+  });
+
   it("bounds very long values with an ellipsis marker and preserves ordinary Unicode and Markdown as quoted data", () => {
     const rendered = formatMetadataText("x".repeat(300));
     expect(rendered.length).toBe(122);

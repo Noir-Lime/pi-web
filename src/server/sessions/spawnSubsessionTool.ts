@@ -188,31 +188,45 @@ const ReadSubsessionParams = Type.Object({
 /** Maximum rendered characters (excluding quotes) for one metadata value. */
 const METADATA_RENDER_LIMIT = 120;
 
+/** Code points that are invisible or can reorder text: Cc, Cf, Zl, Zp. */
+const INVISIBLE_CODE_POINT = /\p{Cc}|\p{Cf}|\p{Zl}|\p{Zp}/u;
+
 /**
  * The one bounded, escaped formatter for identity metadata in model-facing
  * text. Values are data, never raw notice text: quotes/backslashes are
- * escaped, all control characters (C0, DEL, C1) and Unicode line/paragraph
- * separators become `\uXXXX` literals, and the rendered value is bounded.
- * Ordinary Unicode is preserved. Raw stored values are unchanged.
+ * escaped; control/format/line-separator code points (Cc, Cf, Zl, Zp,
+ * including bidi controls, zero-width characters, and tag characters)
+ * become `\uXXXX` (BMP) or `\u{XXXXX}` (supplementary) literals; and the
+ * rendered value is bounded to 120 code points without splitting a
+ * surrogate pair or an escape sequence. Ordinary Unicode (accents, CJK,
+ * emoji) is preserved, except that a ZWJ inside an emoji sequence is Cf
+ * and is escaped. Raw stored values are unchanged.
  */
 export function formatMetadataText(value: string): string {
-  let escaped = "";
+  const units: string[] = [];
+  let total = 0;
   for (const ch of value) {
     const cp = ch.codePointAt(0) ?? 0;
-    if (ch === "\\") escaped += "\\\\";
-    else if (ch === '"') escaped += '\\"';
-    else if (cp < 0x20 || (cp >= 0x7f && cp <= 0x9f) || cp === 0x2028 || cp === 0x2029) escaped += `\\u${cp.toString(16).padStart(4, "0")}`;
-    else escaped += ch;
+    let unit: string;
+    if (ch === "\\") unit = "\\\\";
+    else if (ch === '"') unit = '\\"';
+    else if (INVISIBLE_CODE_POINT.test(ch)) unit = cp <= 0xffff ? `\\u${cp.toString(16).padStart(4, "0")}` : `\\u{${cp.toString(16)}}`;
+    else unit = ch;
+    units.push(unit);
+    // Escape units are pure ASCII, so .length is their code-point count; a
+    // plain unit is exactly one code point.
+    total += unit.startsWith("\\") ? unit.length : 1;
   }
-  // Bound by code points so a surrogate pair is never split.
-  let prefix = "";
-  let seen = 0;
-  for (const ch of escaped) {
-    seen += 1;
-    if (seen < METADATA_RENDER_LIMIT) prefix += ch;
+  if (total <= METADATA_RENDER_LIMIT) return `"${units.join("")}"`;
+  let rendered = "";
+  let used = 0;
+  for (const unit of units) {
+    const length = unit.startsWith("\\") ? unit.length : 1;
+    if (used + length > METADATA_RENDER_LIMIT - 1) break; // never cut inside an escape
+    rendered += unit;
+    used += length;
   }
-  const bounded = seen > METADATA_RENDER_LIMIT ? `${prefix}…` : escaped;
-  return `"${bounded}"`;
+  return `"${rendered}…"`;
 }
 
 /** `"name" (id)` when a name is present, plain id otherwise. The name is quoted data. */
