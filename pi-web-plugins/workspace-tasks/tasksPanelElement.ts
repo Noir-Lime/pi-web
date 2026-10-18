@@ -1,4 +1,4 @@
-import type { WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
+import type { StylesheetIntegrationCapabilityV1, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
 import { TASKS_CONFIG_PATH, type WorkspaceTask } from "./config.js";
 import { runWorkspaceTaskInTerminal } from "./taskRunner.js";
 import { loadWorkspaceTasksConfig, tasksConfigRefreshHint, tasksConfigUnavailableMessage, type WorkspaceTasksConfigLoadResult } from "./workspaceTasksClient.js";
@@ -29,11 +29,21 @@ export function tasksPanelBadge(context: WorkspacePanelContext): string | undefi
 }
 
 export class PiWebTasksPanel extends HTMLElement {
+  private integration: StylesheetIntegrationCapabilityV1 | undefined;
+  private releaseStyles: (() => void) | undefined;
+
+  set stylesheetIntegration(value: StylesheetIntegrationCapabilityV1 | undefined) {
+    if (value === this.integration) return;
+    this.releaseStyles?.();
+    this.releaseStyles = undefined;
+    this.integration = value;
+    if (this.isConnected) this.releaseStyles = value?.registerRoot(this.root, { sharedUi: true });
+  }
+
   private contextValue: WorkspacePanelContext | undefined;
   private runningTaskId: string | undefined;
   private status: TaskStatus | undefined;
   private readonly root: ShadowRoot;
-  private readonly uiStyle = document.createElement("style");
   private readonly localStyle = document.createElement("style");
   private readonly onConfigChanged = () => {
     this.render();
@@ -42,19 +52,14 @@ export class PiWebTasksPanel extends HTMLElement {
   constructor() {
     super();
     this.root = this.attachShadow({ mode: "open" });
-    this.uiStyle.setAttribute("data-ui-styles", "");
     this.localStyle.textContent = taskStyles();
-    this.root.append(this.uiStyle, this.localStyle);
-  }
-
-  set uiCssText(value: string) {
-    this.uiStyle.textContent = value;
+    this.root.append(this.localStyle);
   }
 
   private setContent(markup: string): void {
     const template = document.createElement("template");
     template.innerHTML = markup;
-    this.root.replaceChildren(this.uiStyle, this.localStyle, template.content);
+    this.root.replaceChildren(this.localStyle, template.content);
   }
 
   set context(value: WorkspacePanelContext | undefined) {
@@ -70,11 +75,14 @@ export class PiWebTasksPanel extends HTMLElement {
   }
 
   connectedCallback(): void {
+    this.releaseStyles ??= this.integration?.registerRoot(this.root, { sharedUi: true });
     window.addEventListener(configChangedEvent, this.onConfigChanged);
     this.render();
   }
 
   disconnectedCallback(): void {
+    this.releaseStyles?.();
+    this.releaseStyles = undefined;
     window.removeEventListener(configChangedEvent, this.onConfigChanged);
   }
 
@@ -305,7 +313,7 @@ function taskStyles(): string {
       .task-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; border: 1px solid var(--pi-border); border-radius: 10px; background: var(--pi-surface); padding: 12px; }
       .task-copy { display: grid; min-width: 0; gap: 5px; }
       .task-copy span, .muted { color: var(--pi-muted); }
-      code, pre { border: 1px solid var(--pi-border-muted); border-radius: 6px; background: var(--pi-bg); color: var(--pi-text-secondary); font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      code, pre { border: 1px solid var(--pi-border-muted); border-radius: 6px; background: var(--pi-bg); color: var(--pi-text-secondary); font: 12px var(--pi-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); }
       code { overflow: auto; padding: 5px 7px; white-space: nowrap; }
       pre { margin: 8px 0 0; overflow: auto; padding: 8px; white-space: pre-wrap; }
       .empty-state { border: 1px dashed var(--pi-border-muted); border-radius: 8px; color: var(--pi-muted); padding: 12px; }

@@ -15,7 +15,7 @@ import type {
   ContentRendererInput,
   JsonValue,
   PluginCapability,
-  UiStylesCapabilityV1,
+  StylesheetIntegrationCapabilityV1,
   PluginPeer,
   PiWebPlugin,
   Workspace,
@@ -137,33 +137,36 @@ const publishedCapability: PluginCapability<FixtureIdentityCapabilityV1, 1> = Ob
   parse: identityCapability.parse,
 });
 
-const uiStylesV1: PluginCapability<UiStylesCapabilityV1, 1> = {
-  pluginId: "pi-web", id: "ui-styles", version: 1,
-  parse(value): UiStylesCapabilityV1 {
-    if (typeof value !== "object" || value === null || !("cssText" in value) || typeof value.cssText !== "string") {
-      throw new Error("UI styles v1 unavailable");
-    }
-    return { cssText: value.cssText };
+const stylesheetIntegration: PluginCapability<StylesheetIntegrationCapabilityV1, 1> = {
+  pluginId: "pi-web", id: "stylesheet-integration", version: 1,
+  parse(value): StylesheetIntegrationCapabilityV1 {
+    if (!isStylesheetIntegration(value)) throw new Error("Stylesheet integration unavailable");
+    return value;
   },
 };
 
-export function applyUiStyles(styles: UiStylesCapabilityV1, root: ShadowRoot): void {
-  const element = document.createElement("style");
-  element.textContent = styles.cssText;
-  root.prepend(element);
+function isStylesheetIntegration(value: unknown): value is StylesheetIntegrationCapabilityV1 {
+  return typeof value === "object" && value !== null
+    && "registerRoot" in value && typeof value.registerRoot === "function"
+    && "subscribe" in value && typeof value.subscribe === "function"
+    && "createController" in value && typeof value.createController === "function";
+}
+
+export function applySharedUi(styles: StylesheetIntegrationCapabilityV1, root: ShadowRoot): () => void {
+  return styles.registerRoot(root, { sharedUi: true });
 }
 
 const plugin: PiWebPlugin = {
   apiVersion: 4,
   name: "Browser declaration fixture",
-  requires: [identityCapability, uiStylesV1],
+  requires: [identityCapability, stylesheetIntegration],
   activate: async (context) => ({
     provides: [{ capability: publishedCapability, value: { version: 1, label: context.pluginId } }],
     start: ({ capabilities, signal }) => {
       if (signal.aborted || context.lifetimeSignal.aborted) return;
       capabilities.resolve(identityCapability);
-      const styles: UiStylesCapabilityV1 = capabilities.resolve(uiStylesV1);
-      void styles.cssText;
+      const styles: StylesheetIntegrationCapabilityV1 = capabilities.resolve(stylesheetIntegration);
+      void styles.registerRoot;
     },
     dispose: (signal) => {
       if (signal.aborted) return;

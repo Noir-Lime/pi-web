@@ -17,21 +17,22 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("host UI styles capability", () => {
-  it("requires host v1 and passes start-resolved CSS to the panel", () => {
+describe("host stylesheet integration capability", () => {
+  it("requires host v1 and registers the panel shadow root for shared UI", () => {
     expect(plugin.apiVersion).toBe(4);
+    expect(plugin.requires).toHaveLength(1);
     const capability = plugin.requires[0];
-    if (capability === undefined) throw new Error("Relay UI styles requirement missing");
-    expect(capability).toMatchObject({ pluginId: "pi-web", id: "ui-styles", version: 1 });
-    const cssText = ".ui-button { color: rebeccapurple; }";
+    expect(capability).toMatchObject({ pluginId: "pi-web", id: "stylesheet-integration", version: 1 });
+    const release = vi.fn();
+    const registerRoot = vi.fn(() => release);
     const result = plugin.activate(activationContext());
     const requests: PluginCapability[] = [];
     const resolve = <Value,>(requested: PluginCapability<Value>): Value => {
       requests.push(requested);
-      return requested.parse({ cssText });
+      return requested.parse({ registerRoot, createController: vi.fn(), subscribe: vi.fn(() => vi.fn()) });
     };
     result.start({ capabilities: { resolve }, signal: new AbortController().signal });
-    expect(requests).toEqual([capability]);
+    expect(requests.map(({ id }) => id)).toEqual(["stylesheet-integration"]);
 
     const context: WorkspacePanelContext = {
       ...rowContext(undefined),
@@ -44,13 +45,16 @@ describe("host UI styles capability", () => {
     if (contribution === undefined) throw new Error("Relay panel contribution missing");
     render(contribution.render(context), host);
     const panel = host.querySelector("pi-web-relays-panel");
-    expect(panel?.shadowRoot?.querySelector("style[data-ui-styles]")?.textContent).toBe(cssText);
+    expect(panel?.shadowRoot).toBeInstanceOf(ShadowRoot);
+    expect(registerRoot).toHaveBeenCalledExactlyOnceWith(panel?.shadowRoot, { sharedUi: true });
+    render(null, host);
+    expect(release).toHaveBeenCalledOnce();
   });
 
-  it.each([undefined, null, {}, { cssText: 42 }])("rejects an invalid host style value: %j", (value) => {
+  it.each([undefined, null, {}, { registerRoot: vi.fn() }, { registerRoot: vi.fn(), createController: vi.fn() }])("rejects an invalid host integration value: %j", (value) => {
     const capability = plugin.requires[0];
-    if (capability === undefined) throw new Error("Relay UI styles requirement missing");
-    expect(() => capability.parse(value)).toThrow("UI styles capability v1 requires cssText");
+    if (capability === undefined) throw new Error("Relay stylesheet integration requirement missing");
+    expect(() => capability.parse(value)).toThrow("Stylesheet integration capability v1 requires registerRoot and createController");
   });
 });
 

@@ -1,4 +1,4 @@
-import type { WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
+import type { StylesheetIntegrationCapabilityV1, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
 import { isMarkdownDocumentPath, renderRelayDocumentHtml } from "./markdownDocument.js";
 import { isRelayPacketPath } from "./relayIdentity.js";
 import {
@@ -50,6 +50,26 @@ interface RelaySelection {
  * horizontal scroll position and keyboard focus survive document switches.
  */
 class PiWebRelaysPanel extends HTMLElement {
+  private integration: StylesheetIntegrationCapabilityV1 | undefined;
+  private releaseStyles: (() => void) | undefined;
+
+  set stylesheetIntegration(value: StylesheetIntegrationCapabilityV1 | undefined) {
+    if (value === this.integration) return;
+    this.releaseStyles?.();
+    this.releaseStyles = undefined;
+    this.integration = value;
+    if (this.isConnected) this.releaseStyles = value?.registerRoot(this.root, { sharedUi: true });
+  }
+
+  connectedCallback(): void {
+    this.releaseStyles ??= this.integration?.registerRoot(this.root, { sharedUi: true });
+  }
+
+  disconnectedCallback(): void {
+    this.releaseStyles?.();
+    this.releaseStyles = undefined;
+  }
+
   private contextValue: WorkspacePanelContext | undefined;
   private listing: RelaysListing | undefined;
   private selectedRelayPath: string | undefined;
@@ -60,7 +80,6 @@ class PiWebRelaysPanel extends HTMLElement {
   private expandedDirs = new Set<string>();
   private scanToken = 0;
   private readonly root: ShadowRoot;
-  private readonly uiStyles: HTMLStyleElement;
   private readonly toolbar: HTMLElement;
   private readonly tabStrip: HTMLElement;
   private readonly viewer: HTMLElement;
@@ -74,9 +93,6 @@ class PiWebRelaysPanel extends HTMLElement {
       <nav class="document-tabs ui-tabs" aria-label="Relay documents" hidden></nav>
       <section class="viewer"><div class="empty">Select a workspace.</div></section>
     `;
-    this.uiStyles = document.createElement("style");
-    this.uiStyles.dataset["uiStyles"] = "";
-    this.root.prepend(this.uiStyles);
     this.toolbar = requiredRegion(this.root, ".toolbar");
     this.tabStrip = requiredRegion(this.root, "nav.document-tabs");
     this.viewer = requiredRegion(this.root, ".viewer");
@@ -107,14 +123,6 @@ class PiWebRelaysPanel extends HTMLElement {
       const context = this.contextValue;
       if (context !== undefined && documentPath !== null) void this.openDocument(context, documentPath);
     });
-  }
-
-  get uiCssText(): string {
-    return this.uiStyles.textContent;
-  }
-
-  set uiCssText(value: string) {
-    this.uiStyles.textContent = value;
   }
 
   set context(value: WorkspacePanelContext | undefined) {
