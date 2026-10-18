@@ -1,4 +1,5 @@
-import type { SubsessionStatus } from "./spawnSubsessionTool.js";
+import { requireInitialSessionName } from "./sessionNameGenerator.js";
+import { subsessionDisplay, type SubsessionContextUsage, type SubsessionStatus, type SubsessionTokens } from "./spawnSubsessionTool.js";
 
 export const SUBSESSION_COMPLETION_ENTRY_TYPE = "pi-web.subsession.completed";
 export const SUBSESSION_RECEIPT_ENTRY_TYPE = "pi-web.subsession.received";
@@ -15,6 +16,15 @@ export interface SubsessionCompletion {
   errorDetail?: string;
   startedAt?: string;
   completedAt?: string;
+  /** Child name snapshot at completion; absent in records written before names existed. */
+  name?: string;
+  /** Configured/resolved model snapshot at completion, as `provider/id`. */
+  model?: string;
+  thinkingLevel?: string;
+  /** Cumulative session usage snapshot at completion. */
+  tokens?: SubsessionTokens;
+  /** Context occupancy snapshot at completion. */
+  contextUsage?: SubsessionContextUsage;
 }
 
 /** One owner for delivery through tools, run boundaries, and idle-parent wakes. */
@@ -119,25 +129,69 @@ export function persistedSubsessionCompletions(entries: readonly unknown[]): Sub
       || typeof data["cwd"] !== "string" || (data["status"] !== "idle" && data["status"] !== "error")
       || typeof data["finalText"] !== "string" || typeof data["messageCount"] !== "number"
       || !Number.isSafeInteger(data["messageCount"]) || data["messageCount"] < 0) return [];
+    const name = persistedName(data["name"]);
+    const tokens = persistedTokens(data["tokens"]);
+    const contextUsage = persistedContextUsage(data["contextUsage"]);
     return [{
       completionId: data["completionId"], sessionId: data["sessionId"], cwd: data["cwd"], status: data["status"],
       finalText: data["finalText"], messageCount: data["messageCount"],
       ...(typeof data["startedAt"] === "string" ? { startedAt: data["startedAt"] } : {}),
       ...(typeof data["completedAt"] === "string" ? { completedAt: data["completedAt"] } : {}),
       ...(typeof data["errorDetail"] === "string" ? { errorDetail: data["errorDetail"] } : {}),
+      ...(name === undefined ? {} : { name }),
+      ...(typeof data["model"] === "string" && data["model"] !== "" ? { model: data["model"] } : {}),
+      ...(typeof data["thinkingLevel"] === "string" && data["thinkingLevel"] !== "" ? { thinkingLevel: data["thinkingLevel"] } : {}),
+      ...(tokens === undefined ? {} : { tokens }),
+      ...(contextUsage === undefined ? {} : { contextUsage }),
     }];
   });
 }
 
 /** Bound automatic notices; deliberate inspection still returns the complete run output. */
+/** A persisted name is display text: accept only the ordinary naming shape, so a crafted record cannot inject lines into a notice. */
+function persistedName(value: unknown): string | undefined {
+  try { return requireInitialSessionName(value); } catch { return undefined; }
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function persistedTokens(value: unknown): SubsessionTokens | undefined {
+  if (!isRecord(value)) return undefined;
+  const { input, output, cacheRead, cacheWrite, total } = value;
+  if (!isFiniteNumber(input) || !isFiniteNumber(output) || !isFiniteNumber(cacheRead) || !isFiniteNumber(cacheWrite) || !isFiniteNumber(total)) return undefined;
+  return { input, output, cacheRead, cacheWrite, total };
+}
+
+function persistedContextUsage(value: unknown): SubsessionContextUsage | undefined {
+  if (!isRecord(value)) return undefined;
+  const contextWindow = value["contextWindow"];
+  const tokens = value["tokens"];
+  const percent = value["percent"];
+  if (!isFiniteNumber(contextWindow)) return undefined;
+  if (tokens !== null && !isFiniteNumber(tokens)) return undefined;
+  if (percent !== null && !isFiniteNumber(percent)) return undefined;
+  return { tokens, contextWindow, percent };
+}
+
 export function renderSubsessionCompletion(completion: SubsessionCompletion): string {
   const { sessionId, status, finalText, errorDetail, startedAt, completedAt } = completion;
   const error = errorDetail === undefined ? "" : `Error: ${errorDetail}\n\n`;
+  const snapshotParts: string[] = [];
+  if (completion.model !== undefined) snapshotParts.push(`model ${completion.model}`);
+  if (completion.thinkingLevel !== undefined) snapshotParts.push(`thinking level ${completion.thinkingLevel}`);
+  if (completion.tokens !== undefined) snapshotParts.push(`cumulative tokens ${String(completion.tokens.total)} total`);
+  if (completion.contextUsage !== undefined) {
+    const percent = completion.contextUsage.percent === null ? "unknown percent" : `${String(completion.contextUsage.percent)}%`;
+    snapshotParts.push(`context usage ${percent} of ${String(completion.contextUsage.contextWindow)} context window`);
+  }
+  const snapshot = snapshotParts.length === 0 ? "" : `Run snapshot: ${snapshotParts.join("; ")}.\n\n`;
   const output = finalText.length > 2000
     ? `--- SUBSESSION OUTPUT EXCERPT (this run): ${sessionId} ---\n${finalText.slice(0, 600)}\n[… ${String(finalText.length - 1800)} characters omitted …]\n${finalText.slice(-1200)}\n--- END EXCERPT ---\nCall check_subsession with sessionId "${sessionId}" to retrieve the full final output.`
     : `--- SUBSESSION OUTPUT (this run): ${sessionId} ---\n${finalText === "" ? "(no assistant text in this run)" : finalText}`;
   const run = startedAt === undefined ? "" : ` The run started ${startedAt}${completedAt === undefined ? "" : ` and ended ${completedAt}`}.`;
-  return `Subsession ${sessionId} stopped working (${status} at completion, not necessarily now).${run}\n\n${error}${output}`;
+  return `Subsession ${subsessionDisplay(sessionId, completion.name)} stopped working (${status} at completion, not necessarily now).${run}\n\n${snapshot}${error}${output}`;
 }
 
 export function renderSubsessionCompletions(completions: readonly SubsessionCompletion[], workingIds: readonly string[]): string {

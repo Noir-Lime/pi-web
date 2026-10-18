@@ -299,6 +299,20 @@ describe("persistedSubsessionCompletions", () => {
     expect(persistedSubsessionCompletions([completionEntry(data)])).toEqual([]);
   });
 
+  it("decodes old records without name or usage and keeps valid name and usage snapshots", () => {
+    const old = completion();
+    expect(persistedSubsessionCompletions([completionEntry(old)])).toEqual([old]);
+    const named = completion({ name: "Worker Bee", model: "openai/gpt-5", thinkingLevel: "high", tokens: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, total: 18 }, contextUsage: { tokens: 100, contextWindow: 1000, percent: 10 } });
+    expect(persistedSubsessionCompletions([completionEntry(named)])).toEqual([named]);
+  });
+
+  it("drops malformed usage snapshots and unsafe persisted names instead of inventing values", () => {
+    const valid = completion();
+    expect(persistedSubsessionCompletions([
+      completionEntry({ ...valid, name: "bad\nname (x)\nInjected", model: 7, thinkingLevel: "", tokens: { input: "10" }, contextUsage: { tokens: 1, contextWindow: "x", percent: 1 } }),
+    ])).toEqual([valid]);
+  });
+
   it("keeps only completion fields and ignores a non-string optional error detail", () => {
     const valid = completion();
     expect(persistedSubsessionCompletions([
@@ -308,6 +322,12 @@ describe("persistedSubsessionCompletions", () => {
 });
 
 describe("renderSubsessionCompletions", () => {
+  it("renders the snapshotted name as name (id) with model and usage labels", () => {
+    const text = renderSubsessionCompletions([completion({ name: "Worker Bee", model: "openai/gpt-5", thinkingLevel: "high", tokens: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, total: 18 }, contextUsage: { tokens: 100, contextWindow: 1000, percent: 10 } })], []);
+    expect(text).toContain("Subsession Worker Bee (child-1) stopped working");
+    expect(text).toContain("Run snapshot: model openai/gpt-5; thinking level high; cumulative tokens 18 total; context usage 10% of 1000 context window.");
+  });
+
   it("identifies completion-time status and this run's output", () => {
     const text = renderSubsessionCompletions([completion({ startedAt: "start", completedAt: "end" })], []);
     expect(text).toContain("idle at completion, not necessarily now");
