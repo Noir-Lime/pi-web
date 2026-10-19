@@ -1,8 +1,24 @@
-# Plugins and Pi packages
+# PI WEB plugin implementation reference
 
-Customize PI WEB with workspace tools, useful shortcuts, and integrations. You can install an existing package or ask an agent to build one for your workflow. You do not need to modify PI WEB itself.
+This is the documentation entry point for agents and developers building PI WEB plugins. For a short overview of possibilities and installation, use the [plugin guide](https://pi-web.dev/plugins).
 
-This guide explains what is possible and what to expect. For implementation, use the [public contracts and examples](#agent-development), rather than treating this page as a second API reference.
+## Start here
+
+1. Read [public contracts and examples](#where-to-implement). Use declarations matching the installed PI WEB version; source links track development on `main`.
+2. Choose the smallest example that fits the requested workflow. Use supported plugin APIs rather than modifying PI WEB or calling private routes.
+3. Follow the relevant sections below for behavior, compatibility, and lifecycle requirements.
+4. Test the requested behavior, failure paths, and cleanup. Explain installation, reload/restart steps, and any permissions or model use.
+
+### Find the relevant guidance
+
+- [Capabilities and possible contributions](#what-can-be-built)
+- [Browser/server roles and feature behavior](#how-plugins-work)
+- [Installation and local development](#install-and-manage)
+- [Remote machines](#remote-machines)
+- [Contracts, examples, and design boundaries](#agent-development)
+- [Shared UI styles](#host-provided-ui-styles), [CSS integration](#css-files-and-shadow-roots), and [themes](#css-first-themes)
+- [Read-only catalogs and scoped backends](#read-only-catalogs-and-scoped-backends-v5)
+- [Trust and recovery](#trust-and-recovery)
 
 ## What can be built
 
@@ -341,17 +357,7 @@ Live partial responses remain untransformed until completion, including after re
 
 ## Agent development
 
-Give the agent a goal, the data it should use, and the actions it may take:
-
-```text
-Build a PI WEB plugin for this project.
-Goal: <describe the workflow and expected UI>.
-Read https://pi-web.dev/plugins.md, then follow its public-contract
-and example links for the PI WEB version installed here.
-Use supported plugin APIs; do not modify PI WEB or call private routes.
-Explain installation, any permissions or model use, and how to reload it.
-Test the behavior, including failures and cleanup.
-```
+Start with the public contracts and a working example below. Keep API and lifecycle details here; the [human-facing guide](https://pi-web.dev/plugins#agent-development) provides the prompt for requesting a plugin.
 
 ### Where to implement
 

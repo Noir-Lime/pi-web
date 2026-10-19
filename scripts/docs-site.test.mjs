@@ -88,6 +88,23 @@ describe("configuration documentation navigation", () => {
   });
 });
 
+describe("plugin guide", () => {
+  it("offers a copyable agent prompt with a documentation entry point and one final input", () => {
+    const window = new Window();
+    try {
+      window.document.write(readFileSync(new URL("../docs/plugins.html", import.meta.url), "utf8"));
+      const prompt = window.document.querySelector("#agent-development pre code").textContent;
+      expect(prompt).toContain("https://pi-web.dev/plugins.md");
+      expect(prompt.match(/\[[^\]]+\]/g)).toEqual(["[Describe your plugin]"]);
+      expect(prompt.trim().endsWith("[Describe your plugin]")).toBe(true);
+      const copyButton = window.document.querySelector("#agent-development [data-copy]");
+      expect(window.document.querySelector(copyButton.getAttribute("data-copy")).textContent).toBe(prompt);
+    } finally {
+      window.close();
+    }
+  });
+});
+
 describe("plugin directory navigation", () => {
   it.each(["index", "remote-first", "machines", "install", "config", "faq", "plugins", "community-plugins"])("opens the directory from the Plugins menu on %s", (page) => {
     const window = new Window();
