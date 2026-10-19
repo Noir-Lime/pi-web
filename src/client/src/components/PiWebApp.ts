@@ -44,6 +44,7 @@ import type { ApplicationPanelContext, PluginNavigationPatchDestination, PluginN
 import { CLASSIC_THEME_ID, applyPiWebTheme, clearStoredThemePreference, effectiveThemePreference, readStoredThemePreference, resolveThemePreference, writeStoredThemePreference, type ThemePreference, type ThemePreferenceResolution } from "../theme";
 import { corePlugin } from "../plugins/core";
 import { themePackPlugin } from "../plugins/themes";
+import { pluginStyles, PluginStyleRuntime, stylesheetIntegrationCapability } from "../plugins/styles";
 import { loadExternalPlugins, type ExternalPluginLoadResult } from "../plugins/external";
 import { publicPluginSelection, publicPluginSession } from "../plugins/publicContext";
 import type { DisplayedMessageActionAvailabilityContext, MessageActionAvailabilityContext, MessageActionContext, MessageActionResult } from "../../../plugin-api";
@@ -150,6 +151,11 @@ interface SessionCleanupDialogState {
 
 @customElement("pi-web-app")
 export class PiWebApp extends LitElement {
+  constructor() {
+    super();
+    stylesheetIntegrationCapability.createController(this);
+  }
+
   /** Page-scoped injection seam for independently composing chat behavior. */
   @property({ attribute: false }) chatBehaviors: ChatBehaviors = DEFAULT_CHAT_BEHAVIORS;
   @state() private state: AppState = initialAppState();
@@ -347,6 +353,9 @@ export class PiWebApp extends LitElement {
   private remoteRouteRestoreTimer: number | undefined;
   private remoteRouteRestoreAttempt = 0;
   private remoteRouteRestoreInProgress = false;
+  private readonly stylesheetRuntime = new PluginStyleRuntime(pluginStyles, (error) => {
+    console.error("Failed to apply plugin stylesheets", error);
+  });
   private readonly plugins = new PluginRegistry({
     onPromptChipsChanged: () => { this.requestUpdate(); },
     isContributionEnabled: (pluginId, machineId) => this.pluginContributionAvailable(pluginId, machineId),
@@ -434,6 +443,7 @@ export class PiWebApp extends LitElement {
     this.committedChatIdentity = selectedChatIdentity(this.state);
     this.syncSelectedSessionReadState();
     this.plugins.notifySelectionChanged();
+    this.syncPluginStylesheets();
     const chatVisible = this.isChatVisible();
     if (chatVisible) {
       if (this.sessions.isChatLoadDeferred) this.scheduleSelectedChatLoad();
@@ -582,6 +592,7 @@ export class PiWebApp extends LitElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
+    this.stylesheetRuntime.connect(this.ownerDocument);
     this.navigationOrderConnected = true;
     this.syncNavigationOrder();
     this.unreadConnected = true;
@@ -602,6 +613,7 @@ export class PiWebApp extends LitElement {
   }
 
   override disconnectedCallback(): void {
+    this.stylesheetRuntime.disconnect();
     this.navigationOrderConnected = false;
     this.unreadConnected = false;
     this.committedChatIdentity = undefined;
@@ -3440,7 +3452,17 @@ export class PiWebApp extends LitElement {
     this.applyPreferredTheme(false);
   }
 
+  private syncPluginStylesheets(): void {
+    if (!this.isConnected) return;
+    const theme = this.resolveCurrentThemePreference().activeTheme;
+    this.stylesheetRuntime.update([
+      ...this.plugins.getStylesheets(selectedMachineId(this.state)),
+      ...(theme?.stylesheets ?? []),
+    ]);
+  }
+
   private applyPreferredTheme(persist: boolean): void {
+    this.syncPluginStylesheets();
     const theme = this.resolveCurrentThemePreference().activeTheme;
     if (theme === undefined) return;
     this.activeThemeId = theme.id;

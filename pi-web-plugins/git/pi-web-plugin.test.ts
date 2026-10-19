@@ -8,7 +8,12 @@ import plugin from "./browser/pi-web-plugin.js";
 
 const projectId = "project-1";
 const workspaceId = "workspace-1";
-const hostCssText = ".ui-file-row { height: 32px; }";
+const releaseStyles = vi.fn();
+const stylesheetIntegration = {
+  registerRoot: vi.fn(() => releaseStyles),
+  subscribe: vi.fn(),
+  createController: vi.fn(),
+};
 
 const gitWorkspace: Workspace = {
   id: workspaceId,
@@ -27,14 +32,34 @@ afterEach(() => {
 });
 
 describe("bundled Git browser plugin", () => {
-  it("requires host UI styles v1 and rejects invalid CSS payloads", () => {
+  it("requires stylesheet integration v1 and rejects invalid payloads", () => {
     const capability = plugin.requires[0];
-    if (capability === undefined) throw new Error("Expected host UI styles requirement");
-    expect(capability).toMatchObject({ pluginId: "pi-web", id: "ui-styles", version: 1 });
-    expect(capability.parse({ cssText: hostCssText })).toEqual({ cssText: hostCssText });
-    for (const value of [null, {}, { cssText: 1 }]) {
-      expect(() => capability.parse(value)).toThrow("requires cssText");
+    if (capability === undefined) throw new Error("Expected stylesheet integration requirement");
+    expect(capability).toMatchObject({ pluginId: "pi-web", id: "stylesheet-integration", version: 1 });
+    expect(capability.parse(stylesheetIntegration)).toBe(stylesheetIntegration);
+    for (const value of [null, {}, { ...stylesheetIntegration, registerRoot: 1 }, { ...stylesheetIntegration, subscribe: null }, { ...stylesheetIntegration, createController: null }]) {
+      expect(() => capability.parse(value)).toThrow("Invalid PI WEB stylesheet integration");
     }
+  });
+
+  it("opts the containing panel root into shared UI for its mounted lifetime", () => {
+    const panel = requiredPanel(activate("git"));
+    const host = document.createElement("div");
+    const root = host.attachShadow({ mode: "open" });
+    document.body.append(host);
+    stylesheetIntegration.registerRoot.mockClear();
+    releaseStyles.mockClear();
+    const context = panelContext(backendFixture().request);
+    render(panel.render(context), root);
+    render(panel.render(context), root);
+    expect(stylesheetIntegration.registerRoot).toHaveBeenCalledExactlyOnceWith(root, { sharedUi: true });
+    expect(root.querySelector("style[data-ui-styles]")).toBeNull();
+    host.remove();
+    expect(releaseStyles).toHaveBeenCalledTimes(1);
+    document.body.append(host);
+    expect(stylesheetIntegration.registerRoot).toHaveBeenCalledTimes(2);
+    render(null, root);
+    expect(releaseStyles).toHaveBeenCalledTimes(2);
   });
 
   it("contributes provider-owned actions and a panel that replacements suppress", async () => {
@@ -174,7 +199,7 @@ describe("bundled Git browser plugin", () => {
     expect(container.textContent).toContain("unstaged");
     expect(container.querySelector(".git-panel")).not.toBeNull();
     expect(container.querySelector(".split")).toBeNull();
-    expect(container.querySelector("style[data-ui-styles]")?.textContent).toBe(hostCssText);
+    expect(container.querySelector("style[data-ui-styles]")).toBeNull();
     expect(container.querySelector(".git-toolbar.ui-toolbar .ui-button")).not.toBeNull();
     expect(container.querySelector(".git-file-list.ui-file-list")).not.toBeNull();
     const selectedRow = button(container, "src/main.ts");
@@ -492,7 +517,7 @@ function activate(pluginId: string, runtimePluginId = pluginId) {
     lifetimeSignal: new AbortController().signal,
   });
   result.start({
-    capabilities: { resolve: <Value,>(capability: PluginCapability<Value>): Value => capability.parse({ cssText: hostCssText }) },
+    capabilities: { resolve: <Value,>(capability: PluginCapability<Value>): Value => capability.parse(stylesheetIntegration) },
     signal: new AbortController().signal,
   });
   return result.contributions;

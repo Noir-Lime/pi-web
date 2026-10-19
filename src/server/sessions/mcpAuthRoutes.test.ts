@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { OAuthFlowState } from "../../shared/apiTypes.js";
 import { afterEach, expect, it, vi } from "vitest";
@@ -27,7 +28,7 @@ it("wires session start, poll, response and cancel through the machine-owned MCP
   expect(response.statusCode).toBe(200);
   const flow = response.json<OAuthFlowState>();
   expect(flow).toMatchObject({ target: "mcp", providerId: "mcp", status: "running", prompt: { message: "Pi login" } });
-  expect(startMcpAuth).toHaveBeenCalledWith({ id: "session-1", cwd: "/workspace" }, "login", undefined);
+  expect(startMcpAuth).toHaveBeenCalledWith({ id: "session-1", cwd: resolve("/workspace") }, "login", undefined);
   const poll = await app.inject(`/api/auth/mcp/${flow.flowId}`);
   expect(poll.json()).toEqual(flow);
   const answer = await app.inject({ method: "POST", url: `/api/auth/mcp/${flow.flowId}/respond`, payload: { requestId: required(flow.prompt).requestId, value: "redirect" } });
@@ -65,11 +66,11 @@ it("passes explicit targets and list workspace through federation-compatible rou
   const list = await app.inject("/api/sessions/session-1/mcp/auth/servers?cwd=%2Fworkspace");
   expect(list.statusCode).toBe(200);
   expect(list.json()).toEqual({ servers: [{ name: "alpha", description: "verbatim" }] });
-  expect(mcpAuthServers).toHaveBeenCalledWith({ id: "session-1", cwd: "/workspace" });
+  expect(mcpAuthServers).toHaveBeenCalledWith({ id: "session-1", cwd: resolve("/workspace") });
   expect((await app.inject("/api/sessions/session-1/mcp/auth/servers")).statusCode).toBe(400);
   const auth = await app.inject({ method: "POST", url: "/api/sessions/session-1/mcp/auth", payload: { cwd: "/workspace", mode: "logout", serverName: "alpha" } });
   expect(auth.statusCode).toBe(200);
-  expect(startMcpAuth).toHaveBeenCalledWith({ id: "session-1", cwd: "/workspace" }, "logout", "alpha");
+  expect(startMcpAuth).toHaveBeenCalledWith({ id: "session-1", cwd: resolve("/workspace") }, "logout", "alpha");
 });
 
 function required<T>(value: T | undefined): T {

@@ -63,19 +63,22 @@ function button(panel: Element, selector: string): HTMLButtonElement {
   return required(root(panel).querySelector<HTMLButtonElement>(selector));
 }
 
-describe("Workspace Tasks host UI styles", () => {
-  it("requires v1, validates its payload, and adopts start-resolved CSS through the rendered panel", () => {
-    const requirement = required(plugin.requires[0]);
-    expect(requirement).toMatchObject({ pluginId: "pi-web", id: "ui-styles", version: 1 });
-    for (const value of [null, undefined, {}, { cssText: 42 }]) {
-      expect(() => requirement.parse(value)).toThrow("requires UI styles capability v1");
+describe("Workspace Tasks stylesheet integration", () => {
+  it("requires v1 and registers the rendered panel for shared UI with activation-local ownership", () => {
+    const requirement = required(plugin.requires.find(({ id }) => id === "stylesheet-integration"));
+    expect(plugin.requires).toEqual([requirement]);
+    expect(requirement).toMatchObject({ pluginId: "pi-web", id: "stylesheet-integration", version: 1 });
+    const release = vi.fn();
+    const integration = { registerRoot: vi.fn(() => release), createController: vi.fn(), subscribe: vi.fn(() => vi.fn()) };
+    for (const value of [null, undefined, {}, { ...integration, registerRoot: undefined }, { ...integration, createController: undefined }, { ...integration, subscribe: undefined }]) {
+      expect(() => requirement.parse(value)).toThrow("Stylesheet integration capability v1");
     }
     const instance = activate();
     const requests = vi.fn();
     instance.start({ signal: new AbortController().signal, capabilities: {
       resolve<Value>(token: PluginCapability<Value>): Value {
         requests(token);
-        return token.parse({ cssText: ".ui-button { color: red; }" });
+        return token.parse(integration);
       },
     } });
     expect(requests).toHaveBeenCalledExactlyOnceWith(requirement);
@@ -83,35 +86,42 @@ describe("Workspace Tasks host UI styles", () => {
     document.body.append(container);
     render(required(instance.contributions.workspacePanels[0]).render(workspaceContext()), container);
     const panel = required(container.querySelector(tasksPanelTagName));
-    expect(root(panel).querySelector("style[data-ui-styles]")?.textContent).toBe(".ui-button { color: red; }");
-    // Another activation must not inherit the first instance's resolved styles.
+    expect(integration.registerRoot).toHaveBeenCalledExactlyOnceWith(root(panel), { sharedUi: true });
+    // Another activation must not inherit the first instance's integration.
     render(required(activate().contributions.workspacePanels[0]).render(workspaceContext()), container);
-    expect(root(panel).querySelector("style[data-ui-styles]")?.textContent).toBe("");
+    expect(release).toHaveBeenCalledOnce();
+    expect(integration.registerRoot).toHaveBeenCalledOnce();
   });
 
-  it("updates one persistent style as text without replacing content or its listeners", async () => {
+  it("releases and replaces root registrations without rebuilding content or listeners", async () => {
     const panel = createPanel();
-    const cssText = '</style><button id="injected">Injected</button><style>';
-    panel.uiCssText = cssText;
+    const release = vi.fn();
+    const integration = { registerRoot: vi.fn(() => release), createController: vi.fn(), subscribe: vi.fn(() => vi.fn()) };
+    panel.stylesheetIntegration = integration;
+    expect(integration.registerRoot).not.toHaveBeenCalled();
     const context = workspaceContext();
     panel.context = context;
     document.body.append(panel);
-    const style = root(panel).querySelector("style[data-ui-styles]");
+    expect(integration.registerRoot).toHaveBeenCalledExactlyOnceWith(root(panel), { sharedUi: true });
     await vi.waitFor(() => { expect(button(panel, "[data-task-id]").textContent).toBe("Run"); });
-    expect(style?.textContent).toBe(cssText);
-    expect(root(panel).querySelector("#injected")).toBeNull();
     const open = button(panel, "[data-open-terminal]");
     const viewer = required(root(panel).querySelector(".viewer"));
-    viewer.scrollTop = 25;
-    panel.uiCssText = ".ui-button { color: blue; }";
-    expect(root(panel).querySelector("style[data-ui-styles]")).toBe(style);
+    panel.stylesheetIntegration = integration;
+    expect(integration.registerRoot).toHaveBeenCalledOnce();
+    const releaseReplacement = vi.fn();
+    const replacement = { ...integration, registerRoot: vi.fn(() => releaseReplacement) };
+    panel.stylesheetIntegration = replacement;
+    expect(release).toHaveBeenCalledOnce();
+    expect(replacement.registerRoot).toHaveBeenCalledExactlyOnceWith(root(panel), { sharedUi: true });
     expect(button(panel, "[data-open-terminal]")).toBe(open);
     expect(root(panel).querySelector(".viewer")).toBe(viewer);
-    expect(viewer.scrollTop).toBe(25);
-    expect(style?.textContent).toBe(".ui-button { color: blue; }");
-    expect(root(panel).querySelectorAll("style[data-ui-styles]")).toHaveLength(1);
     open.click();
     expect(context.terminal.open).toHaveBeenCalledOnce();
+    panel.remove();
+    expect(releaseReplacement).toHaveBeenCalledOnce();
+    document.body.append(panel);
+    expect(replacement.registerRoot).toHaveBeenCalledTimes(2);
+    expect(replacement.registerRoot).toHaveBeenLastCalledWith(root(panel), { sharedUi: true });
   });
 
   it("preserves refresh, confirmation, dispatch disabling, and terminal events on native UI controls", async () => {

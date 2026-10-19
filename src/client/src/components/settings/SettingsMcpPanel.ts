@@ -1,6 +1,7 @@
 import { css, html, LitElement, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { api, type McpAuthServerOption, type SessionRef } from "../../api";
+import { stylesheetIntegrationCapability } from "../../plugins/styles";
 import { uiButtonStyles } from "../ui/controlStyles";
 import { uiSettingsStyles } from "../ui/settingsStyles";
 import "./SettingsPanelFrame";
@@ -14,6 +15,11 @@ export type McpAuthHandler = (mode: "login" | "logout", serverName: string, cont
 
 @customElement("settings-mcp-panel")
 export class SettingsMcpPanel extends LitElement {
+  constructor() {
+    super();
+    stylesheetIntegrationCapability.createController(this);
+  }
+
   /** The parent supplies only a selected, nonarchived session on the settings machine. */
   @property({ attribute: false, hasChanged: (next: McpAuthContext | undefined, previous: McpAuthContext | undefined) =>
     next?.machineId !== previous?.machineId || next?.session.id !== previous?.session.id || next?.session.cwd !== previous?.session.cwd,

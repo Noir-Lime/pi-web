@@ -1,29 +1,36 @@
-import type { PiWebPlugin, PluginCapability, UiStylesCapabilityV1 } from "@jmfederico/pi-web/plugin-api";
+import type { StylesheetIntegrationCapabilityV1, PiWebPlugin, PluginCapability } from "@jmfederico/pi-web/plugin-api";
 import { RELAYS_ROOT } from "./relayDiscovery.js";
 import { relayIdentityFromMetadata } from "./relayIdentity.js";
 import { defineRelaysPanelElement, RELAY_SELECTION_QUERY_KEY } from "./relaysPanelElement.js";
 
-const uiStylesCapability: PluginCapability<UiStylesCapabilityV1, 1> = {
-  pluginId: "pi-web", id: "ui-styles", version: 1,
-  parse: (value) => {
-    if (typeof value !== "object" || value === null || !("cssText" in value) || typeof value.cssText !== "string") {
-      throw new Error("PI WEB UI styles capability v1 requires cssText");
+const stylesheetIntegrationCapability: PluginCapability<StylesheetIntegrationCapabilityV1, 1> = {
+  pluginId: "pi-web", id: "stylesheet-integration", version: 1,
+  parse(value) {
+    if (!isStylesheetIntegration(value)) {
+      throw new Error("Stylesheet integration capability v1 requires registerRoot and createController");
     }
-    return { cssText: value.cssText };
+    return value;
   },
 };
+
+function isStylesheetIntegration(value: unknown): value is StylesheetIntegrationCapabilityV1 {
+  return typeof value === "object" && value !== null
+    && "registerRoot" in value && typeof value.registerRoot === "function"
+    && "createController" in value && typeof value.createController === "function"
+    && "subscribe" in value && typeof value.subscribe === "function";
+}
 
 const plugin = {
   apiVersion: 4,
   name: "Relays",
-  requires: [uiStylesCapability],
+  requires: [stylesheetIntegrationCapability],
   activate: ({ runtimePluginId, html, svg }) => {
     defineRelaysPanelElement();
-    let uiCssText = "";
+    let stylesheetIntegration: StylesheetIntegrationCapabilityV1 | undefined;
 
     return {
       start: ({ capabilities }) => {
-        uiCssText = capabilities.resolve(uiStylesCapability).cssText;
+        stylesheetIntegration = capabilities.resolve(stylesheetIntegrationCapability);
       },
       contributions: {
         actions: [
@@ -79,7 +86,7 @@ const plugin = {
               </svg>
             `,
             order: 50,
-            render: (context) => html`<pi-web-relays-panel .uiCssText=${uiCssText} .context=${context}></pi-web-relays-panel>`,
+            render: (context) => html`<pi-web-relays-panel .stylesheetIntegration=${stylesheetIntegration} .context=${context}></pi-web-relays-panel>`,
           },
         ],
       },

@@ -111,6 +111,8 @@ describe("plugin delivery artifacts", () => {
     expect(builtPackageFiles).toEqual(expect.arrayContaining([
       "dist/pi-packages/workflows/package.json",
       "dist/pi-packages/workflows/browser/pi-web-plugin.js",
+      "dist/pi-packages/workflows/browser/worktreeDialog.js",
+      "dist/pi-packages/workflows/server-plugin.js",
       "dist/pi-packages/workflows/prompts/worktree.md",
     ]));
     // Check the materialized build output, not words in agent instructions.
@@ -172,8 +174,11 @@ describe("plugin delivery artifacts", () => {
       browserRoot: expect.objectContaining({ path: "browser" }),
     })]);
     const browserModule = snapshot.plugins[0].browserModule.filePath;
-    expect(moduleSpecifiers(await readFile(browserModule, "utf8"))).toEqual([]);
-    expect((await import(pathToFileURL(browserModule).href)).default.name).toBe("Workflows");
+    expect(moduleSpecifiers(await readFile(browserModule, "utf8"))).toEqual(["./worktreeDialog.js"]);
+    expect((await import(pathToFileURL(browserModule).href)).default).toMatchObject({ name: "Workflows", apiVersion: 5 });
+    const serverModule = join(source, metadata.piWeb.plugins[0].serverModule);
+    expect(moduleSpecifiers(await readFile(serverModule, "utf8"))).toEqual([]);
+    expect((await import(pathToFileURL(serverModule).href)).default).toMatchObject({ name: "Workflows", apiVersion: 5 });
     enabled = false;
     expect((await catalog.snapshot()).plugins[0].enabled).toBe(false);
     // Disabling web contributions leaves Pi prompt resources installed.

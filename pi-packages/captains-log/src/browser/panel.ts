@@ -25,7 +25,7 @@ function dateLabel(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
-export function renderCaptainPanel(html: Html, uiCssText: string, view: CaptainPanelView) {
+export function renderCaptainPanel(html: Html, view: CaptainPanelView) {
   const working = view.entries.some((entry) => entry.status === "running");
   const pirateSelected = view.source !== undefined && view.entries.some((entry) => entry.sessionId === view.source?.id);
   const disabled = !view.connected || view.connecting || view.pending || working || !view.source || pirateSelected;
@@ -34,7 +34,7 @@ export function renderCaptainPanel(html: Html, uiCssText: string, view: CaptainP
   const status = view.connecting ? "Connecting…" : !view.connected ? "Connection lost" : view.pending ? "Fetching the last reply…"
     : working ? "The captain is translating…" : !view.source ? "Select a session in this workspace first." : pirateSelected ? "Select a different session — this one is the pirate."
       : "Ready to translate";
-  return html`<style data-ui-styles .textContent=${uiCssText}></style><style>${styles}</style>
+  return html`<style>${styles}</style>
     <section class="captains-log" aria-label="Captain's Log">
       <div class="captain-heading"><h2>⚓ Captain's Log</h2><p class="muted">Your last reply, retold by a theatrical pirate.</p></div>
       <div class="captain-source"><span class="muted">Selected session</span><strong>${view.source?.name ?? "No session selected"}</strong></div>
