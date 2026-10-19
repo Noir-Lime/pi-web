@@ -128,7 +128,7 @@ export class WorkspaceController {
       this.setState({ sessions });
       const session = this.sessions.preferredSession(workspace.path, sessions, target?.sessionId);
       if (!this.navigationIsCurrent(navigation) || !workspaceMutationIsCurrent(target)) return;
-      if (session) await this.sessions.selectSession(session, { updateUrl: target?.updateUrl, ...(navigation === undefined ? {} : { navigation }) });
+      if (session) await this.sessions.selectSession(session, { deferChatLoading: true, updateUrl: target?.updateUrl, ...(navigation === undefined ? {} : { navigation }) });
       else if (target?.sessionId !== undefined && target.sessionId !== "") {
         this.browserErrors.report(errorScope, `Session not found: ${target.sessionId}`);
         return `Session not found: ${target.sessionId}`;

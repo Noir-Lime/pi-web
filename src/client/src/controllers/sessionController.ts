@@ -69,6 +69,10 @@ export interface SessionControllerDependencies {
   automaticSessionCandidates?: (sessions: SessionInfo[]) => SessionInfo[];
   replacePromptEditorText?: (replacement: PromptEditorTextReplacement) => void | Promise<void>;
   onSelectedSessionReady?: (selection: SelectedSessionReady) => void;
+  /** Capture before reading; publish only an accepted authoritative runtime snapshot. */
+  observeSessionSnapshot?: (machineId: string, sessionId: string) => (status: SessionStatus) => void;
+  /** Selection can be restored without joining a transcript hidden by the shell. */
+  isChatVisible?: () => boolean;
   onModelScopeChanged?: (revision: number) => void;
 }
 
@@ -129,6 +133,8 @@ interface SelectedSessionRefreshTarget {
 }
 
 export interface SessionSelectionOptions {
+  /** Publish the selected row now; the shell starts its chat after navigation paints. */
+  deferChatLoading?: boolean | undefined;
   updateUrl?: boolean | undefined;
   preserveTreeDialog?: boolean | undefined;
   propagateRefreshError?: boolean | undefined;
@@ -144,6 +150,9 @@ export class SessionController {
   private readonly automaticSessionCandidates: (sessions: SessionInfo[]) => SessionInfo[];
   private readonly replacePromptEditorText: SessionControllerDependencies["replacePromptEditorText"];
   private readonly onSelectedSessionReady: SessionControllerDependencies["onSelectedSessionReady"];
+  private readonly observeSessionSnapshot: SessionControllerDependencies["observeSessionSnapshot"];
+  private readonly isChatVisible: () => boolean;
+  private selectedSessionLoadDeferred = false;
   private readonly onModelScopeChanged: SessionControllerDependencies["onModelScopeChanged"];
   private readonly captureNavigation: SessionControllerDependencies["captureNavigation"];
   private readonly beginNavigationOperation: SessionControllerDependencies["beginNavigationOperation"];
@@ -169,6 +178,7 @@ export class SessionController {
   private pendingTranscriptEvents: SessionUiEvent[] = [];
   private refreshEventBuffer: SelectedSessionRefreshBuffer | undefined;
   private selectedSessionRecoveryTarget: SelectedSessionRefreshTarget | undefined;
+  private initialSnapshotReady: { selectionSeq: number; complete: () => void } | undefined;
   private pendingStatusBySession = new Map<string, SessionStatus>();
   private pendingActivityBySession = new Map<string, SessionActivity>();
   private pendingFrame: number | undefined;
@@ -193,6 +203,8 @@ export class SessionController {
     this.automaticSessionCandidates = deps.automaticSessionCandidates ?? ((sessions) => sessions);
     this.replacePromptEditorText = deps.replacePromptEditorText;
     this.onSelectedSessionReady = deps.onSelectedSessionReady;
+    this.observeSessionSnapshot = deps.observeSessionSnapshot;
+    this.isChatVisible = deps.isChatVisible ?? (() => true);
     this.onModelScopeChanged = deps.onModelScopeChanged;
     this.captureNavigation = deps.captureNavigation;
     this.beginNavigationOperation = deps.beginNavigationOperation;
@@ -210,6 +222,7 @@ export class SessionController {
 
   dispose() {
     this.disposed = true;
+    this.selectedSessionLoadDeferred = false;
     if (this.getState().pendingTreeActions.length > 0) this.setState({ pendingTreeActions: [] });
     this.selectionSeq += 1;
     this.selectedSessionJoinNavigation = undefined;
@@ -218,6 +231,7 @@ export class SessionController {
   }
 
   clearActiveSession() {
+    this.selectedSessionLoadDeferred = false;
     this.selectionSeq += 1;
     this.selectedSessionJoinNavigation = undefined;
     this.socket.close();
@@ -318,6 +332,19 @@ export class SessionController {
     return !this.disposed && navigationIsCurrent(this.selectedSessionJoinNavigation);
   }
 
+  get isChatLoadDeferred(): boolean {
+    return this.selectedSessionLoadDeferred;
+  }
+
+  /** Join only the current selection when the shell reveals Chat. */
+  async loadSelectedSession(): Promise<void> {
+    if (this.disposed || !this.selectedSessionLoadDeferred || !this.isChatVisible()) return;
+    const session = this.getState().selectedSession;
+    if (session === undefined) return;
+    const navigation = this.beginNavigationOperation?.(SESSION_RESTORE_SCOPE);
+    await this.selectSession(session, { updateUrl: false, navigation });
+  }
+
   async selectSession(session: SessionInfo, options?: SessionSelectionOptions) {
     if (this.disposed || !navigationIsCurrent(options?.navigation)) return;
     if (isClientPendingStartSessionInfo(session)) {
@@ -332,9 +359,15 @@ export class SessionController {
     this.socket.close();
     this.streamWatermark = undefined;
     this.clearPendingUpdates();
-    this.notifications?.prepareSelectedSession(session, machineId);
+    this.selectedSessionLoadDeferred = options?.deferChatLoading === true || !this.isChatVisible();
+    if (this.selectedSessionLoadDeferred) this.notifications?.clearSelectedSession();
+    else this.notifications?.prepareSelectedSession(session, machineId);
     const transcriptKey = this.sessionCacheKey(session.id);
-    const cached = this.transcripts.cachedView(transcriptKey);
+    // Even a cache hit parses/normalizes the whole held transcript. Keep
+    // workspace navigation limited to the selected row's lightweight metadata.
+    const cached = this.selectedSessionLoadDeferred
+      ? { messages: [], messagePageStart: 0, messagePageEnd: 0, messagePageTotal: 0 }
+      : this.transcripts.cachedView(transcriptKey);
     this.setState({
       selectedSession: session,
       ...cached,
@@ -346,6 +379,13 @@ export class SessionController {
       closedDialogs: [],
       availableThinkingLevels: [],
     });
+    if (this.selectedSessionLoadDeferred) {
+      // Metadata selection is complete. A later reveal joins the then-current
+      // selection, after this route may have published its restored session URL.
+      this.selectedSessionJoinNavigation = undefined;
+      if (options?.updateUrl !== false) this.updateUrl();
+      return;
+    }
     let socketConnected = false;
     try {
       if (session.archived === true) {
@@ -366,7 +406,7 @@ export class SessionController {
         },
         () => { void this.refreshSelectedSession(session.id, { recoverNetwork: true }); },
         machineId,
-        () => { void this.notifications?.refreshSelectedSession(session, machineId); },
+        () => { void this.refreshSessionNotifications(session, machineId); },
       );
       socketConnected = true;
       const refreshTarget: SelectedSessionRefreshTarget = {
@@ -376,7 +416,9 @@ export class SessionController {
         errorOwner,
         ...(options?.navigation === undefined ? {} : { navigation: options.navigation }),
       };
-      await this.requestSelectedSessionRefresh(refreshTarget);
+      // Tree mutations retain their authoritative trailing-refresh contract.
+      if (options?.propagateRefreshError === true) await this.requestSelectedSessionRefresh(refreshTarget);
+      else if (!await this.joinSelectedSessionSnapshot(refreshTarget)) return;
       if (!this.isCurrentRefreshTarget(refreshTarget) || !navigationIsCurrent(options?.navigation)) return;
       void this.refreshAvailableThinkingLevels();
       this.onSelectedSessionReady?.({ machineId, session });
@@ -1470,7 +1512,10 @@ export class SessionController {
    */
   refreshSelectedSession(sessionId = this.getState().selectedSession?.id, options?: { silent?: boolean; recoverNetwork?: boolean }): Promise<void> {
     const session = this.getState().selectedSession;
-    if (sessionId === undefined || session?.id !== sessionId || session.archived === true || isClientPendingStartSessionInfo(session)) return Promise.resolve();
+    if (sessionId === undefined || session?.id !== sessionId) return Promise.resolve();
+    // Polls/resume must not bypass the shell's first-paint boundary.
+    if (this.selectedSessionLoadDeferred) return Promise.resolve();
+    if (session.archived === true || isClientPendingStartSessionInfo(session)) return Promise.resolve();
     const machineId = selectedMachineId(this.getState());
     const target: SelectedSessionRefreshTarget = {
       session,
@@ -1505,6 +1550,38 @@ export class SessionController {
     return buffer;
   }
 
+  private async refreshSessionNotifications(session: SessionInfo, machineId: string): Promise<void> {
+    try {
+      await this.notifications?.refreshSelectedSession(session, machineId);
+    } catch (error) {
+      // The notification controller owns inbox failures. A rejecting bridge
+      // must still be observed, without turning it into a transcript failure.
+      console.warn("Selected session notification refresh failed", error);
+    }
+  }
+
+  private async joinSelectedSessionSnapshot(target: SelectedSessionRefreshTarget): Promise<boolean> {
+    let ready = false;
+    let complete!: () => void;
+    const snapshotReady = new Promise<boolean>((resolve) => {
+      complete = () => { ready = true; resolve(true); };
+    });
+    const join = { selectionSeq: target.selectionSeq, complete };
+    this.initialSnapshotReady = join;
+    const drained = this.requestSelectedSessionRefresh(target).then(() => ready, (error: unknown) => {
+      if (!ready) throw error;
+      // Completion no longer owns later passes, but their failures still need
+      // an observer even if no explicit refresh caller is awaiting them.
+      this.reportSessionError(target.session, target.machineId, error, target.errorOwner);
+      return true;
+    });
+    try {
+      return await Promise.race([snapshotReady, drained]);
+    } finally {
+      if (this.initialSnapshotReady === join) this.initialSnapshotReady = undefined;
+    }
+  }
+
   private requestSelectedSessionRefresh(target: SelectedSessionRefreshTarget): Promise<void> {
     if (!this.isCurrentRefreshTarget(target)) return Promise.resolve();
     const key = machineSessionKey(target.machineId, target.session.id);
@@ -1513,14 +1590,11 @@ export class SessionController {
     if (this.selectedSessionRecoveryTarget === undefined || !this.isCurrentRefreshTarget(this.selectedSessionRecoveryTarget)) {
       this.bufferRefreshEvents(target);
     }
-    // The notification controller coalesces its own refreshes. Keep that work
-    // outside the transcript coordinator so a slow inbox never blocks replay
-    // or a subsequent snapshot, while callers still await both results.
-    const notificationsRefresh = Promise.resolve().then(() => {
+    // Inbox work has its own completion and error owner, not transcript readiness.
+    void Promise.resolve().then(() => {
       if (!this.isCurrentRefreshTarget(target)) return;
-      return this.notifications?.refreshSelectedSession(target.session, target.machineId);
+      return this.refreshSessionNotifications(target.session, target.machineId);
     });
-    notificationsRefresh.catch(() => undefined);
     const transcriptRefresh = this.selectedSessionRefreshes.request(key, async () => {
       if (!this.isCurrentRefreshTarget(target)) return;
       const read = () => this.readSelectedSessionSnapshot(target, key);
@@ -1535,12 +1609,14 @@ export class SessionController {
         if (this.selectedSessionRecoveryTarget === target) this.selectedSessionRecoveryTarget = undefined;
       }
     });
-    return transcriptRefresh.then(() => notificationsRefresh);
+    return transcriptRefresh;
   }
 
   private async readSelectedSessionSnapshot(target: SelectedSessionRefreshTarget, key: string): Promise<void> {
     const buffer = this.bufferRefreshEvents(target);
     const historyRevision = this.transcripts.historyRevision(key);
+    const observeRuntime = this.observeSessionSnapshot?.(target.machineId, target.session.id);
+    let appliedHistoryRevision: number;
     const recoveryError = this.browserErrors.captureRecovery(
       sessionBrowserErrorScope(target.machineId, target.session.id, target.errorOwner), "session-refresh",
     );
@@ -1561,6 +1637,8 @@ export class SessionController {
         this.applyStatus(status);
         this.lastAppliedSelectedRefresh = { selectionSeq: target.selectionSeq, partialJson: selectedRefreshPartialJson(snapshot) };
       }
+      appliedHistoryRevision = this.transcripts.historyRevision(key);
+      observeRuntime?.(status);
     } finally {
       if (this.refreshEventBuffer === buffer) this.refreshEventBuffer = undefined;
       // Release every attempt, including failed ones, before any retry delay.
@@ -1571,6 +1649,13 @@ export class SessionController {
           this.applyEvent(event);
         }
       }
+    }
+    // Replay may invalidate the just-read branch and enqueue its replacement.
+    // Only a coherent snapshot surviving that replay can complete the join.
+    if (this.transcripts.historyRevision(key) === appliedHistoryRevision
+      && this.isCurrentRefreshTarget(target)
+      && this.initialSnapshotReady?.selectionSeq === target.selectionSeq) {
+      this.initialSnapshotReady.complete();
     }
   }
 
@@ -1762,6 +1847,7 @@ export class SessionController {
   }
 
   private selectClientPendingStartSession(session: ClientPendingStartSessionInfo, options?: { updateUrl?: boolean | undefined; activity?: SessionActivity | undefined; sessions?: SessionInfo[] | undefined }): void {
+    this.selectedSessionLoadDeferred = false;
     this.sessionSelection.rememberSession({ ...session, cwd: this.workspaceSelectionKey(session.cwd) });
     this.selectionSeq += 1;
     this.selectedSessionJoinNavigation = undefined;

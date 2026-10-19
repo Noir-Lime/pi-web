@@ -701,7 +701,7 @@ describe("PiWebApp plugin host", () => {
     const previousSession: SessionInfo = { id: "session-old", cwd: workspace.path, path: "/repo/.sessions/session-old", created: "now", modified: "now", messageCount: 0, firstMessage: "" };
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&session=session-old&tool=core%3Aworkspace.terminal&view=workspace");
     const app = createDetachedApp();
-    if (!Reflect.set(app, "focusChatComposer", () => { callAppMethod(app, "selectMainView", "chat", { invalidateNavigationSelection: false }); })) throw new Error("Could not stub chat focus");
+    if (!Reflect.set(app, "openChatAndFocusComposer", () => { callAppMethod(app, "selectMainView", "chat", { invalidateNavigationSelection: false }); })) throw new Error("Could not stub Chat navigation");
     setAppState(app, {
       ...initialAppState(),
       selectedProject: project,
@@ -761,7 +761,7 @@ describe("PiWebApp plugin host", () => {
       workspaceTool: TERMINAL_PANEL_ID,
       mainView: "workspace",
     });
-    if (!Reflect.set(app, "focusChatComposer", () => { callAppMethod(app, "selectMainView", "chat", { invalidateNavigationSelection: false }); })) throw new Error("Could not stub chat focus");
+    if (!Reflect.set(app, "openChatAndFocusComposer", () => { callAppMethod(app, "selectMainView", "chat", { invalidateNavigationSelection: false }); })) throw new Error("Could not stub Chat navigation");
     if (!Reflect.set(app, "restoreRouteFor", (route: { sessionId?: string }) => {
       if (route.sessionId === started.id) setAppState(app, { ...appState(app), selectedSession: started });
       return Promise.resolve();
@@ -1082,7 +1082,11 @@ describe("PiWebApp plugin host", () => {
     let settled = false;
     const restoring = callAsyncAppMethod(app, "restoreRoute", false).then(() => { settled = true; });
     try {
-      await vi.waitFor(() => { expect(transcriptSnapshot).toHaveBeenCalledOnce(); });
+      await vi.waitFor(() => { expect(sessions.isChatLoadDeferred).toBe(true); });
+      // Detached route fixtures have no shell paint loop. Start the independent
+      // chat load explicitly, as the mounted shell does after the list paints.
+      await sessions.loadSelectedSession();
+      expect(transcriptSnapshot).toHaveBeenCalledOnce();
       expect(appState(app).selectedSession?.id).toBe(session.id);
       expect(loadPlugins).toHaveBeenCalledOnce();
       if (withTool) {
@@ -1475,6 +1479,11 @@ describe("PiWebApp plugin host", () => {
     const restoring = callAsyncAppMethod(app, "restoreRouteFor", {
       projectId: project.id, workspaceId: workspace.id, sessionId: session.id, view: "chat",
     }, false, {});
+    let joining: Promise<void> | undefined;
+    if (phase === "refresh") {
+      await vi.waitFor(() => { expect(sessions.isChatLoadDeferred).toBe(true); });
+      joining = sessions.loadSelectedSession();
+    }
     await vi.waitFor(() => { expect(waiting).toBe(true); });
     const bufferedEvent: SessionUiEvent = { type: "status.update", status: { ...status, cost: 2 } };
     if (phase === "refresh") {
@@ -1494,7 +1503,8 @@ describe("PiWebApp plugin host", () => {
     if (cancelSelection) browser.navigate(browser.url.href.replace("session=session-1", "session=session-2"));
     const destination = browser.url.href;
     gate.resolve(undefined);
-    await restoring;
+    await Promise.all([restoring, joining]);
+    if (phase !== "refresh") await sessions.loadSelectedSession();
 
     if (cancelSelection) {
       expect(setHandler).not.toHaveBeenCalled();
@@ -1555,6 +1565,8 @@ describe("PiWebApp plugin host", () => {
     const socket: SessionEventSocket = { connect, close, setHandler: (onEvent) => { handler = onEvent; } };
     Reflect.set(sessions, "socket", socket);
     const restoring = callAsyncAppMethod(app, "restoreRoute", false);
+    await vi.waitFor(() => { expect(sessions.isChatLoadDeferred).toBe(true); });
+    const joining = sessions.loadSelectedSession();
     await vi.waitFor(() => { expect(transcriptSnapshot).toHaveBeenCalledOnce(); });
     expect(appState(app).selectedSession?.id).toBe(session.id);
 
@@ -1566,14 +1578,16 @@ describe("PiWebApp plugin host", () => {
       destination.searchParams.set("view", "workspace");
       browser.navigate(destination.href);
       firstSnapshot.resolve(snapshot("Initial transcript", 1));
-      await restoring;
+      await Promise.all([restoring, joining]);
       await callAsyncAppMethod(app, "restoreRoute", false);
+      await sessions.loadSelectedSession();
     } else {
       const patching = createPluginRuntimeContext(app).navigate({ sessionId: nextId, view: "workspace" }, { mode: "patch" });
       // Both joins, if needed, share the pending read's refresh coordinator. Release
       // the old response before awaiting navigation; a fresh read must replace it.
       firstSnapshot.resolve(snapshot("Initial transcript", 1));
-      await Promise.all([restoring, patching]);
+      await Promise.all([restoring, joining, patching]);
+      await sessions.loadSelectedSession();
       expect(selectWorkspace).toHaveBeenCalledTimes(validDestination ? 1 : 2);
     }
 
@@ -2345,10 +2359,10 @@ describe("PiWebApp plugin host", () => {
     const refreshCurrent = actions.find((candidate): candidate is { id: string; run: () => void | Promise<void> } => isAction(candidate) && candidate.id === "core:workspace.refresh-current");
     await refreshCurrent?.run();
 
-    const inactive = { ...initialAppState(), selectedWorkspace: workspace, workspaces: [workspace], workspaceTool: "browser-only:workspace.panel" as const };
-    const active = { ...inactive, activity: { sessionId: "session-1", phase: "active" as const, label: "working", at: "now" } };
-    setAppState(app, inactive);
-    callAppMethod(app, "handleActivityTransition", active, inactive);
+    const workingSession = { ...runtimeRecoverySession(workspace), id: "session-1" };
+    setAppState(app, { ...initialAppState(), selectedWorkspace: workspace, workspaces: [workspace], sessions: [workingSession], workspaceTool: "browser-only:workspace.panel" });
+    callAppMethod(app, "handleRealtimeEvent", "local", { type: "activity.update", activity: { sessionId: workingSession.id, phase: "active", label: "working", at: "now" } });
+    callAppMethod(app, "handleRealtimeEvent", "local", { type: "activity.update", activity: { sessionId: workingSession.id, phase: "idle", label: "idle", at: "now" } });
     await Promise.resolve();
 
     expect(invalidated).toHaveBeenCalledTimes(5);

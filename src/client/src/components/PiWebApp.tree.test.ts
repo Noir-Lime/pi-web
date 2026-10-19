@@ -72,6 +72,24 @@ describe("PiWebApp session tree wiring", () => {
     expect(forkFromTree).toHaveBeenNthCalledWith(3, "failure");
   });
 
+  it("does not steal focus after the user chooses another surface in the same conversation", async () => {
+    const app = createApp();
+    const state = setAppTree(app, tree());
+    const controller = appSessionController(app);
+    const result = deferred<SessionTreeNavigateResult>();
+    vi.spyOn(controller, "navigateTree").mockReturnValue(result.promise);
+    const focus = vi.fn(() => Promise.resolve());
+    Reflect.set(app, "focusChatComposer", focus);
+    const navigate = navigatorNavigateHandler(renderSessionTreeNavigator(app, state));
+    const navigating = navigate("side", { mode: "none" });
+    // A newer user surface selection retains the conversation but owns focus.
+    Reflect.set(app, "state", { ...state, mainView: "workspace" });
+    Reflect.set(app, "navigationSelectionSeq", 1);
+    result.resolve({ cancelled: false });
+    await navigating;
+    expect(focus).not.toHaveBeenCalled();
+  });
+
   it("does not steal focus after the user selects another session during navigation", async () => {
     const app = createApp();
     const state = setAppTree(app, tree());
