@@ -88,12 +88,6 @@ export const chatStyles = css`
   .queued-attachments { display: inline-flex; align-items: center; gap: 4px; color: var(--pi-text-secondary); font-size: 12px; }
   .queued-kind { color: var(--pi-muted); font-size: 12px; text-transform: uppercase; }
   .queued-dialogs { margin: -8px 0 14px; padding: 0 4px; color: var(--pi-muted); font-size: 12px; text-align: center; }
-  .suggested-input { --ui-transcript-bg: color-mix(in srgb, var(--pi-surface) 40%, var(--pi-bg)); display: grid; gap: 8px; margin: 0 0 12px; padding: 12px 16px; }
-  .suggested-input-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .suggested-input-text { max-height: 12em; overflow: auto; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-  .suggested-input small { color: var(--pi-muted); }
-  .suggested-input-use { justify-self: start; }
-  .suggested-input-dismiss { font-size: 18px; }
   .session-activity { --ui-transcript-bg: var(--pi-chat-activity-bg, color-mix(in srgb, var(--pi-surface) 40%, var(--pi-bg))); max-width: 100%; min-width: 0; display: grid; gap: 4px; margin: 0 0 12px; padding: 12px 16px; color: var(--pi-text); overflow: hidden; }
   .session-activity.compacting { --ui-transcript-bg: var(--pi-chat-compacting-bg, color-mix(in srgb, var(--pi-purple) 5%, var(--pi-bg))); }
   .session-activity strong { color: var(--pi-purple); }

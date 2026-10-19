@@ -727,8 +727,8 @@ export class SessionController {
     if (result.cancelled) return;
 
     const cacheKey = machineSessionKey(machineId, session.id);
-    const editorText = result.editorText ?? "";
-    saveDraft(cacheKey, editorText);
+    const editorText = result.editorText;
+    if (editorText !== undefined) saveDraft(cacheKey, editorText);
     this.transcripts.discard(cacheKey);
 
     // A user can reselect the same session while the request is in flight. Its
@@ -736,12 +736,11 @@ export class SessionController {
     // identity and requires a fresh authoritative branch read.
     if (!this.isSelectedSessionIdentity(session.id, machineId)) return;
     this.clearPendingUpdates();
-    // The response already owns the editor text. Restore it without waiting for
-    // transcript/inbox reads, and still refresh history if editor replacement fails.
+    // Only editable targets return editor text. Other history navigation keeps
+    // the draft; refresh history either way, even if editor replacement fails.
     const editorReplacement = (async () => {
-      await this.replacePromptEditorText?.({ machineId, sessionId: session.id, text: editorText });
-      if (this.isSelectedSessionIdentity(session.id, machineId)) {
-        this.suppressSuggestedInput({ machineId, sessionId: session.id }, editorText);
+      if (editorText !== undefined) {
+        await this.replacePromptEditorText?.({ machineId, sessionId: session.id, text: editorText });
       }
     })();
     // Keep the subscription and selection identity during same-session reads.
@@ -801,7 +800,6 @@ export class SessionController {
     // The draft belongs to the forked session file; the original keeps its own.
     if (result.promptDraft !== undefined) {
       saveDraft(machineSessionKey(machineId, forked.id), result.promptDraft);
-      this.suppressSuggestedInput({ machineId, sessionId: forked.id }, result.promptDraft);
     }
     // The daemon replaced the runtime behind the original session identity with
     // the fork while the request was in flight, so any cached projection of the
@@ -845,30 +843,6 @@ export class SessionController {
     this.applyStatus(status);
   }
 
-  async useSuggestedInput(machineId: string, sessionId: string): Promise<void> {
-    if (!this.isSelectedSessionIdentity(sessionId, machineId)) return;
-    const state = this.getState();
-    const session = state.selectedSession;
-    const text = state.status?.sessionId === sessionId ? state.status.suggestedInput : undefined;
-    if (session === undefined || text === undefined) return;
-    const errorOwner = this.captureSessionErrorOwner(session);
-    saveDraft(machineSessionKey(machineId, sessionId), text);
-    try {
-      await this.replacePromptEditorText?.({ machineId, sessionId, text });
-      if (this.isSelectedSessionIdentity(sessionId, machineId)) this.suppressSuggestedInput({ machineId, sessionId }, text);
-    } catch (error) {
-      this.reportSessionError(session, machineId, error, errorOwner);
-    }
-  }
-
-  dismissSuggestedInput(machineId: string, sessionId: string, text: string): void {
-    if (!this.isSelectedSessionIdentity(sessionId, machineId)) return;
-    const status = this.getState().status;
-    // A click on an older rendered card must not dismiss a newer suggestion.
-    if (status?.sessionId !== sessionId || status.suggestedInput !== text) return;
-    this.suppressSuggestedInput({ machineId, sessionId }, text);
-  }
-
   private invalidateSessionTree(): void {
     const state = this.getState();
     const session = state.selectedSession;
@@ -884,12 +858,6 @@ export class SessionController {
     if (state.treeDialog !== undefined && !this.hasPendingTreeAction(machineId, session.id)) {
       this.setState({ treeDialog: undefined });
     }
-  }
-
-  private suppressSuggestedInput(target: PromptChipTarget, text: string): void {
-    if (this.disposed) return;
-    const key = machineSessionKey(target.machineId, target.sessionId);
-    this.setState({ suppressedSuggestedInputs: { ...this.getState().suppressedSuggestedInputs, [key]: text } });
   }
 
   private setTreeActionPending(target: PromptChipTarget, pending: boolean): void {
@@ -2195,15 +2163,7 @@ export class SessionController {
     const state = this.getState();
     const isSelected = state.selectedSession?.id === status.sessionId;
     const clearsStaleActivity = state.sessionActivities[status.sessionId]?.phase === "active" && !isSessionActive(status);
-    const key = machineSessionKey(selectedMachineId(state), status.sessionId);
-    const suppressedText = state.suppressedSuggestedInputs[key];
-    // Retain suppression across delayed status delivery. Retire it when another
-    // suggestion arrives, or an observed applied/dismissed suggestion is cleared.
-    const retiresSuppressedInput = suppressedText !== undefined && !this.hasPendingTreeAction(selectedMachineId(state), status.sessionId)
-      && status.suggestedInput !== suppressedText
-      && (status.suggestedInput !== undefined || state.sessionStatuses[status.sessionId]?.suggestedInput === suppressedText);
     this.setState({
-      ...(retiresSuppressedInput ? { suppressedSuggestedInputs: omitKey(state.suppressedSuggestedInputs, key) } : {}),
       sessionStatuses: { ...state.sessionStatuses, [status.sessionId]: status },
       ...sessionMessageCountPatch(state, status.sessionId, status.messageCount),
       ...(clearsStaleActivity ? { sessionActivities: omitSessionActivity(state.sessionActivities, status.sessionId) } : {}),

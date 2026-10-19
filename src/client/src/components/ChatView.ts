@@ -8,7 +8,6 @@ import * as transcript from "./chatTranscriptTemplates";
 import type { TranscriptRenderContext } from "./chatTranscriptTemplates";
 import { ChatDisclosureController } from "../chatDisclosure";
 import { writeClipboardText } from "../clipboard";
-import { renderSuggestedInput } from "./chat/SuggestedInput";
 import { chatSessionWarningRows, renderSessionWarnings } from "./chat/SessionWarnings";
 export { chatSessionWarningRows } from "./chat/SessionWarnings";
 import { type QueuedMessageAction, type QueuedMessageActionTarget } from "../queuedMessageActions";
@@ -140,10 +139,6 @@ export class ChatView extends LitElement {
   @property({ type: Number }) pendingMessageCount = 0;
   @property({ attribute: false }) clientQueuedMessages: QueuedSessionMessage[] = [];
   @property({ attribute: false }) status?: SessionStatus;
-  @property({ type: Boolean }) suggestedInputPending = false;
-  @property({ attribute: false }) suppressedSuggestedInput: string | undefined;
-  @property({ attribute: false }) onUseSuggestedInput: ((machineId: string, sessionId: string) => void) | undefined;
-  @property({ attribute: false }) onDismissSuggestedInput: ((machineId: string, sessionId: string, text: string) => void) | undefined;
   @property({ attribute: false }) activity?: SessionActivity;
   @property({ attribute: false }) askDraftSessionId = "";
   @property({ attribute: false }) onSubmitAsk: ((askId: string, submission: AskUserSubmission) => void | Promise<void>) | undefined;
@@ -363,7 +358,6 @@ export class ChatView extends LitElement {
           ))}
           ${this.renderQueuedMessages()}
           ${this.renderSessionActivity()}
-          ${this.renderSuggestedInput()}
           ${this.renderExtensionDialogs()}
         </div>
         ${this.renderActivityDock()}
@@ -477,17 +471,6 @@ export class ChatView extends LitElement {
   private actOnQueuedMessage(action: QueuedMessageAction, index: number, messages: QueuedSessionMessage[]): void {
     if (this.queuedMessageActionPending || this.status?.queueMessageActionsUnavailable !== undefined) return;
     void this.onQueuedMessageAction?.({ machineId: this.machineId, sessionId: this.sessionId, action, index, expectedQueue: messages.map((message) => ({ ...message })) });
-  }
-
-  private renderSuggestedInput() {
-    const text = this.status?.sessionId === this.sessionId ? this.status.suggestedInput : undefined;
-    if (text === undefined || this.onUseSuggestedInput === undefined
-      || this.suggestedInputPending || this.suppressedSuggestedInput === text) return null;
-    return renderSuggestedInput({
-      text,
-      onUse: () => { this.onUseSuggestedInput?.(this.machineId, this.sessionId); },
-      onDismiss: this.onDismissSuggestedInput === undefined ? undefined : () => { this.onDismissSuggestedInput?.(this.machineId, this.sessionId, text); },
-    });
   }
 
   private renderExtensionDialogs() {

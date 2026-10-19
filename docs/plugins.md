@@ -329,7 +329,7 @@ These three dialog methods are supported; other Pi extension UI surfaces, such a
 
 Pi extension commands can rewind with `ctx.navigateTree()` and fork with `ctx.fork()`, including follow-up work using the fresh `withSession` context. These operations run independently of browser connections. Rewinds refresh the viewed conversation; forks appear in Sessions for you to open. Other viewers keep their own selection and unsent drafts.
 
-Prepared text appears as suggested input. Choose **Use suggested input** to replace this browser's current draft; it is never applied automatically. The latest suggestion survives browser reloads while the daemon hosts the conversation. A later tree action, submitted user message, runtime close, or daemon restart can clear it. Explicit web rewind/fork buttons keep their response-driven navigation and editor behavior.
+Extension tree commands preserve this browser's unsent draft; prepared text from these commands is not shown in the web UI. The web UI's **Go back** action restores a selected user message directly into the editor and asks for confirmation before replacing a nonempty draft. Going back to other messages preserves the draft without a replacement warning.
 
 Extension idle/reload actions are supported. `ctx.newSession()` and `ctx.switchSession()` report that they are unsupported; use the web UI for those actions. Other terminal editor and widget APIs remain unsupported.
 

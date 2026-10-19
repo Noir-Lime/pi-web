@@ -3729,7 +3729,7 @@ export class PiWebApp extends LitElement {
         if (this.messageRevertTarget !== undefined || this.queuedMessageActionTarget !== undefined) throw new Error("Another draft-replacing action is already in progress.");
         const editor = this.promptEditor;
         const draft = editor?.view?.state.doc.toString() ?? "";
-        if (draft !== "" && !window.confirm("Going back will replace your unsent draft. Continue?")) return;
+        if (input.message.role === "user" && draft !== "" && !window.confirm("Going back will replace your unsent draft. Continue?")) return;
 
         const target = { machineId: input.machine.id, sessionId: input.session.id };
         this.messageRevertTarget = target;
@@ -3802,12 +3802,6 @@ export class PiWebApp extends LitElement {
       ...(peer === undefined ? {} : { peer }),
     };
   }
-  private readonly handleUseSuggestedInput = (machineId: string, sessionId: string): void => {
-    void this.sessions.useSuggestedInput(machineId, sessionId);
-  };
-  private readonly handleDismissSuggestedInput = (machineId: string, sessionId: string, text: string): void => {
-    this.sessions.dismissSuggestedInput(machineId, sessionId, text);
-  };
   private readonly handleLoadEarlierMessages = () => this.withChatPrependTransition(() => this.sessions.loadEarlierMessages());
   private notificationViewInput: AppState["selectedNotificationInbox"];
   private notificationView: ReturnType<typeof selectedNotificationView>;
@@ -3815,7 +3809,6 @@ export class PiWebApp extends LitElement {
   private chatWorkspaceContextKey: string | undefined;
 
   private renderChatView(state: AppState, session: SessionInfo) {
-    const treeActionPending = state.pendingTreeActions.some((action) => action.machineId === selectedMachineId(state) && action.sessionId === session.id);
     const workspaceContext = markdownWorkspaceContext(selectedMachineId(state), state.selectedWorkspace, session);
     const contextKey = JSON.stringify(workspaceContext);
     // Unrelated shell updates must not invalidate every formatted transcript part.
@@ -3828,7 +3821,7 @@ export class PiWebApp extends LitElement {
       this.notificationView = selectedNotificationView(state.selectedNotificationInbox);
     }
     return html`
-      <chat-view .onNavigationChange=${this.handleChatNavigationChange} .behaviors=${this.chatBehaviors} .contentRendering=${this.plugins.getChatContentRendering(selectedMachineId(state))} .machineId=${selectedMachineId(state)} @workspace-file-open=${this.handleWorkspaceFileOpen} .workspaceContext=${this.chatWorkspaceContext} .sessionId=${session.id} .sessionCwd=${session.cwd} .onMessageAction=${this.handleMessageAction} .onDisplayedMessageAction=${this.handleDisplayedMessageAction} .messageActions=${this.plugins.getMessageActions(selectedMachineId(state))} .messageActionContext=${this.messageActionContext(state)} .messages=${state.messages} .messageStart=${state.messagePageStart} .messageEnd=${state.messagePageEnd} .messageTotal=${state.messagePageTotal} .hasMore=${state.messagePageStart > 0} .historyReady=${this.readyChatIdentity === selectedChatIdentity(state)} .loadingMore=${state.isLoadingEarlierMessages} .isSendingPrompt=${state.sendingPrompts[session.id] === true} .isCompacting=${state.status?.isCompacting === true} .pendingMessageCount=${state.status?.pendingMessageCount ?? 0} .clientQueuedMessages=${state.clientQueuedSessionMessages[session.id] ?? this.emptyClientQueue} .status=${state.status} .suggestedInputPending=${treeActionPending} .suppressedSuggestedInput=${state.suppressedSuggestedInputs[machineSessionKey(selectedMachineId(state), session.id)]} .onUseSuggestedInput=${session.archived === true || this.isRevertingMessage(state) ? undefined : this.handleUseSuggestedInput} .onDismissSuggestedInput=${session.archived === true ? undefined : this.handleDismissSuggestedInput} .activity=${state.activity} .pendingDialogs=${state.pendingDialogs} .closedDialogs=${state.closedDialogs} .onAnswerDialog=${this.handleAnswerDialog} .onCancelDialog=${this.handleCancelDialog} .onDismissClosedDialog=${this.handleDismissClosedDialog} .askDraftSessionId=${machineSessionKey(selectedMachineId(state), session.id)} .onSubmitAsk=${session.archived === true ? undefined : this.handleSubmitAsk} .notificationInbox=${this.notificationView} .onClearServerQueue=${this.handleClearServerQueue} .onQueuedMessageAction=${session.archived === true ? undefined : this.handleQueuedMessageAction} .queuedMessageActionPending=${this.queuedMessageActionTarget !== undefined || this.messageRevertTarget !== undefined} .onDismissWarning=${this.handleDismissWarning} .onDismissNotification=${this.handleDismissNotification} .onDismissAllNotifications=${this.handleDismissAllNotifications} .warningsVisible=${!this.sessionWarningVisibility.collapsed} .onToggleWarnings=${this.handleToggleWarnings} .onLoadMore=${this.handleLoadEarlierMessages}></chat-view>
+      <chat-view .onNavigationChange=${this.handleChatNavigationChange} .behaviors=${this.chatBehaviors} .contentRendering=${this.plugins.getChatContentRendering(selectedMachineId(state))} .machineId=${selectedMachineId(state)} @workspace-file-open=${this.handleWorkspaceFileOpen} .workspaceContext=${this.chatWorkspaceContext} .sessionId=${session.id} .sessionCwd=${session.cwd} .onMessageAction=${this.handleMessageAction} .onDisplayedMessageAction=${this.handleDisplayedMessageAction} .messageActions=${this.plugins.getMessageActions(selectedMachineId(state))} .messageActionContext=${this.messageActionContext(state)} .messages=${state.messages} .messageStart=${state.messagePageStart} .messageEnd=${state.messagePageEnd} .messageTotal=${state.messagePageTotal} .hasMore=${state.messagePageStart > 0} .historyReady=${this.readyChatIdentity === selectedChatIdentity(state)} .loadingMore=${state.isLoadingEarlierMessages} .isSendingPrompt=${state.sendingPrompts[session.id] === true} .isCompacting=${state.status?.isCompacting === true} .pendingMessageCount=${state.status?.pendingMessageCount ?? 0} .clientQueuedMessages=${state.clientQueuedSessionMessages[session.id] ?? this.emptyClientQueue} .status=${state.status} .activity=${state.activity} .pendingDialogs=${state.pendingDialogs} .closedDialogs=${state.closedDialogs} .onAnswerDialog=${this.handleAnswerDialog} .onCancelDialog=${this.handleCancelDialog} .onDismissClosedDialog=${this.handleDismissClosedDialog} .askDraftSessionId=${machineSessionKey(selectedMachineId(state), session.id)} .onSubmitAsk=${session.archived === true ? undefined : this.handleSubmitAsk} .notificationInbox=${this.notificationView} .onClearServerQueue=${this.handleClearServerQueue} .onQueuedMessageAction=${session.archived === true ? undefined : this.handleQueuedMessageAction} .queuedMessageActionPending=${this.queuedMessageActionTarget !== undefined || this.messageRevertTarget !== undefined} .onDismissWarning=${this.handleDismissWarning} .onDismissNotification=${this.handleDismissNotification} .onDismissAllNotifications=${this.handleDismissAllNotifications} .warningsVisible=${!this.sessionWarningVisibility.collapsed} .onToggleWarnings=${this.handleToggleWarnings} .onLoadMore=${this.handleLoadEarlierMessages}></chat-view>
     `;
   }
 

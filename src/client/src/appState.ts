@@ -38,8 +38,6 @@ export interface AppState {
   status: SessionStatus | undefined;
   /** In-flight history operations; each entry belongs to one request. */
   pendingTreeActions: readonly { machineId: string; sessionId: string }[];
-  /** Browser-local applied/dismissed suggestion text, keyed by machine/session. */
-  suppressedSuggestedInputs: Record<string, string>;
   activity: SessionActivity | undefined;
   /**
    * The selected session's open extension dialogs, derived from the
@@ -149,7 +147,6 @@ export function initialAppState(): AppState {
     selectedSession: undefined,
     status: undefined,
     pendingTreeActions: [],
-    suppressedSuggestedInputs: {},
     activity: undefined,
     pendingDialogs: [],
     closedDialogs: [],
