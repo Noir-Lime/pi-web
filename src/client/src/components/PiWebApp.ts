@@ -2168,7 +2168,11 @@ export class PiWebApp extends LitElement {
     }, isCurrentSelection);
 
     if (!isCurrentSelection() || navigationAccepted === false) return;
-    await this.focusNavigationTarget(nextTarget, isCurrentSelection);
+    // Only skip the automatic mobile step, after the new project's workspaces
+    // have loaded. Explicitly opening Workspaces must remain available.
+    const skipWorkspaceSelection = this.appShell.isMobileNavigationLayout && section === "projects" && nextTarget === "workspaces"
+      && this.state.workspaces.length === 1 && this.state.selectedWorkspace?.id === this.state.workspaces[0]?.id;
+    await this.focusNavigationTarget(skipWorkspaceSelection ? "sessions" : nextTarget, isCurrentSelection);
   }
 
   private async startSessionFromNavigation(): Promise<void> {

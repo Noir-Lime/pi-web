@@ -898,6 +898,30 @@ describe("PiWebApp plugin host", () => {
     expect(focusNavigationTarget).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { mobile: true, count: 1, selected: true, target: "sessions" },
+    { mobile: true, count: 2, selected: true, target: "workspaces" },
+    { mobile: false, count: 1, selected: true, target: "workspaces" },
+    { mobile: true, count: 0, selected: false, target: "workspaces" },
+    { mobile: true, count: 1, selected: false, target: "workspaces" },
+  ])("advances after project loading without an unnecessary mobile workspace choice: %j", async ({ mobile, count, selected, target }) => {
+    const app = createApp();
+    const shell: unknown = Reflect.get(app, "appShell");
+    if (!(shell instanceof AppShellController)) throw new Error("App shell unavailable");
+    shell.isMobileNavigationLayout = mobile;
+    const focusNavigationTarget = vi.fn();
+    if (!Reflect.set(app, "focusNavigationTarget", focusNavigationTarget)) throw new Error("Could not stub navigation focus");
+    if (!Reflect.set(app, "withChatScrollTransition", async (action: () => Promise<void>) => { await action(); })) throw new Error("Could not stub navigation transition");
+    // The previous project's count must not determine the next project's step.
+    setAppState(app, { ...initialAppState(), selectedProject: project, selectedWorkspace: workspace, workspaces: [workspace, { ...workspace, id: "previous-other" }] });
+    await callAsyncAppMethod(app, "selectNavigationItem", "projects", "workspaces", async () => {
+      await Promise.resolve();
+      const workspaces = Array.from({ length: count }, (_, index) => ({ ...workspace, id: `loaded-${String(index)}` }));
+      setAppState(app, { ...appState(app), workspaces, selectedWorkspace: selected ? workspaces[0] : undefined });
+    });
+    expect(focusNavigationTarget).toHaveBeenCalledWith(target, expect.any(Function));
+  });
+
   it("does not focus a navigation target when its guarded navigation is rejected", async () => {
     const app = createApp();
     const focusNavigationTarget = vi.fn();
