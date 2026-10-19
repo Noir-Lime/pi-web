@@ -198,6 +198,10 @@ pi-web workspaces notify --project ID --plugin git
 
 `ID` is the registered project ID, not a filesystem path. `--plugin` identifies the provider (`git` here), which must own the project and accept notifications. Connected browsers re-read the workspace list; the command does not register projects or workspaces.
 
+## Find community plugins
+
+[Find community plugins on the website](https://pi-web.dev/community-plugins). Browse public npm packages tagged with `pi-web.dev-plugin` or `pi-web-plugin`, then install packages you trust using the steps below. Listings are community-contributed, not reviewed or endorsed. Plugin authors can follow the website's publishing instructions to make their packages discoverable.
+
 ## Install and manage
 
 Use **Settings → Pi packages** to install, update, or remove a package. Enter its npm, git/URL, or local package source. Use **Settings → PI WEB plugins** to enable or disable its web integration and see whether it is active or needs a restart.

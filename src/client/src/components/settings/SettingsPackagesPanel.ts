@@ -44,6 +44,7 @@ export class SettingsPackagesPanel extends LitElement {
         .notices=${this.panelNotices(showPackageControls)}
         .onAction=${this.onReload}
       >
+        <p><a href="https://pi-web.dev/community-plugins" target="_blank" rel="noopener noreferrer">Find community plugins ↗</a></p>
         ${this.renderPanelContent(packages, target, targetLabel)}
       </settings-panel-frame>
     `;

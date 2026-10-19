@@ -51,7 +51,7 @@
             <a href="machines">Fleet</a>
             <a href="install">Install</a>
             <a href="config">Config</a>
-            <a href="plugins" aria-current="page">Plugins</a>
+            <a href="community-plugins">Plugins</a>
             <a href="faq">FAQ</a>
           </div>
           <div class="nav-actions">
@@ -79,6 +79,7 @@
           <p class="eyebrow"><span class="pulse"></span> Plugins and Pi packages</p>
           <h1>Make PI WEB fit your workflow.</h1>
           <p>Install useful tools or ask an agent to build your own. Understand the possibilities, operating model, and boundaries before implementation.</p>
+          <p><a class="button" href="community-plugins">Browse community plugins →</a></p>
         </div>
       </section>
       <section class="section compact">
@@ -88,6 +89,7 @@
             <a href="#what-can-be-built">What can be built</a>
             <a href="#pi-packages-extensions-and-plugins">Pi packages, extensions, and plugins</a>
             <a href="#how-plugins-work">How plugins work</a>
+            <a href="community-plugins">Community plugins</a>
             <a href="#install-and-manage">Install and manage</a>
             <a href="#remote-machines">Remote machines</a>
             <a href="#included-tools-and-optional-packages">Included tools and optional packages</a>
@@ -239,6 +241,9 @@ const result = await machine.request("save", { url, title }, { signal });</code>
 <p>External integrations can send a project-scoped discovery hint through the core CLI on the project’s machine:</p>
 <pre><code class="language-sh">pi-web workspaces notify --project ID --plugin git</code></pre>
 <p><code>ID</code> is the registered project ID, not a filesystem path. <code>--plugin</code> identifies the provider (<code>git</code> here), which must own the project and accept notifications. Connected browsers re-read the workspace list; the command does not register projects or workspaces.</p>
+</section>
+<section id="find-community-plugins"><h2>Find community plugins</h2>
+<p><a href="community-plugins">Find community plugins on the website</a>. Browse public npm packages tagged with <code>pi-web.dev-plugin</code> or <code>pi-web-plugin</code>, then install packages you trust using the steps below. Listings are community-contributed, not reviewed or endorsed. Plugin authors can follow the website’s publishing instructions to make their packages discoverable.</p>
 </section>
 <section id="install-and-manage"><span id="manage-plugins"></span><h2>Install and manage</h2>
 <p>Use <strong>Settings → Pi packages</strong> to install, update, or remove a package. Enter its npm, git/URL, or local package source. Use <strong>Settings → PI WEB plugins</strong> to enable or disable its web integration and see whether it is active or needs a restart.</p>
