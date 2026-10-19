@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, expect, it, vi } from "vitest";
 import { render } from "lit";
+import { useDeferredContent, settleDeferredContent } from "./deferredContent.testSupport";
 import { PluginRegistry } from "../plugins/registry";
 import { adaptPublicPlugin } from "../plugins/publicContext";
 import type { ContentRendererHost } from "../components/ContentRendererHost";
@@ -10,6 +11,7 @@ import type { MermaidPreview } from "../../../../pi-web-plugins/mermaid/MermaidP
 import mermaid from "../../../../pi-web-plugins/mermaid/pi-web-plugin";
 
 const registries: PluginRegistry[] = [];
+useDeferredContent();
 afterEach(async () => {
   document.body.replaceChildren();
   for (const registry of registries.splice(0)) await registry.dispose();
@@ -44,7 +46,7 @@ it("offers Highlighted, Diagram, and Raw for the same Mermaid source without loa
   render(registry.contentRendering.renderText(request), document.body);
   const host = document.body.querySelector<ContentRendererHost>("pi-web-content-renderer");
   if (host === null) throw new Error("Expected source view host");
-  await host.updateComplete;
+  await settleDeferredContent(host);
   const highlighted = host.renderRoot.querySelector<TokenHighlightedCode>("pi-web-token-highlighted-code");
   if (highlighted === null) throw new Error("Expected the bundled highlighting renderer");
   await vi.waitFor(() => { expect(highlighted.renderRoot.querySelector(".hljs-keyword")?.textContent).toBe("flowchart"); });
@@ -53,12 +55,12 @@ it("offers Highlighted, Diagram, and Raw for the same Mermaid source without loa
   expect(fetchEngine).not.toHaveBeenCalled();
 
   viewButton(host, "Raw").click();
-  await host.updateComplete;
+  await settleDeferredContent(host);
   expect(host.renderRoot.querySelector("pre code")?.textContent).toBe(text);
   expect(host.renderRoot.querySelector("select")).toBeNull();
   expect(fetchEngine).not.toHaveBeenCalled();
   viewButton(host, "Diagram").click();
-  await host.updateComplete;
+  await settleDeferredContent(host);
   const diagram = host.renderRoot.querySelector<MermaidPreview>("pi-web-mermaid-preview");
   if (diagram === null) throw new Error("Expected diagram renderer");
   await vi.waitFor(() => { expect(diagram.renderRoot.querySelector("iframe")).not.toBeNull(); });
@@ -67,7 +69,7 @@ it("offers Highlighted, Diagram, and Raw for the same Mermaid source without loa
   expect(fetchEngine).toHaveBeenCalledOnce();
 
   viewButton(host, "Highlighted").click();
-  await host.updateComplete;
+  await settleDeferredContent(host);
   expect(diagram.input?.signal.aborted).toBe(true);
   expect(host.renderRoot.querySelector("pi-web-mermaid-preview")).toBeNull();
   expect(host.renderRoot.querySelector("pi-web-token-highlighted-code")).not.toBeNull();

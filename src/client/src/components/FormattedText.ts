@@ -1,5 +1,6 @@
 import { stylesheetIntegrationCapability } from "../plugins/styles";
-import { LitElement, html } from "lit";
+import { LitElement, css, html, type PropertyValues, type TemplateResult } from "lit";
+import { VisibleContentController } from "../formatting/deferredContent";
 import type { ChatContentRendering } from "../formatting/contentRendering";
 import { customElement, property } from "lit/decorators.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
@@ -26,22 +27,102 @@ export class FormattedText extends LitElement {
   @property() machineId = "local";
   @property({ attribute: false }) workspaceContext: MarkdownWorkspaceContext | undefined;
 
+  private readonly enhancement = new VisibleContentController(this);
+  private phase: "markdown" | "preview" | "done" = "markdown";
+  private scheduled = false;
+  private markup: string | undefined;
+  private content: TemplateResult | undefined;
+  private displayedText = "";
+  private replacing = false;
+  private layoutChanged = false;
+
+  protected override willUpdate(changes: PropertyValues<this>): void {
+    const inputs = ["text", "intentKey", "imagesEnabled", "codeBlocks", "contentRendering", "machineId", "workspaceContext"] as const;
+    if (!inputs.some((key) => changes.has(key))) return;
+    this.enhancement.cancel();
+    this.scheduled = false;
+    this.phase = "markdown";
+    this.markup = undefined;
+    // Retain stable source controls and completed previews while prose streams.
+    // New identities/replacements must never show the previous content.
+    this.replacing = !this.text.startsWith(this.displayedText) || changes.has("intentKey") || changes.has("machineId") || changes.has("workspaceContext");
+  }
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this.requestUpdate();
+  }
+
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this.scheduled = false;
+  }
+
   override render() {
-    const toSafeHtml = (text: string) => toSafeMarkdownHtml(text, this.workspaceContext, this.intentKey, this.imagesEnabled, this.codeBlocks);
-    // Disabling previews bypasses inspection as well as renderer mounting.
-    const content = (this.codeBlocks.previews ? this.contentRendering?.renderMarkdown({
-      text: this.text,
-      machineId: this.workspaceContext?.machineId ?? this.machineId,
-      toSafeHtml,
-    }, this.intentKey, this.codeBlocks) : undefined) ?? unsafeHTML(toSafeHtml(this.text));
     const className = this.codeBlocks.overflow === "scroll" ? "formatted code-blocks-scroll" : "formatted";
-    return html`<div class=${className} dir="auto" @load=${this.onImageLoad} @click=${this.onFormattedClick}>${content}</div>`;
+    // Source is ordinary escaped Lit text. Neither Markdown nor plugin code is
+    // called by this render or by the session-loading flow.
+    return html`<div class=${className} dir="auto" @load=${this.onImageLoad} @click=${this.onFormattedClick}><div class="enhanced-content" ?hidden=${this.replacing}>${this.content}</div><span class="pending-source">${this.text.slice(this.replacing ? 0 : this.displayedText.length)}</span></div>`;
   }
 
   override updated(): void {
+    if (this.phase !== "done" && !this.scheduled) {
+      this.scheduled = true;
+      this.enhancement.request(() => {
+        this.scheduled = false;
+        if (this.phase === "markdown") this.formatMarkdown();
+        else if (this.phase === "preview") this.enhanceMarkdown();
+        this.requestUpdate();
+      });
+    }
     // HTML is memoized independently of geometry; apply hints on every DOM mount,
     // in this update's microtask before paint or the chat's position-restoration frame.
     restoreExternalMarkdownImageDimensions(this.renderRoot);
+    if (this.layoutChanged) {
+      this.layoutChanged = false;
+      this.dispatchEvent(new CustomEvent("content-layout-changed", { bubbles: true, composed: true }));
+    }
+  }
+
+  private formatMarkdown(): void {
+    try {
+      this.markup = toSafeMarkdownHtml(this.text, this.workspaceContext, this.intentKey, this.imagesEnabled, this.codeBlocks);
+      if (this.codeBlocks.previews && this.contentRendering !== undefined) {
+        this.phase = "preview";
+        if (this.content === undefined) this.showMarkdown();
+      } else {
+        this.showMarkdown();
+        this.phase = "done";
+      }
+    } catch (error) {
+      console.warn("Chat Markdown formatting failed; source remains available", error);
+      this.phase = "done";
+    }
+  }
+
+  private showMarkdown(): void {
+    this.layoutChanged = true;
+    this.content = html`${unsafeHTML(this.markup)}`;
+    this.displayedText = this.text;
+    this.replacing = false;
+  }
+
+  private enhanceMarkdown(): void {
+    try {
+      this.layoutChanged = true;
+      this.content = this.contentRendering?.renderMarkdown({
+        text: this.text,
+        machineId: this.workspaceContext?.machineId ?? this.machineId,
+        toSafeHtml: (text) => text === this.text && this.markup !== undefined ? this.markup
+          : toSafeMarkdownHtml(text, this.workspaceContext, this.intentKey, this.imagesEnabled, this.codeBlocks),
+      }, this.intentKey, this.codeBlocks);
+      this.displayedText = this.text;
+      this.replacing = false;
+    } catch (error) {
+      console.warn("Chat content enhancement failed; Markdown remains available", error);
+      this.showMarkdown();
+    }
+    this.phase = "done";
   }
 
   private readonly onImageLoad = {
@@ -92,5 +173,9 @@ export class FormattedText extends LitElement {
     button.setAttribute("aria-label", label);
   }
 
-  static override styles = [formattedTextStyles, codeBlockFrameStyles];
+  static override styles = [formattedTextStyles, codeBlockFrameStyles, css`
+    .pending-source { white-space: pre-wrap; overflow-wrap: anywhere; }
+    .enhanced-content { display: contents; }
+    .enhanced-content[hidden] { display: none; }
+  `];
 }

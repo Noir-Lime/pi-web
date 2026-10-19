@@ -1,5 +1,5 @@
 import { stylesheetIntegrationCapability } from "../plugins/styles";
-import { LitElement, css, html } from "lit";
+import { LitElement, css, html, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { writeClipboardText } from "../clipboard";
 import type { ToolExecutionPart } from "../chatTypes";
@@ -24,6 +24,14 @@ export class ToolExecutionView extends LitElement {
   @state() private showFullDiff = false;
   @state() private copied = false;
   @state() private diffOpen = true;
+  @state() private textOpen: boolean | undefined;
+  private countedDiff: string | undefined;
+  private diffStats: { added: number; removed: number; lines: number } | undefined;
+
+  protected override willUpdate(changed: PropertyValues<ToolExecutionView>): void {
+    const previous = changed.get("execution");
+    if (changed.has("execution") && this.execution?.status === "error" && previous?.status !== "error") this.textOpen = true;
+  }
 
   override render() {
     const execution = this.execution;
@@ -33,7 +41,11 @@ export class ToolExecutionView extends LitElement {
     const actualDiff = diffFromDetails(execution.details);
     const preview = execution.preview;
     const visibleDiff = actualDiff ?? preview?.diff;
-    const diffStats = visibleDiff === undefined ? undefined : countDiffLines(visibleDiff);
+    if (visibleDiff !== this.countedDiff) {
+      this.countedDiff = visibleDiff;
+      this.diffStats = visibleDiff === undefined ? undefined : countDiffLines(visibleDiff);
+    }
+    const diffStats = this.diffStats;
     const previewMismatch = actualDiff !== undefined && preview?.diff !== undefined && actualDiff !== preview.diff;
     const errorText = execution.status === "error" ? execution.resultText : preview?.error;
     const bodyText = visibleDiff === undefined ? execution.resultText : undefined;
@@ -79,30 +91,41 @@ export class ToolExecutionView extends LitElement {
 
   private renderTextBody(text: string | undefined, open: boolean, target: ToolTarget | undefined) {
     if ((text === undefined || text === "") && target === undefined) return null;
+    const expanded = this.textOpen ?? open;
     return html`
-      <details class="text-body" ?open=${open}>
+      <details class="text-body" ?open=${expanded} @toggle=${(event: Event) => {
+        if (event.currentTarget instanceof HTMLDetailsElement) this.textOpen = event.currentTarget.open;
+      }}>
         <summary class="ui-transcript-disclosure">Details</summary>
-        ${this.renderExpandedTarget(target)}
+        ${expanded ? html`${this.renderExpandedTarget(target)}
         ${text === undefined || text === "" ? null : html`
           <div class="detail-result">
             <span class="detail-label">Result</span>
             <pre>${text}</pre>
           </div>
-        `}
+        `}` : null}
       </details>
     `;
   }
 
   private renderDiffBody(diff: string, label: string, target: ToolTarget | undefined) {
-    const lines = diff.split("\n");
-    const truncated = !this.showFullDiff && lines.length > MAX_COLLAPSED_DIFF_LINES;
-    const visibleLines = truncated ? lines.slice(0, MAX_COLLAPSED_DIFF_LINES) : lines;
+    const lineCount = this.diffStats?.lines ?? 0;
     return html`
       <details class="diff-details" ?open=${this.diffOpen} @toggle=${(event: Event) => { this.onDiffToggle(event); }}>
         <summary class="ui-transcript-disclosure">
           <span>${label}</span>
-          <small>${String(lines.length)} ${lines.length === 1 ? "line" : "lines"}</small>
+          <small>${String(lineCount)} ${lineCount === 1 ? "line" : "lines"}</small>
         </summary>
+        ${this.diffOpen ? this.renderDiffContent(diff, label, target) : null}
+      </details>
+    `;
+  }
+
+  private renderDiffContent(diff: string, label: string, target: ToolTarget | undefined) {
+    const lines = diff.split("\n");
+    const truncated = !this.showFullDiff && lines.length > MAX_COLLAPSED_DIFF_LINES;
+    const visibleLines = truncated ? lines.slice(0, MAX_COLLAPSED_DIFF_LINES) : lines;
+    return html`
         ${this.renderExpandedTarget(target)}
         <div class="diff-toolbar">
           <span>${truncated ? `Showing ${String(visibleLines.length)} of ${String(lines.length)} lines` : "Full diff"}</span>
@@ -114,7 +137,6 @@ export class ToolExecutionView extends LitElement {
             Show all ${String(lines.length)} diff lines
           </button>
         ` : null}
-      </details>
     `;
   }
 
@@ -206,14 +228,15 @@ function diffFromDetails(details: unknown): string | undefined {
   return getString(details, "diff");
 }
 
-function countDiffLines(diff: string): { added: number; removed: number } {
+function countDiffLines(diff: string): { added: number; removed: number; lines: number } {
   let added = 0;
   let removed = 0;
-  for (const line of diff.split("\n")) {
+  const lines = diff.split("\n");
+  for (const line of lines) {
     if (isAddedDiffLine(line)) added++;
     else if (isRemovedDiffLine(line)) removed++;
   }
-  return { added, removed };
+  return { added, removed, lines: lines.length };
 }
 
 function diffLineClass(line: string): string {

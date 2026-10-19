@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { html } from "lit";
+import { useDeferredContent, settleDeferredContent } from "../../src/client/src/formatting/deferredContent.testSupport";
 import { createContentRenderingCapability } from "../../src/client/src/formatting/contentRendering";
 import { ContentRendererHost } from "../../src/client/src/components/ContentRendererHost";
 import type { ContentRenderingCapability, FileContentResponse } from "@jmfederico/pi-web/plugin-api";
@@ -9,6 +10,8 @@ import { adoptWorkspaceFileViewMode, WORKSPACE_FILE_VIEW_MODE_STORAGE_KEY, type 
 import { DEFAULT_MAX_INLINE_PREVIEW_BYTES as MAX_INLINE_PREVIEW_BYTES, WorkspaceFileViewer, workspaceFilePreviewKind, workspaceFileViewerIdentityKey, type WorkspaceFileViewerIdentity } from "./FilesViewer";
 
 if (customElements.get("pi-web-files-viewer") === undefined) customElements.define("pi-web-files-viewer", WorkspaceFileViewer);
+
+useDeferredContent();
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -30,12 +33,12 @@ describe("workspace-file-viewer", () => {
     expect(draw).not.toHaveBeenCalled();
     expect(viewer.renderRoot.querySelector("select")).toBeNull();
     namedButton.click();
-    await viewer.updateComplete;
-    await viewer.renderRoot.querySelector<ContentRendererHost>("pi-web-content-renderer")?.updateComplete;
+    await settleDeferredContent(viewer);
+    await settleDeferredContent(viewer);
     expect(namedButton.getAttribute("aria-pressed")).toBe("true");
     expect(draw).toHaveBeenCalledOnce();
     modeButton(viewer, "Raw").click();
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(namedButton.getAttribute("aria-pressed")).toBe("false");
     expect(viewer.renderRoot.querySelector("pi-web-files-code-viewer")).not.toBeNull();
   });
@@ -53,13 +56,13 @@ describe("workspace-file-viewer", () => {
       .toEqual(["Highlighted", "Diagram", "Manual", "Raw"]);
     expect(buttonWithText(viewer, "Diagram").getAttribute("aria-pressed")).toBe("true");
     buttonWithText(viewer, "Highlighted").click();
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     choices.push({ id: "later", label: "Later", renderer: { id: "later", renderMode: "automatic", render: () => html`<b>Later</b>` } });
     viewer.requestUpdate();
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(buttonWithText(viewer, "Highlighted").getAttribute("aria-pressed")).toBe("true");
     modeButton(viewer, "Raw").click();
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(viewer.renderRoot.querySelector("pi-web-content-renderer")).toBeNull();
     expect(viewer.renderRoot.querySelector("pi-web-files-code-viewer")).not.toBeNull();
   });
@@ -82,30 +85,30 @@ describe("workspace-file-viewer", () => {
       expect(alpha).not.toHaveBeenCalled();
       expect(modeStore.publish).not.toHaveBeenCalled();
       modeButton(viewer, "Preview").click();
-      await viewer.updateComplete;
+      await settleDeferredContent(viewer);
     }
     const host = viewer.renderRoot.querySelector<ContentRendererHost>("pi-web-content-renderer");
     if (host === null) throw new Error("Expected Markdown fence host");
-    await host.updateComplete;
+    await settleDeferredContent(host);
     expect(alpha).toHaveBeenCalledOnce();
     expect(beta).not.toHaveBeenCalled();
     expect(host.renderRoot.querySelector("select")).toBeNull();
     buttonWithText(host, "Beta").click();
-    await host.updateComplete;
+    await settleDeferredContent(host);
     expect(beta).toHaveBeenCalledOnce();
     const raw = [...host.renderRoot.querySelectorAll("button")].find((button) => button.textContent === "Raw");
     if (raw === undefined) throw new Error("Expected block Raw control");
     raw.click();
-    await host.updateComplete;
+    await settleDeferredContent(host);
     viewer.requestUpdate();
-    await viewer.updateComplete;
-    await host.updateComplete;
+    await settleDeferredContent(viewer);
+    await settleDeferredContent(host);
     expect(host.renderRoot.querySelector("pre code")?.textContent).toBe("source");
     expect(host.renderRoot.querySelector(".preview")).toBeNull();
     expect(buttonWithText(host, "Raw").getAttribute("aria-pressed")).toBe("true");
     expect(beta).toHaveBeenCalledOnce();
     modeButton(viewer, "Raw").click();
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(viewer.renderRoot.querySelector("pi-web-content-renderer")).toBeNull();
   });
 
@@ -114,11 +117,11 @@ describe("workspace-file-viewer", () => {
     const contentRendering = createContentRenderingCapability(() => [{ id: "diagram", label: "Diagram", renderer: { id: "diagram", renderMode, render: draw } }]);
     const publish = vi.fn();
     const viewer = await mountViewer(textFile("graph.mmd", "source"), { contentRendering, modeStore: { adopt: () => undefined, publish } });
-    await viewer.renderRoot.querySelector<ContentRendererHost>("pi-web-content-renderer")?.updateComplete;
+    await settleDeferredContent(viewer);
     expect(draw).toHaveBeenCalledTimes(renderMode === "automatic" ? 1 : 0);
     expect(publish).not.toHaveBeenCalled();
     modeButton(viewer, "Raw").click();
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(publish).toHaveBeenCalledWith("raw");
     expect(viewer.renderRoot.querySelector("pi-web-files-code-viewer")).not.toBeNull();
   });
@@ -127,10 +130,10 @@ describe("workspace-file-viewer", () => {
     const draw = vi.fn(() => html`<b>Preview</b>`);
     const contentRendering = createContentRenderingCapability(() => [{ id: "diagram", label: "Diagram", renderer: { id: "diagram", renderMode, render: draw } }]);
     const viewer = await mountViewer(textFile("graph.mmd", "source"), { contentRendering, modeStore: fakeModeStore("preview") });
-    await viewer.renderRoot.querySelector<ContentRendererHost>("pi-web-content-renderer")?.updateComplete;
+    await settleDeferredContent(viewer);
     expect(draw).toHaveBeenCalledOnce();
     viewer.modeStore = fakeModeStore("raw");
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(viewer.renderRoot.querySelector("pi-web-content-renderer")).toBeNull();
     expect(draw).toHaveBeenCalledOnce();
   });
@@ -146,30 +149,30 @@ describe("workspace-file-viewer", () => {
     const viewer = await mountViewer(textFile("graph.mmd", "A --> B"), { contentRendering });
     expect(signal).toBeUndefined();
     buttonWithText(viewer, "Diagram").click();
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     const host = viewer.shadowRoot?.querySelector("pi-web-content-renderer");
     if (!(host instanceof ContentRendererHost)) throw new Error("Expected preview host");
-    await host.updateComplete;
+    await settleDeferredContent(host);
     expect(host.shadowRoot?.querySelector("button")).toBeNull();
     expect(host.shadowRoot?.textContent).toContain("Diagram preview");
     expect(viewer.shadowRoot?.querySelectorAll(".viewer-header button")).toHaveLength(2);
     expect(viewer.shadowRoot?.querySelector(".viewer-header a[download]")).not.toBeNull();
     modeButton(viewer, "Raw").click();
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(signal?.aborted).toBe(true);
     expect(viewer.shadowRoot?.querySelector("pi-web-content-renderer")).toBeNull();
     expect(viewer.shadowRoot?.querySelector("pi-web-files-code-viewer")).not.toBeNull();
     buttonWithText(viewer, "Diagram").click();
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     const replacement = viewer.shadowRoot?.querySelector("pi-web-content-renderer");
     if (!(replacement instanceof ContentRendererHost)) throw new Error("Expected resumed preview");
-    await replacement.updateComplete;
+    await settleDeferredContent(replacement);
     expect(signal?.aborted).toBe(false);
     const previousSignal = signal;
     viewer.file = textFile("graph.mmd", "changed source");
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     const changedHost = viewer.shadowRoot?.querySelector<ContentRendererHost>("pi-web-content-renderer");
-    await changedHost?.updateComplete;
+    await settleDeferredContent(changedHost ?? undefined);
     expect(previousSignal?.aborted).toBe(true);
     expect(signal).not.toBe(previousSignal);
     expect(changedHost?.shadowRoot?.querySelector("b")?.textContent).toBe("Diagram preview");
@@ -190,36 +193,36 @@ describe("workspace-file-viewer", () => {
     expect(buttonWithText(viewer, "Alpha").getAttribute("aria-pressed")).toBe("false");
     expect(inputs).toHaveLength(0);
     buttonWithText(viewer, "Alpha").click();
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     const host = viewer.renderRoot.querySelector<ContentRendererHost>("pi-web-content-renderer");
     if (host === null) throw new Error("Expected preview host");
-    await host.updateComplete;
+    await settleDeferredContent(host);
     expect(host.shadowRoot?.querySelector("select,button")).toBeNull();
     expect(inputs).toHaveLength(1);
     buttonWithText(viewer, "Beta").click();
-    await viewer.updateComplete;
-    await host.updateComplete;
+    await settleDeferredContent(viewer);
+    await settleDeferredContent(host);
     expect(inputs[0]?.signal.aborted).toBe(true);
     expect(inputs).toHaveLength(2);
     expect(host.shadowRoot?.querySelector("b")?.textContent).toBe("Beta");
     buttonWithText(viewer, "Beta").click();
-    await viewer.updateComplete;
-    await host.updateComplete;
+    await settleDeferredContent(viewer);
+    await settleDeferredContent(host);
     expect(host.shadowRoot?.querySelector("b")?.textContent).toBe("Beta");
     expect(inputs).toHaveLength(2);
     modeButton(viewer, "Raw").click();
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(inputs[1]?.signal.aborted).toBe(true);
     expect(buttonWithText(viewer, "Raw").getAttribute("aria-pressed")).toBe("true");
     buttonWithText(viewer, "Beta").click();
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     const resumed = viewer.renderRoot.querySelector<ContentRendererHost>("pi-web-content-renderer");
     if (resumed === null) throw new Error("Expected resumed preview");
-    await resumed.updateComplete;
+    await settleDeferredContent(resumed);
     expect(resumed.shadowRoot?.querySelector("b")?.textContent).toBe("Beta");
     viewer.selectedPath = "second.mmd";
     viewer.file = textFile("second.mmd", "other");
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(buttonWithText(viewer, "Alpha").getAttribute("aria-pressed")).toBe("true");
   });
 
@@ -233,28 +236,28 @@ describe("workspace-file-viewer", () => {
     expect(renderText).toHaveBeenCalledWith({ machineId: "remote", filePath: "graph.mmd", text: file.content, controls: "external", allowManualPreview: false });
     expect(viewer.shadowRoot?.querySelector(".viewer-header .viewer-mode")).not.toBeNull();
     modeButton(viewer, "Preview").click();
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(viewer.shadowRoot?.querySelector(".plugin-preview")).not.toBeNull();
     modeButton(viewer, "Raw").click();
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(viewer.shadowRoot?.querySelector(".plugin-preview")).toBeNull();
     expect(viewer.shadowRoot?.querySelector("pi-web-files-code-viewer")).not.toBeNull();
     renderText.mockClear();
     viewer.file = { ...file, truncated: true };
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(renderText).not.toHaveBeenCalled();
     expect(viewer.shadowRoot?.querySelector("pi-web-files-code-viewer")).not.toBeNull();
     viewer.file = { ...file, size: MAX_INLINE_PREVIEW_BYTES + 1 };
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(renderText).not.toHaveBeenCalled();
 
     const markdown = textFile("README.md", "```mermaid\ngraph TD\n```", { mediaType: "markdown" });
     viewer.selectedPath = markdown.path;
     viewer.file = markdown;
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(renderMarkdown).not.toHaveBeenCalled();
     modeButton(viewer, "Preview").click();
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     const request = renderMarkdown.mock.calls[0]?.[0];
     expect(request).toMatchObject({ machineId: "remote", text: markdown.content, truncated: false });
     expect(request?.toSafeHtml("![remote](https://evil.test/pixel)")).toContain("Image omitted");
@@ -267,18 +270,18 @@ describe("workspace-file-viewer", () => {
     expect(statusMessage(viewer)).toBe("Select a file.");
 
     viewer.selectedPath = "notes.md";
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(statusMessage(viewer)).toBe("Loading notes.md…");
     expect(viewer.shadowRoot?.querySelector("[role='status']")?.getAttribute("aria-live")).toBe("polite");
 
     viewer.loadError = "Path does not exist: notes.md";
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(statusMessage(viewer)).toBe("Unable to load notes.md: Path does not exist: notes.md");
     expect(viewer.shadowRoot?.querySelector("[role='alert']")).not.toBeNull();
 
     viewer.loadError = undefined;
     viewer.file = textFile("other.md", "# Wrong file", { mediaType: "markdown", language: "markdown" });
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(statusMessage(viewer)).toBe("Unable to preview notes.md: loaded content belongs to other.md.");
     expect(viewer.shadowRoot?.querySelector("a, iframe, pi-web-files-code-viewer")).toBeNull();
   });
@@ -310,7 +313,7 @@ describe("workspace-file-viewer", () => {
     expect(new URL(download.href).searchParams.get("download")).toBe("1");
 
     modeButton(viewer, "Preview").click();
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
 
     expect(modeButton(viewer, "Preview").getAttribute("aria-pressed")).toBe("true");
     expect(viewer.shadowRoot?.querySelector("pi-web-files-code-viewer")).toBeNull();
@@ -321,7 +324,7 @@ describe("workspace-file-viewer", () => {
     expect(frame.getAttribute("title")).toBe("Preview of pages/report.html");
 
     modeButton(viewer, "Raw").click();
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(viewer.shadowRoot?.querySelector("iframe")).toBeNull();
     expect(viewer.shadowRoot?.querySelector("pi-web-files-code-viewer")).not.toBeNull();
   });
@@ -337,7 +340,7 @@ describe("workspace-file-viewer", () => {
     expect(viewer.shadowRoot?.querySelector(".markdown-preview")).toBeNull();
 
     modeButton(viewer, "Preview").click();
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
 
     expect(modeButton(viewer, "Preview").getAttribute("aria-pressed")).toBe("true");
     const preview = requiredElement(viewer.shadowRoot?.querySelector(".markdown-preview"), "Markdown preview");
@@ -362,21 +365,21 @@ describe("workspace-file-viewer", () => {
     // A new revision of the same file, a different machine, and a different
     // file all keep the mode the user last chose.
     viewer.file = { ...original, content: "<p>updated</p>", modifiedAt: "2026-06-25T00:01:00.000Z" };
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(modeButton(viewer, "Preview").getAttribute("aria-pressed")).toBe("true");
 
     viewer.machineId = "remote-1";
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(modeButton(viewer, "Preview").getAttribute("aria-pressed")).toBe("true");
 
     modeButton(viewer, "Raw").click();
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(store.published).toEqual(["preview", "raw"]);
 
     const readme = textFile("README.md", "# Docs", { mediaType: "markdown", language: "markdown" });
     viewer.selectedPath = readme.path;
     viewer.file = readme;
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(modeButton(viewer, "Raw").getAttribute("aria-pressed")).toBe("true");
     expect(viewer.shadowRoot?.querySelector(".markdown-preview")).toBeNull();
 
@@ -385,7 +388,7 @@ describe("workspace-file-viewer", () => {
     const image = binaryFile("photo.png", { mediaType: "image", mimeType: "image/png" });
     viewer.selectedPath = image.path;
     viewer.file = image;
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(store.published).toEqual(["preview", "raw"]);
   });
 
@@ -395,12 +398,12 @@ describe("workspace-file-viewer", () => {
     expect(modeButton(viewer, "Raw").getAttribute("aria-pressed")).toBe("true");
 
     viewer.modeStore = fakeModeStore("preview");
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(modeButton(viewer, "Preview").getAttribute("aria-pressed")).toBe("true");
     expect(viewer.shadowRoot?.querySelector("iframe")).not.toBeNull();
 
     viewer.modeStore = fakeModeStore("raw");
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(modeButton(viewer, "Raw").getAttribute("aria-pressed")).toBe("true");
     expect(viewer.shadowRoot?.querySelector("pi-web-files-code-viewer")).not.toBeNull();
   });
@@ -415,12 +418,12 @@ describe("workspace-file-viewer", () => {
     const image = binaryFile("second.png", { mediaType: "image", mimeType: "image/png" });
     viewer.selectedPath = image.path;
     viewer.file = image;
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(viewer.shadowRoot?.querySelector("img")).not.toBeNull();
     expect(detachedPreviewButton.isConnected).toBe(false);
 
     detachedPreviewButton.click();
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(viewer.shadowRoot?.querySelector("img")).not.toBeNull();
     expect(viewer.shadowRoot?.querySelector("pi-web-files-code-viewer")).toBeNull();
 
@@ -428,7 +431,7 @@ describe("workspace-file-viewer", () => {
     const notes = textFile("notes.md", "# notes", { mediaType: "markdown", language: "markdown" });
     viewer.selectedPath = notes.path;
     viewer.file = notes;
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(modeButton(viewer, "Raw").getAttribute("aria-pressed")).toBe("true");
     expect(viewer.shadowRoot?.querySelector(".markdown-preview")).toBeNull();
     expect(viewer.shadowRoot?.querySelector("pi-web-files-code-viewer")).not.toBeNull();
@@ -442,7 +445,7 @@ describe("workspace-file-viewer", () => {
     const pdf = binaryFile("second.pdf", { mediaType: "pdf", mimeType: "application/pdf" });
     viewer.selectedPath = pdf.path;
     viewer.file = pdf;
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     const currentFrame = requiredElement(viewer.shadowRoot?.querySelector<HTMLIFrameElement>("iframe"), "current PDF frame");
     // Sandboxed frames refuse native PDF handlers, so the PDF frame carries no
     // sandbox attribute and relies on the response contract plus the always
@@ -455,19 +458,19 @@ describe("workspace-file-viewer", () => {
     expect(anchorWithText(viewer, "Open ↗")).toBeDefined();
 
     detachedImage.dispatchEvent(new Event("error"));
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(viewer.shadowRoot?.querySelector("iframe")).toBe(currentFrame);
     expect(viewer.shadowRoot?.textContent).not.toContain("Preview failed");
 
     currentFrame.dispatchEvent(new Event("error"));
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(viewer.shadowRoot?.querySelector("[role='alert']")?.textContent).toContain("Preview failed for second.pdf.");
     expect(viewer.shadowRoot?.querySelector("iframe")).toBeNull();
     expect(anchorWithText(viewer, "Open ↗")).toBeDefined();
     expect(viewer.shadowRoot?.querySelector("a[download]")).not.toBeNull();
 
     buttonWithText(viewer, "Retry preview").click();
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(viewer.shadowRoot?.querySelector("iframe")).not.toBeNull();
   });
 
@@ -483,7 +486,7 @@ describe("workspace-file-viewer", () => {
     expect(viewer.shadowRoot?.querySelector("svg, script")).toBeNull();
 
     modeButton(viewer, "Preview").click();
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
 
     expect(modeButton(viewer, "Preview").getAttribute("aria-pressed")).toBe("true");
     expect(viewer.shadowRoot?.querySelector("pi-web-files-code-viewer")).toBeNull();
@@ -494,7 +497,7 @@ describe("workspace-file-viewer", () => {
     const streamedImage = binaryFile("photo.png", { mediaType: "image", mimeType: "image/png" });
     viewer.selectedPath = streamedImage.path;
     viewer.file = streamedImage;
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(viewer.shadowRoot?.querySelector("[role='group']")).toBeNull();
   });
 
@@ -507,20 +510,20 @@ describe("workspace-file-viewer", () => {
     const photo = binaryFile("photo.png", { mediaType: "image", mimeType: "image/png" });
     viewer.selectedPath = photo.path;
     viewer.file = photo;
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
 
     // Re-select the first file with identical metadata: its identity key is the
     // same as before, so only a per-selection token can tell the renders apart.
     viewer.selectedPath = report.path;
     viewer.file = { ...report };
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(detachedFrame.isConnected).toBe(false);
     expect(detachedRawButton.isConnected).toBe(false);
     expect(viewer.shadowRoot?.querySelector("iframe")).not.toBe(detachedFrame);
 
     detachedFrame.dispatchEvent(new Event("error"));
     detachedRawButton.click();
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
 
     expect(viewer.shadowRoot?.textContent).not.toContain("Preview failed");
     expect(viewer.shadowRoot?.querySelector("iframe")).not.toBeNull();
@@ -543,24 +546,24 @@ describe("workspace-file-viewer", () => {
     });
     viewer.selectedPath = oversizedHtml.path;
     viewer.file = oversizedHtml;
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(viewer.shadowRoot?.querySelector("[role='status']")?.textContent).toContain("Raw source is truncated");
     expect(requiredElement(viewer.shadowRoot?.querySelector<HTMLElement & { content: string }>("pi-web-files-code-viewer"), "oversized raw source").content).toBe("<p>first capped bytes</p>");
     expect(viewer.shadowRoot?.textContent).not.toContain("Open ↗");
     expect(viewer.shadowRoot?.querySelector("a[download]")).not.toBeNull();
 
     modeButton(viewer, "Preview").click();
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(statusMessage(viewer)).toContain("File too large to preview");
     expect(viewer.shadowRoot?.querySelector("iframe")).toBeNull();
 
     modeButton(viewer, "Raw").click();
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
 
     const archive = binaryFile(String.raw`C:\reports\archive.zip`);
     viewer.selectedPath = archive.path;
     viewer.file = archive;
-    await viewer.updateComplete;
+    await settleDeferredContent(viewer);
     expect(viewer.shadowRoot?.textContent).toContain("Preview isn't available for this file type.");
     const fallback = requiredElement(viewer.shadowRoot?.querySelector<HTMLAnchorElement>(".download-link"), "unsupported-file download fallback");
     expect(fallback.textContent).toContain("Download archive.zip");
@@ -642,7 +645,7 @@ async function mountViewer(file: FileContentResponse | undefined, patch: ViewerP
     modeStore: fakeModeStore(),
   }, patch);
   document.body.append(viewer);
-  await viewer.updateComplete;
+  await settleDeferredContent(viewer);
   return viewer;
 }
 

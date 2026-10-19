@@ -30,6 +30,13 @@ describe("ChatView durable DOM scroll anchors", () => {
     expect(groupAnchor).toBe(live
       ? 'g:["first","assistant","message"]'
       : 'g-end:["last","assistant","message"]');
+    if (!live) {
+      expect(view.renderRoot.querySelector("section.group-msg")).toBeNull();
+      const group = view.renderRoot.querySelector<HTMLDetailsElement>("details.event-group");
+      if (group === null) throw new Error("Missing group");
+      group.open = true; group.dispatchEvent(new Event("toggle"));
+      await view.updateComplete;
+    }
     const members = Array.from(view.renderRoot.querySelectorAll("section.group-msg"));
     expect(members.map((member) => member.getAttribute("data-scroll-anchor-id"))).toEqual([
       null, 'e:["first","assistant","message"]', 'e:["last","assistant","message"]', null,
@@ -45,7 +52,7 @@ describe("ChatView durable DOM scroll anchors", () => {
 
   it.each([false, true])("omits anchors but still renders groups with no durable members (live: %s)", async (live) => {
     const view = await mount([thought(), thought("")], live);
-    expect(view.renderRoot.querySelectorAll("section.group-msg")).toHaveLength(2);
+    expect(view.renderRoot.querySelectorAll("section.group-msg")).toHaveLength(live ? 2 : 0);
     expect(view.renderRoot.querySelector("details.event-group")).not.toBeNull();
     expect(view.renderRoot.querySelector("[data-scroll-anchor-id]")).toBeNull();
   });
@@ -71,6 +78,11 @@ describe("ChatView durable DOM scroll anchors", () => {
     const view = await mount([{ entryId: "reply", role: "assistant", parts: [
       { type: "thinking", text: "Thought" }, { type: "text", text: "Reply" },
     ] }]);
+    const group = view.renderRoot.querySelector<HTMLDetailsElement>("details.event-group");
+    if (group === null) throw new Error("Missing group");
+    expect(group.getAttribute("data-scroll-anchor-id")).toBe('g-end:["reply","assistant","message"]');
+    group.open = true; group.dispatchEvent(new Event("toggle"));
+    await view.updateComplete;
     expect(Array.from(view.renderRoot.querySelectorAll("[data-scroll-anchor-id]"),
       (node) => node.getAttribute("data-scroll-anchor-id"))).toEqual([
       'g-end:["reply","assistant","message"]',

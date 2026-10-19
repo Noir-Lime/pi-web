@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { useDeferredContent, settleDeferredContent } from "./deferredContent.testSupport";
 import { afterEach, expect, it, vi } from "vitest";
 import { html } from "lit";
 import type { TokenHighlightedCode } from "../../../../pi-web-plugins/code-highlight/TokenHighlightedCode";
@@ -8,6 +9,8 @@ import { FormattedText } from "../components/FormattedText";
 import { ContentRendererHost } from "../components/ContentRendererHost";
 import { HighlightedCode } from "../../../../pi-web-plugins/code-highlight/HighlightedCode";
 import plugin from "../../../../pi-web-plugins/code-highlight/pi-web-plugin";
+
+useDeferredContent();
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -22,7 +25,7 @@ async function mount(text: string, configure?: (registry: PluginRegistry) => Pro
   view.text = text;
   view.contentRendering = registry.getChatContentRendering(view.machineId);
   document.body.append(view);
-  await view.updateComplete;
+  await settleDeferredContent(view);
   return view;
 }
 
@@ -31,10 +34,10 @@ it("highlights completed chat fences automatically, preserves source safely, and
   const view = await mount(`\`\`\`JS\n${source}\n\`\`\``);
   const host = view.renderRoot.querySelector<ContentRendererHost>("pi-web-content-renderer");
   if (host === null) throw new Error("Expected an automatic renderer host");
-  await host.updateComplete;
+  await settleDeferredContent(host);
   const preview = host.renderRoot.querySelector<HighlightedCode>("pi-web-highlighted-code");
   if (preview === null) throw new Error("Expected highlighted code without clicking Render");
-  await preview.updateComplete;
+  await settleDeferredContent(preview);
   expect(preview.renderRoot.querySelector("code")?.textContent).toBe(source);
   expect(preview.renderRoot.querySelector(".hljs-keyword")?.textContent).toBe("const");
   expect(preview.renderRoot.querySelector(".hljs-string")?.textContent).toContain("<img");
@@ -43,7 +46,7 @@ it("highlights completed chat fences automatically, preserves source safely, and
   const raw = [...host.renderRoot.querySelectorAll("button")].find((button) => button.textContent.trim() === "Raw");
   if (raw === undefined) throw new Error("Expected Raw control");
   raw.click();
-  await host.updateComplete;
+  await settleDeferredContent(host);
   expect(host.renderRoot.querySelector("pre code")?.textContent).toBe(source);
   expect(host.renderRoot.querySelector("pi-web-highlighted-code")).toBeNull();
 });
@@ -62,7 +65,7 @@ it("extends the one Highlighted renderer with plugin grammars and filename match
   });
   const host = view.renderRoot.querySelector<ContentRendererHost>("pi-web-content-renderer");
   if (host === null) throw new Error("Expected Highlighted renderer");
-  await host.updateComplete;
+  await settleDeferredContent(host);
   const preview = host.renderRoot.querySelector<TokenHighlightedCode>("pi-web-token-highlighted-code");
   if (preview === null) throw new Error("Expected grammar tokens in the bundled renderer");
   await vi.waitFor(() => { expect(preview.renderRoot.querySelector(".hljs-keyword")?.textContent).toBe("let"); });
@@ -82,14 +85,14 @@ it("offers two independent highlighting systems and defaults to the last discove
   });
   const host = view.renderRoot.querySelector<ContentRendererHost>("pi-web-content-renderer");
   if (host === null) throw new Error("Expected renderer host");
-  await host.updateComplete;
+  await settleDeferredContent(host);
   expect(host.renderRoot.querySelector("select")).toBeNull();
   const views = [...host.renderRoot.querySelectorAll<HTMLButtonElement>('.views button')];
   expect(views.map((view) => view.textContent.trim())).toEqual(["Highlighted", "Other highlighting", "Raw"]);
   expect(views.map((view) => view.getAttribute("aria-pressed"))).toEqual(["false", "true", "false"]);
   expect(host.renderRoot.querySelector(".other-highlight")?.textContent).toBe("const x = 1;");
   views[0]?.click();
-  await host.updateComplete;
+  await settleDeferredContent(host);
   expect(views.map((view) => view.getAttribute("aria-pressed"))).toEqual(["true", "false", "false"]);
   expect(host.renderRoot.querySelector("pi-web-highlighted-code")).not.toBeNull();
 });

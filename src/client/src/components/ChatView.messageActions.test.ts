@@ -8,6 +8,9 @@ import { PluginRegistry } from "../plugins/registry";
 import type { ChatLine } from "./shared";
 import type { FormattedText } from "./FormattedText";
 import { ChatView } from "./ChatView";
+import { settleDeferredContent, useDeferredContent } from "../formatting/deferredContent.testSupport";
+
+useDeferredContent();
 
 const base = {
   machine: { id: "local", name: "Local", kind: "local" },
@@ -175,6 +178,11 @@ describe("plugin-defined transcript message actions", () => {
     view.messages = [{ role: "assistant", entryId: "skill-entry", parts: [{ type: "skillRead", name: "example", path: "/skills/example/SKILL.md" }] }];
     view.onMessageAction = vi.fn(() => Promise.resolve());
     await settle(view);
+    const group = view.renderRoot.querySelector<HTMLDetailsElement>(".event-group");
+    if (group === null) throw new Error("Missing skill group");
+    expect(buttons(view)).toHaveLength(0);
+    group.open = true; group.dispatchEvent(new Event("toggle"));
+    await settle(view);
     expect(buttons(view).map((button) => button.title)).toEqual(["Inspect skill"]);
     button(view, "Inspect skill").click();
     await settle(view);
@@ -207,7 +215,7 @@ describe("plugin-defined transcript message actions", () => {
       if (element === null) throw new Error("Missing slice text");
       return element;
     });
-    await Promise.all(formatted.map((element) => element.updateComplete));
+    await settleDeferredContent(view);
     expect(formatted.map((element) => element.renderRoot.textContent)).toEqual([
       expect.stringContaining("Considering user testing messages"), expect.stringContaining("Test message 8/10"),
     ]);
@@ -251,7 +259,11 @@ describe("plugin-defined transcript message actions", () => {
     await settle(view);
     const groups = view.renderRoot.querySelectorAll("details.event-group");
     expect(groups).toHaveLength(1);
-    const sections = Array.from(groups[0]?.querySelectorAll<HTMLElement>("section.group-msg") ?? []);
+    const group = groups[0];
+    if (!(group instanceof HTMLDetailsElement)) throw new Error("Missing activity group");
+    group.open = true; group.dispatchEvent(new Event("toggle"));
+    await settle(view);
+    const sections = Array.from(group.querySelectorAll<HTMLElement>("section.group-msg"));
     expect(sections.map((section) => section.dataset["index"])).toEqual(["20", "23"]);
     expect(sections.map((section) => section.dataset["scrollAnchorId"])).toEqual([
       'e:["first","assistant","message"]',

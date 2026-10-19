@@ -22,6 +22,7 @@ it("composes full-width activity sections and consecutive inset content without 
     { type: "thinking", text: "Continue" },
   ];
   view.messages = [{ role: "tool", parts }];
+  view.isSendingPrompt = true;
   document.body.append(view);
   await view.updateComplete;
   const message = view.renderRoot.querySelector(".group-msg");

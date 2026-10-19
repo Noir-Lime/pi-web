@@ -2,6 +2,9 @@
 import { afterEach, expect, it } from "vitest";
 import { html } from "lit";
 import { ChatView } from "./ChatView";
+import { settleDeferredContent, useDeferredContent } from "../formatting/deferredContent.testSupport";
+
+useDeferredContent();
 import type { FormattedText } from "./FormattedText";
 import type { ContentRendererHost } from "./ContentRendererHost";
 import { createContentRenderingService } from "../formatting/contentRendering";
@@ -21,7 +24,7 @@ it("scopes chat intent by machine, session, message, part and block rather than 
   async function hosts() {
     await view.updateComplete;
     const formatted = [...view.renderRoot.querySelectorAll<FormattedText>("formatted-text")];
-    await Promise.all(formatted.map((element) => element.updateComplete));
+    await settleDeferredContent(view);
     const result = formatted.flatMap((element) => [...element.renderRoot.querySelectorAll<ContentRendererHost>("pi-web-content-renderer")]);
     await Promise.all(result.map((element) => element.updateComplete));
     expect(result).toHaveLength(8);
@@ -32,7 +35,7 @@ it("scopes chat intent by machine, session, message, part and block rather than 
   const first = initial[0];
   if (first === undefined) throw new Error("Expected first diagram");
   first.renderRoot.querySelector<HTMLButtonElement>("button")?.click();
-  await first.updateComplete;
+  await settleDeferredContent(first);
   expect(initial.map((host) => host.renderRoot.querySelector("b") !== null)).toEqual([true, false, false, false, false, false, false, false]);
   view.sessionId = "another-session";
   expect((await hosts()).every((host) => host.renderRoot.querySelector('[aria-label="Raw source"]') !== null)).toBe(true);

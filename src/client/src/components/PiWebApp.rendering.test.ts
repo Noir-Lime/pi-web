@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import { LitElement, html } from "lit";
+import { useDeferredContent, settleDeferredContent } from "../formatting/deferredContent.testSupport";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initialAppState, type AppState } from "../appState";
 import type { SessionInfo, SessionStatus, SessionWarning, Workspace } from "../api";
@@ -53,6 +54,8 @@ beforeEach(() => {
   vi.stubGlobal("requestAnimationFrame", () => 1);
   vi.stubGlobal("cancelAnimationFrame", () => undefined);
 });
+
+useDeferredContent();
 
 function panelToggle(app: PiWebApp, label: string): HTMLButtonElement {
   for (const host of app.renderRoot.querySelectorAll("app-navigation-panel, workspace-panel, app-mobile-main-tabs")) {
@@ -720,9 +723,10 @@ describe("application rendering boundaries", () => {
   });
 
   it.each(["before", "after"] as const)("updates diagram controls when plugins load %s the transcript without remounting or auto-preview", async (order) => {
+    const diagramSession = { ...session, id: `diagram-${order}` };
     const app = await mountApp({ selectedWorkspace: workspace, workspaces: [workspace], mainView: "chat" });
     const messages: AppState["messages"] = [{ role: "assistant", parts: [{ type: "text", text: "```mermaid\ngraph TD; A-->B\n```" }] }];
-    if (order === "after") patchState(app, { selectedSession: session, sessions: [session], messages });
+    if (order === "after") patchState(app, { selectedSession: diagramSession, sessions: [diagramSession], messages });
     await settle(app);
     const initialFormatted = app.shadowRoot?.querySelector("chat-view")?.shadowRoot?.querySelector("formatted-text");
     if (order === "after") {
@@ -743,11 +747,12 @@ describe("application rendering boundaries", () => {
     const register: unknown = Reflect.get(app, "registerExternalPlugins");
     if (typeof register !== "function") throw new Error("Expected plugin registration boundary");
     expect(await register.call(app, "Test plugins", () => Promise.resolve(result))).toBe(true);
-    if (order === "before") patchState(app, { selectedSession: session, sessions: [session], messages });
+    if (order === "before") patchState(app, { selectedSession: diagramSession, sessions: [diagramSession], messages });
     await settle(app);
 
     const formatted = app.shadowRoot?.querySelector("chat-view")?.shadowRoot?.querySelector("formatted-text");
     if (!(formatted instanceof FormattedText)) throw new Error("Expected formatted chat text");
+    await settleDeferredContent(formatted);
     if (order === "after") expect(formatted).toBe(initialFormatted);
     const host = formatted.shadowRoot?.querySelector("pi-web-content-renderer");
     if (!(host instanceof ContentRendererHost)) throw new Error("Expected diagram controls");
@@ -756,6 +761,7 @@ describe("application rendering boundaries", () => {
     expect(draw).not.toHaveBeenCalled();
     renderButton?.click();
     await settle(app);
+    await settleDeferredContent(host);
     expect(host.shadowRoot?.querySelector("b")?.textContent).toBe("Rendered diagram");
     expect(draw).toHaveBeenCalledOnce();
     const input = draw.mock.calls[0]?.[0];
@@ -911,6 +917,7 @@ describe("application rendering boundaries", () => {
     const chat = app.shadowRoot?.querySelector("chat-view");
     const formatted = chat?.shadowRoot?.querySelector("formatted-text");
     if (!(formatted instanceof FormattedText)) throw new Error("Expected formatted chat text");
+    await settleDeferredContent(formatted);
     const anchor = formatted.shadowRoot?.querySelector("a");
     if (!(anchor instanceof HTMLAnchorElement)) throw new Error("Expected file link");
     const detail = { machineId: "local", projectId: "project", workspaceId: "workspace", root: "/repo", path: "reports/a #1.txt" };

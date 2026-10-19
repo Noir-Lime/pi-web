@@ -8,6 +8,7 @@ import { renderIntentMemory } from "../formatting/renderIntentMemory";
 import { writeClipboardText } from "../clipboard";
 import type { CodeBlockSourcePolicy } from "../formatting/codeBlockPolicy";
 import { codeBlockFrameStyles } from "./codeBlockFrameStyles";
+import { VisibleContentController } from "../formatting/deferredContent";
 
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   return value !== null && typeof value === "object" && "then" in value && typeof value.then === "function";
@@ -47,8 +48,12 @@ export class ContentRendererHost extends LitElement {
   @state() private copyStatus = "Copy source";
   private controller: AbortController | undefined;
   private preview: TemplateResult | undefined;
-  private ancestorDetails: HTMLDetailsElement[] = [];
-  private readonly onAncestorDetailsToggle = (): void => { this.requestUpdate(); };
+  private previewScheduled = false;
+  private displayedPreview: TemplateResult | undefined;
+  private readonly enhancement = new VisibleContentController(this, (visible) => {
+    if (!visible) this.cancelPreview();
+    this.requestUpdate();
+  });
 
   protected override willUpdate(changes: PropertyValues<this>): void {
     const identityChanged = this.restoreIntent || changes.has("intentKey") || changes.has("text");
@@ -82,7 +87,6 @@ export class ContentRendererHost extends LitElement {
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
-    this.removeAncestorDetailsListeners();
     this.restoreIntent = true;
     this.manuallyActivated = false;
     this.cancelPreview();
@@ -90,25 +94,13 @@ export class ContentRendererHost extends LitElement {
 
   override connectedCallback(): void {
     this.restoreIntent = true;
-    this.removeAncestorDetailsListeners();
-    // Disclosure bodies stay mounted; only renderer work follows their open state.
-    // Walk through shadow hosts because native toggle events do not cross them.
-    for (let ancestor: Node | null = this.parentNode; ancestor !== null; ancestor = ancestor instanceof ShadowRoot ? ancestor.host : ancestor.parentNode) {
-      if (ancestor instanceof HTMLDetailsElement) {
-        this.ancestorDetails.push(ancestor);
-        ancestor.addEventListener("toggle", this.onAncestorDetailsToggle);
-      }
-    }
     super.connectedCallback();
     this.requestUpdate();
   }
 
-  private removeAncestorDetailsListeners(): void {
-    for (const details of this.ancestorDetails) details.removeEventListener("toggle", this.onAncestorDetailsToggle);
-    this.ancestorDetails = [];
-  }
-
   private cancelPreview(): void {
+    this.enhancement.cancel();
+    this.previewScheduled = false;
     this.controller?.abort();
     this.controller = undefined;
     this.preview = undefined;
@@ -174,11 +166,33 @@ export class ContentRendererHost extends LitElement {
     if (this.isConnected && text === this.text) this.copyStatus = copied ? "Copied source" : "Failed to copy source";
   }
 
-  override render() {
-    const active = this.isConnected && this.ancestorDetails.every((details) => details.open)
+  private get previewActive(): boolean {
+    return this.enhancement.visible && !this.raw
       && (this.renderer?.renderMode === "automatic" || this.allowManualPreview || this.manuallyActivated);
-    if (!active) this.cancelPreview();
-    const preview = !this.raw && active ? this.renderPreview() : undefined;
+  }
+
+  protected override updated(): void {
+    const displayedPreview = this.previewActive ? this.preview : undefined;
+    if (displayedPreview !== this.displayedPreview) {
+      this.displayedPreview = displayedPreview;
+      this.dispatchEvent(new CustomEvent("content-layout-changed", { bubbles: true, composed: true }));
+    }
+    if (!this.previewActive) {
+      this.cancelPreview();
+      return;
+    }
+    if (this.preview !== undefined || this.failure !== undefined || this.renderer === undefined || this.previewScheduled) return;
+    this.previewScheduled = true;
+    this.enhancement.request(() => {
+      this.previewScheduled = false;
+      if (!this.previewActive) return;
+      this.renderPreview();
+      this.requestUpdate();
+    });
+  }
+
+  override render() {
+    const preview = this.previewActive ? this.preview : undefined;
     const diagnostic = this.failure;
     const showingRaw = preview === undefined || diagnostic !== undefined;
     const sourceClass = this.codeBlocks?.overflow === "wrap" ? "source-wrap" : "source-scroll";

@@ -169,6 +169,7 @@ export class ChatView extends LitElement {
   @state() private followingLive = false;
   @state() private expandedMetaKey: string | undefined;
   private readonly disclosures = new ChatDisclosureController();
+  private readonly transientDisclosures = new Map<string, boolean>();
   private readonly scrollFlows = new ChatScrollFlows({
     getScroller: () => this.chat ?? undefined,
     onFollowingChange: (following) => { this.followingLive = following; },
@@ -196,6 +197,9 @@ export class ChatView extends LitElement {
   private touchY: number | undefined;
   private loadMoreRequested = false;
   private readonly onViewportResize = () => { this.scrollFlows.onViewportResize(); };
+  // Formatting completes independently of message updates. Reuse the existing
+  // layout/restore flow without making content loading wait for enhancement.
+  private readonly onContentLayoutChanged = () => { this.scrollFlows.onViewportResize(); };
   private readonly handleScroll = () => { this.scrollFlows.onScroll(); };
   // Native details toggles do not bubble; capture layout changes independently
   // of the listener that remembers a group's disclosure choice.
@@ -271,6 +275,7 @@ export class ChatView extends LitElement {
     }
     if (changed.has("sessionId") || changed.has("machineId") || (changed.has("behaviors") && !this.behaviors.loadImages)) this.imageGalleryDialog?.close();
     if (changed.has("sessionId") || changed.has("machineId")) {
+      this.transientDisclosures.clear();
       this.lastOpenQuestionId = undefined;
       this.queuedCopyFeedback = "";
     }
@@ -340,6 +345,7 @@ export class ChatView extends LitElement {
         <div class="chat" @image-open=${(event: CustomEvent<ImageOpenDetail>) => { this.openImageZoom(event.detail.src, event.detail.alt); }}
           @scroll=${this.behaviors.rememberPosition || this.behaviors.followTail || this.behaviors.automaticHistory ? this.handleScroll : undefined}
           @toggle=${this.behaviors.followTail ? this.handleDisclosureToggle : undefined}
+          @content-layout-changed=${this.onContentLayoutChanged}
           @wheel=${this.handlesScrollIntent ? this.handleWheel : undefined}
           @touchstart=${this.handlesScrollIntent ? this.handleTouchStart : undefined}
           @touchmove=${this.handlesScrollIntent ? this.handleTouchMove : undefined}
@@ -580,7 +586,7 @@ export class ChatView extends LitElement {
       workspaceContext: this.workspaceContext,
       anchors: { message: chatMessageAnchorKey, event: chatEventAnchorKey },
       disclosure: {
-        isOpen: (key, defaultOpen) => this.disclosures.isOpen(key, defaultOpen),
+        isOpen: (key, defaultOpen) => this.isDisclosureOpen(key, defaultOpen),
         toggle: (key, event, defaultOpen) => { this.onDisclosureToggle(key, event, defaultOpen); },
       },
       metadata: {
@@ -608,10 +614,11 @@ export class ChatView extends LitElement {
 
   private renderMessageGroup(group: Extract<ChatGroup, { kind: "group" }>, defaultOpen: boolean, entryActionHeaders: ReadonlySet<ChatLine> = new Set()) {
     const disclosureKey = this.groupDisclosureKey(group, defaultOpen);
+    const open = this.isDisclosureOpen(disclosureKey, defaultOpen);
     return transcript.renderMessageGroup(this.transcriptRenderContext(), group, defaultOpen, entryActionHeaders, {
-      open: this.behaviors.rememberDisclosures ? this.disclosures.isOpen(disclosureKey, defaultOpen) : defaultOpen,
+      open,
       anchor: this.groupAnchorKey(group, defaultOpen),
-      toggle: this.behaviors.rememberDisclosures ? (event) => { this.onDisclosureToggle(disclosureKey, event, defaultOpen); } : undefined,
+      toggle: (event) => { this.onDisclosureToggle(disclosureKey, event, defaultOpen); },
     });
   }
 
@@ -630,12 +637,19 @@ export class ChatView extends LitElement {
     return this.imageSession;
   }
 
+  private isDisclosureOpen(key: string, defaultOpen: boolean): boolean {
+    return this.behaviors.rememberDisclosures
+      ? this.disclosures.isOpen(key, defaultOpen)
+      : this.transientDisclosures.get(key) ?? defaultOpen;
+  }
+
   private onDisclosureToggle(key: string, event: Event, defaultOpen: boolean) {
     const details = event.currentTarget;
     if (!(details instanceof HTMLDetailsElement)) return;
-    // The browser owns disclosure visibility; retain the choice without rebuilding
-    // its body (and its native lazy images) when it opens or closes.
-    this.disclosures.applyToggle(key, details.open, defaultOpen);
+    const changed = this.isDisclosureOpen(key, defaultOpen) !== details.open;
+    if (this.behaviors.rememberDisclosures) this.disclosures.applyToggle(key, details.open, defaultOpen);
+    else this.transientDisclosures.set(key, details.open);
+    if (changed) this.requestUpdate();
   }
 
   private get handlesScrollIntent(): boolean {

@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { useDeferredContent, settleDeferredContent } from "../formatting/deferredContent.testSupport";
 import { afterEach, expect, it, vi } from "vitest";
 import { html } from "lit";
 import { workspaceFilePreviewUrl } from "../api/urls";
@@ -12,6 +13,8 @@ import { loadIntrinsicDimensions, nativeImage, settleImage } from "./imagePresen
 const source = "https://placehold.co/640x360/png?text=remembered";
 const text = `Before\n\n![External image](${source})\n\nAfter`;
 
+useDeferredContent();
+
 afterEach(() => {
   vi.restoreAllMocks();
   document.body.replaceChildren();
@@ -23,7 +26,7 @@ async function mount(content = text, imagesEnabled = true) {
   view.text = content;
   view.imagesEnabled = imagesEnabled;
   document.body.append(view);
-  await view.updateComplete;
+  await settleDeferredContent(view);
   return view;
 }
 
@@ -42,7 +45,7 @@ it("learns from a non-bubbling native load without rerendering or rebuilding sur
   const render = vi.spyOn(view, "render");
   const update = vi.spyOn(view, "requestUpdate");
   loadIntrinsicDimensions(image, 640, 360);
-  await view.updateComplete;
+  await settleDeferredContent(view);
   expect(readMarkdownImageDimensions(source)).toEqual({ width: 640, height: 360 });
   expect(image.getAttribute("width")).toBe("640");
   expect(image.getAttribute("height")).toBe("360");
@@ -79,7 +82,7 @@ it("reserves external images through the normal content-rendering service withou
   }] : []);
   view.text = `${text}\n\n\`\`\`mermaid\nflowchart LR\nA --> B\n\`\`\``;
   document.body.append(view);
-  await view.updateComplete;
+  await settleDeferredContent(view);
   const image = imageIn(view);
   expect(image.getAttribute("width")).toBe("640");
   expect(image.getAttribute("height")).toBe("360");
@@ -134,7 +137,7 @@ it("keeps disabled images inert even with a saved hint, and restores hints when 
   loadIntrinsicDimensions(disabled, 400, 1600);
   expect(readMarkdownImageDimensions(source)).toEqual({ width: 640, height: 360 });
   view.imagesEnabled = true;
-  await view.updateComplete;
+  await settleDeferredContent(view);
   const enabled = imageIn(view);
   expect(enabled.src).toBe(source);
   expect(enabled.getAttribute("width")).toBe("640");
@@ -149,7 +152,7 @@ it("does not traverse filesystem-image shadow roots or turn geometry into outsid
   view.workspaceContext = context;
   view.text = "![Outside](/tmp/outside.png)";
   document.body.append(view);
-  await view.updateComplete;
+  await settleDeferredContent(view);
   const markdownImage = view.renderRoot.querySelector<MarkdownImage>("pi-web-markdown-image");
   if (markdownImage === null) throw new Error("Expected gated filesystem image");
   const presentation = await settleImage(markdownImage);

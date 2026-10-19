@@ -1,6 +1,9 @@
 // @vitest-environment happy-dom
 import { afterEach, expect, it, vi } from "vitest";
 import { ChatView } from "./ChatView";
+import { settleDeferredContent, useDeferredContent } from "../formatting/deferredContent.testSupport";
+
+useDeferredContent();
 import type { FormattedText } from "./FormattedText";
 import { normalizeMessages } from "../chatMessages";
 import { createContentRenderingService } from "../formatting/contentRendering";
@@ -46,7 +49,7 @@ it.each([false, true].flatMap((previews) => ["```text\ndisplayed\n```", "", unde
     await view.updateComplete;
   }
   const formatted = [...view.renderRoot.querySelectorAll<FormattedText>("formatted-text")];
-  await Promise.all(formatted.map((element) => element.updateComplete));
+  await settleDeferredContent(view);
   if (displayText === "") {
     expect(formatted).toHaveLength(0);
     expect(view.renderRoot.querySelector("details.part")).toBeNull();

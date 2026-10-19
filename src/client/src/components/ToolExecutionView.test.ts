@@ -21,20 +21,28 @@ it("keeps command details and complete output while updating live status and err
   expect(view.renderRoot.querySelector(".status-label")?.textContent).toBe("running");
   const details = view.renderRoot.querySelector<HTMLDetailsElement>(".text-body");
   expect(details?.open).toBe(false);
-  expect(view.renderRoot.querySelector(".detail-target-value")?.textContent).toBe(command);
+  expect(view.renderRoot.querySelector(".detail-target-value")).toBeNull();
 
   const output = "long line ".repeat(1000);
   view.execution = { ...view.execution, status: "success", resultText: output };
   await view.updateComplete;
   expect(view.renderRoot.querySelector(".status-label")?.textContent).toBe("done");
-  expect(view.renderRoot.querySelector(".detail-result pre")?.textContent).toBe(output);
+  expect(view.renderRoot.querySelector(".detail-result")).toBeNull();
   expect(details?.open).toBe(false);
+  if (details === null) throw new Error("Expected text disclosure");
+  details.open = true; details.dispatchEvent(new Event("toggle"));
+  await view.updateComplete;
+  expect(view.renderRoot.querySelector(".detail-target-value")?.textContent).toBe(command);
+  expect(view.renderRoot.querySelector(".detail-result pre")?.textContent).toBe(output);
+  details.open = false; details.dispatchEvent(new Event("toggle"));
+  await view.updateComplete;
+  expect(view.renderRoot.querySelector(".detail-result")).toBeNull();
 
   view.execution = { ...view.execution, status: "error", resultText: "Command failed" };
   await view.updateComplete;
   expect(view.renderRoot.querySelector(".status-label")?.textContent).toBe("failed");
   expect(view.renderRoot.querySelector(".error-text")?.textContent).toBe("Command failed");
-  expect(details?.open).toBe(true);
+  expect(details.open).toBe(true);
 });
 
 it("retains diff disclosure state, expands long diffs, and copies the full diff", async () => {
@@ -51,9 +59,15 @@ it("retains diff disclosure state, expands long diffs, and copies the full diff"
   details.open = false;
   details.dispatchEvent(new Event("toggle"));
   await view.updateComplete;
+  expect(view.renderRoot.querySelector(".diff, .diff-toolbar, .detail-target")).toBeNull();
+  const split = vi.spyOn(String.prototype, "split");
   view.execution = { ...view.execution, status: "success", details: { diff } };
   await view.updateComplete;
   expect(details.open).toBe(false);
+  expect(view.renderRoot.querySelector(".diff")).toBeNull();
+  // The unchanged diff needs neither another statistics scan nor line rendering.
+  expect(split.mock.contexts.filter((value) => String(value) === diff)).toHaveLength(0);
+  split.mockRestore();
   details.open = true;
   details.dispatchEvent(new Event("toggle"));
   await view.updateComplete;

@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { useDeferredContent, settleDeferredContent } from "../formatting/deferredContent.testSupport";
 import { afterEach, expect, it, vi } from "vitest";
 import { html, render } from "lit";
 import { marked } from "marked";
@@ -20,6 +21,8 @@ vi.mock("../clipboard", () => ({ writeClipboardText: vi.fn().mockResolvedValue(t
 const literalSource = "first\n  second";
 const literalMarkdown = `## Heading\n\n**Prose** with \`inline\`.\n\n\`\`\`text\n${literalSource}\n\`\`\``;
 
+useDeferredContent();
+
 afterEach(() => {
   document.body.replaceChildren();
   localStorage.clear();
@@ -30,11 +33,11 @@ afterEach(() => {
 });
 
 async function settle(view: FormattedText | ContentRendererHost): Promise<void> {
-  await view.updateComplete;
-  await view.updateComplete;
+  await settleDeferredContent(view);
+  await settleDeferredContent(view);
   for (const host of view.renderRoot.querySelectorAll<ContentRendererHost>("pi-web-content-renderer")) {
-    await host.updateComplete;
-    await host.updateComplete;
+    await settleDeferredContent(host);
+    await settleDeferredContent(host);
   }
 }
 
@@ -87,7 +90,7 @@ it("preserves the standalone native, scrolling, copyable default and ignores a c
 });
 
 it.each(["plain", "code"] as const)("preserves unchanged %s source and Copy focus/feedback while trailing prose streams without matching previews", async (presentation) => {
-  vi.useFakeTimers();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
   const service = createContentRenderingService(() => []);
   const view = await mount(`${literalMarkdown}\n\nMore explanation after the code`, { ...DEFAULT_CODE_BLOCK_POLICY, presentation }, service);
   const source = view.renderRoot.querySelector<HTMLElement>("pre, .plain-code-block");
@@ -296,8 +299,8 @@ it.each(["text", "markdown"] as const)("keeps public plugin %s hosts on undefine
   if (surface === "markdown") {
     const boundary = root.querySelector("pi-web-content-rendering-boundary");
     if (!(boundary instanceof ContentRenderingBoundary)) throw new Error("Expected a public Markdown boundary");
-    await boundary.updateComplete;
-    await boundary.updateComplete;
+    await settleDeferredContent(boundary);
+    await settleDeferredContent(boundary);
   }
   const host = hostIn(root);
   await settle(host);
@@ -314,7 +317,7 @@ it.each(["text", "markdown"] as const)("keeps public plugin %s hosts on undefine
 });
 
 it.each(["plain", "code"] as const)("copies escaped %s source through the rendered copy button", async (presentation) => {
-  vi.useFakeTimers();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
   const source = '<script>alert("unsafe")</script>\n  <img src="x" onerror="bad()"> & <b>literal</b>';
   const view = await mount(`\`\`\`html\n${source}\n\`\`\``, { ...PLAIN_CODE_BLOCK_POLICY, presentation, copy: true });
   expect(view.renderRoot.querySelector("script, img, b")).toBeNull();

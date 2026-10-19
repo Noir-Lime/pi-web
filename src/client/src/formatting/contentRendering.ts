@@ -121,7 +121,7 @@ export function createContentRenderingService(select: SelectRenderer): ChatConte
     // Plain templates cross Lit copies, but directive instances do not (notably
     // the dev host's unsafeHTML/ref inside the production-bundled Files plugin).
     renderMarkdown: (request: ContentMarkdownRenderRequest) => html`<pi-web-content-rendering-boundary
-      style="display: contents" .content=${renderMarkdown(request)}
+      style="display: contents" .source=${request.text} .renderContent=${() => renderMarkdown(request)}
     ></pi-web-content-rendering-boundary>`,
   });
   return { capability, renderMarkdown };

@@ -2,6 +2,9 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatView } from "./ChatView";
+import { settleDeferredContent, useDeferredContent } from "../formatting/deferredContent.testSupport";
+
+useDeferredContent();
 import type { ImageGalleryDialog } from "./ImageGalleryDialog";
 import { deepActiveElement } from "./modalLayerRegistry";
 import { ModalSurface } from "./ModalSurface";
@@ -125,7 +128,10 @@ describe("ChatView tool-image gallery", () => {
     const sources = requiredElement(view.renderRoot.querySelector<HTMLDetailsElement>(".image-output-sources"), "source details");
     expect(sources.open).toBe(false);
     expect(sources.querySelector("summary")?.textContent).toBe("Sources (3)");
+    expect(sources.querySelector(".image-output-source")).toBeNull();
     sources.open = true;
+    sources.dispatchEvent(new Event("toggle"));
+    await view.updateComplete;
     const second = requiredElement(sources.querySelector('[aria-label="Output 2"]'), "second source");
     const info = requiredElement(second.querySelector<HTMLButtonElement>('[aria-label="Message information"]'), "source information");
     info.click();
@@ -136,6 +142,10 @@ describe("ChatView tool-image gallery", () => {
     expect(inspect).toHaveBeenCalledOnce();
     expect(inspect.mock.calls[0]?.[0].message.entryId).toBe("second");
     expect(inspect.mock.calls[0]?.[1]).toBe("gallery-test:inspect");
+    sources.open = false;
+    sources.dispatchEvent(new Event("toggle"));
+    await view.updateComplete;
+    expect(sources.querySelector(".image-output-source")).toBeNull();
     const anchors = [...view.renderRoot.querySelectorAll<HTMLElement>("[data-scroll-anchor-id]")].map((element) => element.dataset["scrollAnchorId"]);
     expect(anchors).toEqual(['m:["first","tool","message"]', 'm:["second","tool","message"]', 'm:["third","tool","message"]']);
   });
@@ -230,7 +240,7 @@ describe("ChatView tool-image gallery", () => {
     view.workspaceContext = { machineId: "local", projectId: "p", workspaceId: "w", root: "/work" };
     await view.updateComplete;
     const formatted = requiredElement(view.renderRoot.querySelector<FormattedText>("formatted-text"), "formatted text");
-    await formatted.updateComplete;
+    await settleDeferredContent(view);
     const markdownImage = requiredElement(formatted.renderRoot.querySelector<MarkdownImage>("pi-web-markdown-image"), "markdown image");
     const presentation = await settleImage(markdownImage);
     const src = requiredElement(presentation.renderRoot.querySelector("img")?.getAttribute("src"), "markdown image source");
