@@ -1,7 +1,7 @@
 import type { Workspace, WorkspaceProviderResolution } from "../api";
 import { browserSessionStorage, parseStoredString, PersistentValueMap, type KeyValueStorage } from "./sessionStorageMemory";
 
-/** Hide only a confirmed ordinary folder, never a provider or failed resolution. */
+/** Keep provider details visible even for one workspace; hide only ordinary folders. */
 export function shouldShowWorkspaceSelection(resolution: WorkspaceProviderResolution | undefined): boolean {
   return resolution?.status !== "folder";
 }

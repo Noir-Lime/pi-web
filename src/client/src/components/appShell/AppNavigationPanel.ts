@@ -1,6 +1,10 @@
 import { stylesheetIntegrationCapability } from "../../plugins/styles";
 import { LitElement, css, html } from "lit";
-import { customElement, property, query } from "lit/decorators.js";
+import { styleMap } from "lit/directives/style-map.js";
+import { NavigationSectionResizeController, type ResizableNavigationSection } from "../../appShell/navigationSectionResizeController";
+import type { NavigationSectionMeasurement } from "./NavigationSectionResizeHandle";
+import "./NavigationSectionResizeHandle";
+import { customElement, property, query, state } from "lit/decorators.js";
 import type { Machine, MachineHealth, Project, SessionActivity, SessionInfo, SessionStatus, Workspace } from "../../api";
 import type { MachineStatusSnapshot } from "../../../../shared/machineStatus";
 import type { SessionLabelItem, WorkspaceLabelItem } from "../../plugins/types";
@@ -93,6 +97,46 @@ export class AppNavigationPanel extends LitElement {
   @property({ attribute: false }) onFocusNavigationTarget?: (target: NavigationFocusTarget) => void | Promise<void>;
   @property({ attribute: false }) onCancelKeyboardNavigation?: () => void | Promise<void>;
 
+  private readonly sectionSizes = new NavigationSectionResizeController(this);
+  @state() private sectionMeasurements: Record<ResizableNavigationSection, NavigationSectionMeasurement> = {
+    projects: { height: 44, maxHeight: 44 },
+    workspaces: { height: 44, maxHeight: 44 },
+  };
+  private layoutObserver: ResizeObserver | undefined;
+  private observedLayoutElements: Element[] = [];
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    if (typeof ResizeObserver !== "undefined") {
+      this.layoutObserver = new ResizeObserver(() => { this.refreshSectionMeasurements(); });
+      this.requestUpdate();
+    }
+  }
+
+  override disconnectedCallback(): void {
+    this.layoutObserver?.disconnect();
+    this.layoutObserver = undefined;
+    this.observedLayoutElements = [];
+    super.disconnectedCallback();
+  }
+
+  protected override updated(): void {
+    if (this.layoutObserver === undefined) return;
+    const elements = [this, ...this.renderRoot.querySelectorAll("header, machine-list, project-list, workspace-list, session-list")];
+    if (elements.length === this.observedLayoutElements.length && elements.every((element, index) => element === this.observedLayoutElements[index])) return;
+    this.layoutObserver.disconnect();
+    for (const element of elements) this.layoutObserver.observe(element);
+    this.observedLayoutElements = elements;
+  }
+
+  private refreshSectionMeasurements(): void {
+    const projects = this.measureSection("projects");
+    const workspaces = this.measureSection("workspaces");
+    if (projects.height === this.sectionMeasurements.projects.height && projects.maxHeight === this.sectionMeasurements.projects.maxHeight
+      && workspaces.height === this.sectionMeasurements.workspaces.height && workspaces.maxHeight === this.sectionMeasurements.workspaces.maxHeight) return;
+    this.sectionMeasurements = { projects, workspaces };
+  }
+
   @query("machine-list") private machineList?: KeyboardNavigableSection;
   @query("machine-switcher") private machineSwitcher?: KeyboardNavigableSection;
   @query("project-list") private projectList?: KeyboardNavigableSection;
@@ -177,6 +221,7 @@ export class AppNavigationPanel extends LitElement {
           </button>
         </div>
       </header>
+      <div class="navigation-sections">
       ${this.compact && shouldShowMachinesSection(this.machines) ? html`
         <machine-list
           .machines=${this.machines}
@@ -193,6 +238,9 @@ export class AppNavigationPanel extends LitElement {
         ></machine-list>
       ` : null}
       <project-list
+        id="navigation-projects"
+        style=${styleMap(this.sectionSizeStyle("projects"))}
+        ?data-manual-size=${this.sectionSizes.height("projects") !== undefined}
         .projects=${this.projects}
         .selected=${this.selectedProject}
         .statusSnapshot=${this.selectedMachineStatusSnapshot()}
@@ -206,7 +254,11 @@ export class AppNavigationPanel extends LitElement {
         .onFocusNextSection=${this.childCallbacks.nextFromProjects}
         .onCancelKeyboardNavigation=${this.childCallbacks.cancelKeyboardNavigation}
       ></project-list>
+      ${this.projectsCollapsed ? null : this.renderSectionResizeHandle("projects")}
       ${this.workspaceSelectionVisible ? html`<workspace-list
+        id="navigation-workspaces"
+        style=${styleMap(this.sectionSizeStyle("workspaces"))}
+        ?data-manual-size=${this.sectionSizes.height("workspaces") !== undefined}
         .workspaces=${this.workspaces}
         .selected=${this.selectedWorkspace}
         .machineId=${this.selectedMachine?.id ?? "local"}
@@ -222,7 +274,8 @@ export class AppNavigationPanel extends LitElement {
         .onFocusPreviousSection=${this.childCallbacks.previousFromWorkspaces}
         .onFocusNextSection=${this.childCallbacks.nextFromWorkspaces}
         .onCancelKeyboardNavigation=${this.childCallbacks.cancelKeyboardNavigation}
-      ></workspace-list>` : null}
+      ></workspace-list>
+      ${this.workspacesCollapsed ? null : this.renderSectionResizeHandle("workspaces")}` : null}
       <session-list
         .sessions=${this.sessions}
         .pinnedRootIds=${this.pinnedRootIds}
@@ -260,7 +313,31 @@ export class AppNavigationPanel extends LitElement {
         .onFocusNextSection=${this.childCallbacks.nextFromSessions}
         .onCancelKeyboardNavigation=${this.childCallbacks.cancelKeyboardNavigation}
       ></session-list>
+      </div>
     `;
+  }
+
+  private sectionSizeStyle(section: ResizableNavigationSection): Record<string, string> {
+    const height = this.sectionSizes.height(section);
+    return height === undefined ? {} : { "--navigation-section-height": `${String(height)}px` };
+  }
+
+  private renderSectionResizeHandle(section: ResizableNavigationSection) {
+    return html`<navigation-section-resize-handle
+      .sectionLabel=${section === "projects" ? "Projects" : "Workspaces"}
+      .controls=${`navigation-${section}`}
+      .measurement=${this.sectionMeasurements[section]}
+      .onResize=${(height: number) => { this.sectionSizes.resize(section, height); }}
+      .onReset=${() => { this.sectionSizes.reset(section); }}
+    ></navigation-section-resize-handle>`;
+  }
+
+  private measureSection(section: ResizableNavigationSection): NavigationSectionMeasurement {
+    const target = this.renderRoot.querySelector<HTMLElement>(`#navigation-${section}`);
+    const height = target?.getBoundingClientRect().height ?? 44;
+    // Leave other sections where they are and preserve at least a session heading.
+    const sessionsHeight = this.sessionList?.getBoundingClientRect().height ?? 44;
+    return { height, maxHeight: Math.max(44, height + sessionsHeight - 44) };
   }
 
   /**
@@ -306,10 +383,16 @@ export class AppNavigationPanel extends LitElement {
       .actions-label { display: none; }
       .actions-button { min-width: 44px; padding-inline: 0; }
     }
-    /* Expanded sections share the panel height equally, so collapsing one
-       section distributes its space to every remaining section, not just the
-       session list. Collapsed sections keep only their heading height. */
-    machine-list, project-list, workspace-list, session-list { flex: 1 1 0px; min-height: 0; overflow: hidden; border-bottom: 1px solid var(--pi-border-muted); }
+    .navigation-sections { display: flex; flex-direction: column; flex: 1 1 0px; min-height: 0; }
+    /* Projects and workspaces default to content height capped at a third of
+       the area below the header, matching sessions when both lists are long.
+       Explicit heights survive content/navigation changes; flex shrink only
+       constrains them when the viewport cannot fit every section's minimum.
+       Sessions take the remaining space. */
+    machine-list, project-list, workspace-list, session-list { box-sizing: border-box; flex: 1 1 0px; min-height: 0; overflow: hidden; border-bottom: 1px solid var(--pi-border-muted); }
+    project-list:not([collapsed]), workspace-list:not([collapsed]) { flex: 0 1 auto; max-height: calc(100% / 3); min-height: 44px; }
+    project-list[data-manual-size]:not([collapsed]), workspace-list[data-manual-size]:not([collapsed]) { flex-basis: var(--navigation-section-height); max-height: none; }
+    session-list:not([collapsed]) { min-height: 44px; }
     /* A collapsed heading already owns its separator; do not add a second line. */
     machine-list[collapsed],
     project-list[collapsed],

@@ -4,11 +4,20 @@ import type { KeyValueStorage } from "./sessionStorageMemory";
 import { InMemoryWorkspaceSelectionMemory, selectPreferredWorkspace, shouldShowWorkspaceSelection, SessionStorageWorkspaceSelectionMemory } from "./workspaceSelection";
 
 describe("shouldShowWorkspaceSelection", () => {
-  it("hides only confirmed folder resolution, regardless of workspace count", () => {
+  it("hides folder resolution", () => {
+    expect(shouldShowWorkspaceSelection({ projectId: "p", status: "folder", diagnostics: [], workspaces: [testWorkspace("single")] })).toBe(false);
+  });
+
+  it.each([0, 1, 2])("keeps provider workspace details visible, including a single checked-out branch (count=%s)", (count) => {
+    expect(shouldShowWorkspaceSelection({
+      projectId: "p", status: "provider", ownerPluginId: "git", diagnostics: [],
+      workspaces: Array.from({ length: count }, (_, index) => testWorkspace(String(index))),
+    })).toBe(true);
+  });
+
+  it("keeps loading and degraded resolution visible", () => {
     expect(shouldShowWorkspaceSelection(undefined)).toBe(true);
-    for (const status of ["folder", "provider", "degraded"] as const) {
-      expect(shouldShowWorkspaceSelection({ projectId: "p", status, diagnostics: [], workspaces: [testWorkspace("single")] })).toBe(status !== "folder");
-    }
+    expect(shouldShowWorkspaceSelection({ projectId: "p", status: "degraded", diagnostics: [], workspaces: [testWorkspace("single")] })).toBe(true);
   });
 });
 
