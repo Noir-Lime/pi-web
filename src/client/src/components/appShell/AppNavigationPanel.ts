@@ -240,7 +240,7 @@ export class AppNavigationPanel extends LitElement {
       <project-list
         id="navigation-projects"
         style=${styleMap(this.sectionSizeStyle("projects"))}
-        ?data-manual-size=${this.sectionSizes.height("projects") !== undefined}
+        ?data-manual-size=${!this.compact && this.sectionSizes.height("projects") !== undefined}
         .projects=${this.projects}
         .selected=${this.selectedProject}
         .statusSnapshot=${this.selectedMachineStatusSnapshot()}
@@ -258,7 +258,7 @@ export class AppNavigationPanel extends LitElement {
       ${this.workspaceSelectionVisible ? html`<workspace-list
         id="navigation-workspaces"
         style=${styleMap(this.sectionSizeStyle("workspaces"))}
-        ?data-manual-size=${this.sectionSizes.height("workspaces") !== undefined}
+        ?data-manual-size=${!this.compact && this.sectionSizes.height("workspaces") !== undefined}
         .workspaces=${this.workspaces}
         .selected=${this.selectedWorkspace}
         .machineId=${this.selectedMachine?.id ?? "local"}
@@ -319,10 +319,11 @@ export class AppNavigationPanel extends LitElement {
 
   private sectionSizeStyle(section: ResizableNavigationSection): Record<string, string> {
     const height = this.sectionSizes.height(section);
-    return height === undefined ? {} : { "--navigation-section-height": `${String(height)}px` };
+    return this.compact || height === undefined ? {} : { "--navigation-section-height": `${String(height)}px` };
   }
 
   private renderSectionResizeHandle(section: ResizableNavigationSection) {
+    if (this.compact) return null;
     return html`<navigation-section-resize-handle
       .sectionLabel=${section === "projects" ? "Projects" : "Workspaces"}
       .controls=${`navigation-${section}`}
@@ -393,6 +394,7 @@ export class AppNavigationPanel extends LitElement {
     project-list:not([collapsed]), workspace-list:not([collapsed]) { flex: 0 1 auto; max-height: calc(100% / 3); min-height: 44px; }
     project-list[data-manual-size]:not([collapsed]), workspace-list[data-manual-size]:not([collapsed]) { flex-basis: var(--navigation-section-height); max-height: none; }
     session-list:not([collapsed]) { min-height: 44px; }
+    :host([compact]) project-list:not([collapsed]), :host([compact]) workspace-list:not([collapsed]) { flex: 1 1 0px; max-height: none; }
     /* A collapsed heading already owns its separator; do not add a second line. */
     machine-list[collapsed],
     project-list[collapsed],

@@ -71,7 +71,14 @@ describe("navigation section resizing", () => {
     expect(handle.onResize).toHaveBeenLastCalledWith(400);
     pointer("pointermove", 0);
     expect(handle.onResize).toHaveBeenLastCalledWith(44);
-    pointer("pointercancel", 0);
+    // Reverse immediately after overshooting either bound; do not retrace the overshoot.
+    pointer("pointermove", 20);
+    expect(handle.onResize).toHaveBeenLastCalledWith(64);
+    pointer("pointermove", 1000);
+    expect(handle.onResize).toHaveBeenLastCalledWith(400);
+    pointer("pointermove", 980);
+    expect(handle.onResize).toHaveBeenLastCalledWith(380);
+    pointer("pointercancel", 980);
     expect(releaseCapture).toHaveBeenCalledWith(1);
     const calls = resize.mock.calls.length;
     pointer("pointermove", 250);

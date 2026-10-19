@@ -11,6 +11,7 @@ import { WorkspaceList } from "../WorkspaceList";
 import { SessionList } from "../SessionList";
 import { AppNavigationPanel, shouldShowMachinesSection } from "./AppNavigationPanel";
 import type { NavigationSectionResizeHandle } from "./NavigationSectionResizeHandle";
+import { NAVIGATION_SECTION_SIZE_STORAGE_KEY } from "../../appShell/navigationSectionResizeController";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -52,6 +53,25 @@ describe("folder workspace navigation", () => {
 });
 
 describe("section resize boundaries", () => {
+  it("disables resizing in one-column navigation without discarding saved desktop heights", async () => {
+    const saved = JSON.stringify({ version: 1, projects: 180, workspaces: 220 });
+    localStorage.setItem(NAVIGATION_SECTION_SIZE_STORAGE_KEY, saved);
+    const panel = await mountPanel({}, machine("local"), false);
+    const root = panel.shadowRoot;
+    if (root === null) throw new Error("Missing navigation panel root");
+    expect(root.querySelectorAll("[data-manual-size]")).toHaveLength(2);
+    panel.compact = true;
+    await panel.updateComplete;
+    expect(root.querySelector("navigation-section-resize-handle")).toBeNull();
+    expect(root.querySelector("[data-manual-size]")).toBeNull();
+    expect(localStorage.getItem(NAVIGATION_SECTION_SIZE_STORAGE_KEY)).toBe(saved);
+    panel.compact = false;
+    await panel.updateComplete;
+    expect(root.querySelectorAll("navigation-section-resize-handle")).toHaveLength(2);
+    expect(root.querySelectorAll("[data-manual-size]")).toHaveLength(2);
+    expect(localStorage.getItem(NAVIGATION_SECTION_SIZE_STORAGE_KEY)).toBe(saved);
+  });
+
   it("owns layout observation, supplies measurements, and tracks replaced sections and reconnection", async () => {
     const observers: LayoutObserver[] = [];
     class LayoutObserver implements ResizeObserver {
@@ -63,7 +83,7 @@ describe("section resize boundaries", () => {
       notify(): void { this.callback([], this); }
     }
     vi.stubGlobal("ResizeObserver", LayoutObserver);
-    const panel = await mountPanel({}, machine("local"));
+    const panel = await mountPanel({}, machine("local"), false);
     const observer = observers.find((item) => item.targets.has(panel));
     if (observer === undefined) throw new Error("Panel did not observe its layout");
     const projects = section(panel, "project-list", ProjectList);
@@ -103,7 +123,7 @@ describe("section resize boundaries", () => {
   });
 
   it("assigns each divider to the expanded section above, including when workspaces are hidden", async () => {
-    const panel = await mountPanel({}, machine("local"));
+    const panel = await mountPanel({}, machine("local"), false);
     const root = panel.shadowRoot;
     if (root === null) throw new Error("Missing navigation panel root");
     const controls = () => [...root.querySelectorAll<NavigationSectionResizeHandle>("navigation-section-resize-handle")]
@@ -329,9 +349,9 @@ function session(id: string): SessionInfo {
   };
 }
 
-async function mountPanel(machineStatusSnapshots: Record<string, MachineStatusSnapshot>, selectedMachine: Machine | undefined): Promise<AppNavigationPanel> {
+async function mountPanel(machineStatusSnapshots: Record<string, MachineStatusSnapshot>, selectedMachine: Machine | undefined, compact = true): Promise<AppNavigationPanel> {
   const panel = new AppNavigationPanel();
-  panel.compact = true;
+  panel.compact = compact;
   panel.machines = [machine("local"), machine("remote-a")];
   if (selectedMachine !== undefined) panel.selectedMachine = selectedMachine;
   panel.projects = [project("project-1")];

@@ -36,9 +36,11 @@ export class NavigationSectionResizeHandle extends LitElement {
     super.disconnectedCallback();
   }
 
-  private commit(height: number): void {
+  private commit(height: number): number {
     const { maxHeight } = this.measurement;
-    this.onResize?.(Math.round(Math.max(NAVIGATION_SECTION_MIN_HEIGHT, Math.min(height, maxHeight))));
+    const nextHeight = Math.round(Math.max(NAVIGATION_SECTION_MIN_HEIGHT, Math.min(height, maxHeight)));
+    this.onResize?.(nextHeight);
+    return nextHeight;
   }
 
   private pointerDown(event: PointerEvent): void {
@@ -57,7 +59,13 @@ export class NavigationSectionResizeHandle extends LitElement {
     const delta = event.clientY - this.active.startY;
     if (Math.abs(delta) <= 4 && !this.active.moved) return;
     this.active.moved = true;
-    this.commit(navigationSectionHeightFromDrag(this.active.startHeight, this.active.startY, event.clientY));
+    const proposedHeight = this.active.startHeight + delta;
+    const height = this.commit(navigationSectionHeightFromDrag(this.active.startHeight, this.active.startY, event.clientY));
+    if (proposedHeight < NAVIGATION_SECTION_MIN_HEIGHT || proposedHeight > this.measurement.maxHeight) {
+      // Discard overshoot so reversing at either limit moves the divider immediately.
+      this.active.startY = event.clientY;
+      this.active.startHeight = height;
+    }
   }
 
   private pointerUp(event: PointerEvent): void {
@@ -112,9 +120,9 @@ export class NavigationSectionResizeHandle extends LitElement {
     /* Overlay the section's border without consuming any of its layout space. */
     :host { display: block; position: relative; flex: 0 0 0px; z-index: 4; }
     [role="separator"] { position: absolute; inset: -4px 0; cursor: row-resize; touch-action: none; outline: none; }
-    [role="separator"]::after { content: ""; position: absolute; inset: 4px 0; background: transparent; }
+    [role="separator"]::after { content: ""; position: absolute; top: 50%; inset-inline: 0; height: 1px; transform: translateY(-50%); background: transparent; transition: height .12s ease, background .12s ease, opacity .12s ease; }
     [role="separator"]:hover::after, [role="separator"]:focus-visible::after,
-    :host([resizing]) [role="separator"]::after { inset-block: 3px; background: var(--pi-accent); }
+    :host([resizing]) [role="separator"]::after { height: 3px; background: var(--pi-accent); opacity: .72; }
     @media (pointer: coarse) { [role="separator"] { inset-block: -8px; } }
   `;
 }
