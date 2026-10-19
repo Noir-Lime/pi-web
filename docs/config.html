@@ -623,7 +623,7 @@
 </tbody></table></div>
 </section>
 <section id="storage"><h2>Storage locations</h2>
-<p>These are <strong>environment variables</strong>, not JSON config keys. Changing a path does not migrate existing data.</p>
+<p>Most storage paths are <strong>environment-only</strong>; the archive destination also has a global JSON config key. Changing a path does not migrate existing data. Neither the managed data directory nor the archive destination is exposed in Settings.</p>
 <div class="table-scroll" role="region" aria-label="State and storage paths" tabindex="0">
 <table class="reference-table settings-table">
 <caption>State and storage paths</caption>
@@ -641,6 +641,13 @@
 <td><code>~/.pi-web</code></td>
 <td>Registries, plugins, daemon socket, and session archives.</td>
 <td>Stop services before switching; then restart</td>
+</tr>
+<tr>
+<th scope="row">Session archive directory<br><code>sessionArchive.directory</code><br><code>PI_WEB_SESSION_ARCHIVE_DIR</code></th>
+<td>Machine; no project overrides</td>
+<td><code>$PI_WEB_DATA_DIR/archived-sessions</code></td>
+<td>Destination for new archives only; index and existing record paths stay unchanged. See <a href="#session-archive-directory">archive path rules</a>.</td>
+<td>Sessiond restart</td>
 </tr>
 <tr>
 <th scope="row"><code>PI_WEB_INSTANCE_NAMESPACE</code></th>
@@ -678,7 +685,13 @@
 <td>Sessiond restart</td>
 </tr>
 </tbody></table></div>
-<details class="config-details"><summary>Changing directories or running a second instance</summary><ul><li><strong>State migration:</strong> a new PI WEB data directory starts with empty registries and no archives. Stop PI WEB before copying state. For archives, copy both <code>archived-sessions.json</code> and <code>archived-sessions/</code>.</li><li><strong>Second instance:</strong> use a distinct data directory, daemon endpoint, and web port. One live session daemon owns each data directory.</li><li><strong>Agent state:</strong> uses the bundled Pi SDK’s data layout. PI WEB does not convert profiles or move PI WEB-managed archives when the agent directory changes.</li><li><strong>Active paths:</strong> changing Pi state or session paths requires a sessiond restart; web/API-only restarts do not apply it. Sessions, terminals, and package operations use the daemon’s active paths. If those paths are unavailable, profile-dependent operations are unavailable too.</li></ul></details>
+<details class="config-details" id="session-archive-directory"><summary>Session archive directory: precedence and path rules</summary>
+<p>Set <code>sessionArchive.directory</code> in the global config file to choose where new session archives are written. It defaults to <code>$PI_WEB_DATA_DIR/archived-sessions</code>. Project-local overrides are not supported.</p>
+<pre><code>{ "sessionArchive": { "directory": "/srv/pi-web/archives" } }</code></pre>
+<p>A nonempty <code>PI_WEB_SESSION_ARCHIVE_DIR</code> environment value takes precedence over the config file; an empty value is ignored. Relative paths resolve against the process working directory. Use an absolute path for a predictable destination; do not rely on tilde expansion.</p>
+<p>Restart the session daemon on the affected machine after changing either value. Only the destination for new archives changes: the index stays at <code>$PI_WEB_DATA_DIR/archived-sessions.json</code>, existing records keep their stored paths, and no migration occurs. Edit the global config file or daemon environment directly.</p>
+</details>
+<details class="config-details"><summary>Changing directories or running a second instance</summary><ul><li><strong>State migration:</strong> a new PI WEB data directory starts with empty registries and no archive index. Changing paths does not migrate data; archive records retain their stored paths. See <a href="#session-archive-directory">archive path rules</a>.</li><li><strong>Second instance:</strong> use a distinct data directory, daemon endpoint, and web port. One live session daemon owns each data directory.</li><li><strong>Agent state:</strong> uses the bundled Pi SDK’s data layout. PI WEB does not convert profiles or move PI WEB-managed archives when the agent directory changes.</li><li><strong>Active paths:</strong> changing Pi state or session paths requires a sessiond restart; web/API-only restarts do not apply it. Sessions, terminals, and package operations use the daemon’s active paths. If those paths are unavailable, profile-dependent operations are unavailable too.</li></ul></details>
 <details class="config-details"><summary>Environment inherited by agent processes</summary><ul><li>Agent shells, terminals, and child sessions inherit the daemon environment, including its Pi state paths.</li><li><code>NODE_ENV</code> and <code>PORT</code> are removed so they do not interfere with development commands.</li><li><code>PI_WEB_SESSION=1</code> marks nested processes. Inherited <code>PI_WEB_*</code> values still point to the hosting instance. Use a separate data directory, daemon endpoint, and web port for a second instance.</li><li>Do not restart the hosting session daemon from inside an active session you need to preserve.</li><li><code>environmentFacts</code> includes nesting and deployment guidance in session system prompts by default. Set it to <code>false</code>, or use <code>PI_WEB_ENVIRONMENT_FACTS=false</code>, to omit that guidance. Restart sessiond after changing it.</li></ul></details>
 </section>
 <section id="providers"><h2>Providers, catalogs & project trust</h2>
@@ -805,6 +818,11 @@
 <th scope="row"><code>maxUploadBytes</code></th>
 <td><code>PI_WEB_MAX_UPLOAD_BYTES</code></td>
 <td>Bytes</td>
+</tr>
+<tr>
+<th scope="row"><code>sessionArchive.directory</code></th>
+<td><code>PI_WEB_SESSION_ARCHIVE_DIR</code></td>
+<td>Archive destination path; empty value ignored. See <a href="#session-archive-directory">path rules</a>.</td>
 </tr>
 <tr>
 <th scope="row"><code>spawnSessions</code></th>

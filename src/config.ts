@@ -158,6 +158,13 @@ export function piWebDataDir(env: NodeJS.ProcessEnv = process.env, cwd = process
   return resolve(cwd, configured);
 }
 
+/** Resolve new archive destinations without changing the archive index location. */
+export function sessionArchiveDirectory(env: NodeJS.ProcessEnv = process.env, config: Pick<PiWebConfig, "sessionArchive"> = {}, cwd = process.cwd()): string {
+  const fromEnv = env["PI_WEB_SESSION_ARCHIVE_DIR"];
+  const configured = fromEnv !== undefined && fromEnv !== "" ? fromEnv : config.sessionArchive?.directory;
+  return configured === undefined ? join(piWebDataDir(env, cwd), "archived-sessions") : resolve(cwd, configured);
+}
+
 export function piWebConfigPath(env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()): string {
   const configured = env["PI_WEB_CONFIG"];
   if (configured === undefined || configured === "") return defaultPiWebConfigPath(env);
@@ -234,6 +241,7 @@ export function savePiWebConfig(config: PiWebConfig, options: LoadOptions = {}):
   delete existing["attachments"];
   delete existing["maxUploadBytes"];
   delete existing["sessionNaming"];
+  delete existing["sessionArchive"];
   delete existing["spawnSessions"];
   delete existing["subsessions"];
   delete existing["askUser"];
@@ -267,6 +275,7 @@ function piWebConfigRecord(config: PiWebConfig): Record<string, unknown> {
     ...(config.attachments !== undefined ? { attachments: config.attachments } : {}),
     ...(config.maxUploadBytes !== undefined ? { maxUploadBytes: config.maxUploadBytes } : {}),
     ...(config.sessionNaming !== undefined ? { sessionNaming: config.sessionNaming } : {}),
+    ...(config.sessionArchive !== undefined ? { sessionArchive: config.sessionArchive } : {}),
     ...(config.spawnSessions !== undefined ? { spawnSessions: config.spawnSessions } : {}),
     ...(config.subsessions !== undefined ? { subsessions: config.subsessions } : {}),
     ...(config.askUser !== undefined ? { askUser: config.askUser } : {}),
@@ -289,6 +298,7 @@ function parsePiWebConfig(value: Record<string, unknown>, path: string): PiWebCo
     ...(value["attachments"] !== undefined ? { attachments: parseAttachmentsConfig(value["attachments"], path) } : {}),
     ...(value["maxUploadBytes"] !== undefined ? { maxUploadBytes: parseMaxUploadBytes(value["maxUploadBytes"], "maxUploadBytes", path) } : {}),
     ...(value["sessionNaming"] !== undefined ? { sessionNaming: parseSessionNamingConfig(value["sessionNaming"], path) } : {}),
+    ...(value["sessionArchive"] !== undefined ? { sessionArchive: parseSessionArchiveConfig(value["sessionArchive"], path) } : {}),
     ...(value["spawnSessions"] !== undefined ? { spawnSessions: parseSpawnSessions(value["spawnSessions"], path) } : {}),
     ...(value["subsessions"] !== undefined ? { subsessions: parseSubsessions(value["subsessions"], path) } : {}),
     ...(value["askUser"] !== undefined ? { askUser: parseAskUser(value["askUser"], path) } : {}),
@@ -296,6 +306,18 @@ function parsePiWebConfig(value: Record<string, unknown>, path: string): PiWebCo
     ...(value["extensionDialogsTimeoutMs"] !== undefined ? { extensionDialogsTimeoutMs: parseExtensionDialogsTimeoutMs(value["extensionDialogsTimeoutMs"], path) } : {}),
     ...(value["agent"] !== undefined ? { agent: parseAgentConfig(value["agent"], path) } : {}),
   };
+}
+
+export function parseSessionArchiveConfig(value: unknown, path: string): NonNullable<PiWebConfigValues["sessionArchive"]> {
+  if (!isRecord(value)) throw new Error(`PI WEB config sessionArchive must be an object: ${path}`);
+  const unknownKey = Object.keys(value).find((key) => key !== "directory");
+  if (unknownKey !== undefined) throw new Error(`PI WEB config sessionArchive has unknown key ${JSON.stringify(unknownKey)}: ${path}`);
+  const directory = value["directory"];
+  if (directory === undefined) return {};
+  if (typeof directory !== "string" || directory.trim() === "" || directory.includes("\u0000")) {
+    throw new Error(`PI WEB config sessionArchive.directory must be a non-empty path: ${path}`);
+  }
+  return { directory };
 }
 
 export function parseSessionNamingConfig(value: unknown, path: string): NonNullable<PiWebConfigValues["sessionNaming"]> {

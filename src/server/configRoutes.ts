@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { loadPiWebConfig, parseAgentConfig, parseAttachmentsConfig, parseSessionNamingConfig, parseUploadsConfig, resolveEffectivePiWebConfig, savePiWebConfig, type AgentPathHost, type LoadOptions, type PiWebConfig } from "../config.js";
+import { loadPiWebConfig, parseAgentConfig, parseAttachmentsConfig, parseSessionArchiveConfig, parseSessionNamingConfig, parseUploadsConfig, resolveEffectivePiWebConfig, savePiWebConfig, type AgentPathHost, type LoadOptions, type PiWebConfig } from "../config.js";
 import type { PiWebConfigEnvOverrides, PiWebConfigResponse, PiWebConfigValues } from "../shared/apiTypes.js";
 import { requireDefaultThemePreference } from "../shared/themePreference.js";
 import { requireDefaultStreamingBehavior } from "../shared/streamingBehavior.js";
@@ -152,6 +152,7 @@ function parseConfigRequest(value: unknown, agentPathHost: AgentPathHost = "curr
   if (value["defaultTheme"] !== undefined) config.defaultTheme = requireDefaultThemePreference(value["defaultTheme"], "request");
   if (value["defaultStreamingBehavior"] !== undefined) config.defaultStreamingBehavior = requireDefaultStreamingBehavior(value["defaultStreamingBehavior"], "request");
   if (value["sessionNaming"] !== undefined) config.sessionNaming = parseSessionNamingConfig(value["sessionNaming"], "request");
+  if (value["sessionArchive"] !== undefined) config.sessionArchive = parseSessionArchiveConfig(value["sessionArchive"], "request");
   if (plugins !== undefined) config.plugins = parsePluginsRequest(plugins);
   if (pathAccess !== undefined) config.pathAccess = parsePathAccessRequest(pathAccess);
   if (uploads !== undefined) config.uploads = parseUploadsConfig(uploads, "request");

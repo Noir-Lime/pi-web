@@ -48,6 +48,7 @@ describe("config routes", () => {
       uploads: { defaultFolder: "uploads\\manual" },
       attachments: { defaultFolder: "attachments\\saved" },
       maxUploadBytes: 1234,
+      sessionArchive: { directory: "/external/archives" },
       agent: { command: "agent-lab", dir: "~/agent-profiles/lab" },
     };
     const expectedConfig: PiWebConfigValues = {
@@ -65,6 +66,7 @@ describe("config routes", () => {
     expect(response.statusCode).toBe(200);
     expect(savedConfig).toEqual(expectedConfig);
     expect(response.json<PiWebConfigResponse>().config).toEqual(expectedConfig);
+    expect(parsePiWebConfigResponseBody(response.json()).config).toEqual(expectedConfig);
   });
 
   it.each(["/api/config", "/api/machines/local/config"])("saves and resets session naming through %s", async (url) => {

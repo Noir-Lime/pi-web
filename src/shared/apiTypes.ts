@@ -180,6 +180,8 @@ export interface PiWebConfigValues {
   attachments?: PiWebAttachmentsConfig;
   /** Maximum accepted HTTP request body size in bytes (uploads/attachments). */
   maxUploadBytes?: number;
+  /** Destination for newly archived transcripts; the index remains in the PI WEB data directory. */
+  sessionArchive?: { directory?: string };
   /** Machine-wide naming overrides; defaults are the session model, 24 tokens, and minimal thinking. */
   sessionNaming?: {
     model?: string;
