@@ -61,7 +61,9 @@ describe("bundled stylesheet capability participation", () => {
     await result.start?.({ signal: new AbortController().signal, capabilities: {
       resolve<Value>(requirement: PluginCapability<Value>): Value {
         requests.push(requirement.id);
-        return requirement.parse(requirement.id === "stylesheet-integration" ? styles : {
+        return requirement.parse(requirement.id === "stylesheet-integration" ? styles
+          : requirement.id === "syntax-highlighting" ? { supports: () => false, highlight: () => Promise.resolve(undefined) }
+          : {
           listRenderers: () => [], renderText: () => undefined, renderMarkdown: () => html``,
         });
       },
@@ -73,7 +75,7 @@ describe("bundled stylesheet capability participation", () => {
   it.each([
     FILES_PANEL_ELEMENT, FILES_VIEWER_ELEMENT, FILES_CODE_VIEWER_ELEMENT,
     TERMINAL_PANEL_ELEMENT, TERMINAL_SOFT_KEYS_ELEMENT,
-    "pi-web-mermaid-preview", "pi-web-highlighted-code",
+    "pi-web-mermaid-preview", "pi-web-highlighted-code", "pi-web-token-highlighted-code",
     "pi-web-workspace-tasks-panel", "pi-web-relays-panel",
   ])("%s registers only while connected, including replacement and reconnect", async (tag) => {
     defineFilesCustomElements();

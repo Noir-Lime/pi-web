@@ -1,6 +1,7 @@
-import type { StylesheetIntegrationCapabilityV1, PluginCapability, PiWebPlugin } from "@jmfederico/pi-web/plugin-api";
+import type { ContentRenderRequest, StylesheetIntegrationCapabilityV1, SyntaxHighlightingCapability, PluginCapability, PiWebPlugin } from "@jmfederico/pi-web/plugin-api";
 import hljs from "highlight.js/lib/common";
 import { HighlightedCode } from "./HighlightedCode";
+import { TokenHighlightedCode } from "./TokenHighlightedCode";
 
 const stylesheetIntegrationCapability: PluginCapability<StylesheetIntegrationCapabilityV1, 1> = {
   pluginId: "pi-web", id: "stylesheet-integration", version: 1,
@@ -19,29 +20,68 @@ function isStylesheetIntegration(value: unknown): value is StylesheetIntegration
     && "subscribe" in value && typeof value.subscribe === "function";
 }
 
+const syntaxHighlightingCapability: PluginCapability<SyntaxHighlightingCapability> = {
+  pluginId: "pi-web", id: "syntax-highlighting", version: 1,
+  parse(value) {
+    if (!isSyntaxHighlighting(value)) throw new Error("Code highlighting requires syntax highlighting capability v1");
+    return value;
+  },
+};
+
+function isSyntaxHighlighting(value: unknown): value is SyntaxHighlightingCapability {
+  return typeof value === "object" && value !== null
+    && "supports" in value && typeof value.supports === "function"
+    && "highlight" in value && typeof value.highlight === "function";
+}
+
+/** Language IDs and aliases take precedence over a filename's extension. */
+function builtInLanguage(request: Pick<ContentRenderRequest, "language" | "filePath">): string | undefined {
+  const language = request.language?.trim().split(/\s/u)[0]?.toLowerCase();
+  if (language !== undefined && hljs.getLanguage(language) !== undefined) return language;
+  const name = request.filePath?.split(/[\\/]/u).at(-1);
+  const extension = name?.includes(".") === true ? name.split(".").at(-1)?.toLowerCase() : undefined;
+  return extension !== undefined && hljs.getLanguage(extension) !== undefined ? extension : undefined;
+}
+
 const plugin = {
   apiVersion: 4,
   name: "Code highlighting",
-  requires: [stylesheetIntegrationCapability, { pluginId: "pi-web", id: "content-rendering", version: 1, parse: () => undefined }],
+  requires: [stylesheetIntegrationCapability, syntaxHighlightingCapability, { pluginId: "pi-web", id: "content-rendering", version: 1, parse: () => undefined }],
   activate: ({ html }) => {
     if (customElements.get("pi-web-highlighted-code") === undefined) customElements.define("pi-web-highlighted-code", HighlightedCode);
+    if (customElements.get("pi-web-token-highlighted-code") === undefined) customElements.define("pi-web-token-highlighted-code", TokenHighlightedCode);
     let stylesheetIntegration: StylesheetIntegrationCapabilityV1 | undefined;
+    let syntaxHighlighting: SyntaxHighlightingCapability | undefined;
     return {
       start: ({ capabilities }) => {
         stylesheetIntegration = capabilities.resolve(stylesheetIntegrationCapability);
+        syntaxHighlighting = capabilities.resolve(syntaxHighlightingCapability);
       },
       contributions: {
-        // The renderer input is language-independent, so each grammar owns its
-        // selector aliases and captures the language used to highlight it.
-        contentRenderers: hljs.listLanguages().map((language) => ({
-          id: language,
-          // Some library aliases (e.g. c#) are not valid host selectors.
-          languages: [language, ...(hljs.getLanguage(language)?.aliases ?? [])].filter((alias) => /^[a-z0-9][a-z0-9_+.-]*$/iu.test(alias)),
-          renderMode: "automatic" as const,
-          render: ({ text }) => html`<pi-web-highlighted-code .stylesheetIntegration=${stylesheetIntegration}
-            .markup=${hljs.highlight(text, { language, ignoreIllegals: true }).value}
-          ></pi-web-highlighted-code>`,
-        })),
+        contentRenderers: [{
+          id: "highlighted",
+          title: "Highlighted",
+          renderMode: "automatic",
+          supports: (request) => syntaxHighlighting?.supports(request) === true || builtInLanguage(request) !== undefined,
+          render: (input) => {
+            const request = {
+              machineId: input.machineId ?? "local",
+              ...(input.language === undefined ? {} : { language: input.language }),
+              ...(input.filePath === undefined ? {} : { filePath: input.filePath }),
+            };
+            const highlighting = syntaxHighlighting;
+            if (highlighting?.supports(request) === true) {
+              return html`<pi-web-token-highlighted-code .stylesheetIntegration=${stylesheetIntegration} .input=${input}
+                .highlight=${(text: string, signal: AbortSignal) => highlighting.highlight({ ...request, text, signal })}
+              ></pi-web-token-highlighted-code>`;
+            }
+            const language = builtInLanguage(request);
+            if (language === undefined) throw new Error("No syntax highlighter supports this source");
+            return html`<pi-web-highlighted-code .stylesheetIntegration=${stylesheetIntegration}
+              .markup=${hljs.highlight(input.text, { language, ignoreIllegals: true }).value}
+            ></pi-web-highlighted-code>`;
+          },
+        }],
       },
     };
   },

@@ -13,6 +13,26 @@ afterEach(() => {
 });
 
 describe("external plugin manifests", () => {
+  it("discovers bundled defaults before installed plugins regardless of import completion", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(JSON.stringify({
+      lifecycleVersion: 2, terminalMode: "recovery-disabled",
+      plugins: [
+        { id: "another-highlighter", module: "./another.js", scope: "local" },
+        { id: "pi-web.code-highlight", module: "./highlight.js", source: "bundled", scope: "bundled" },
+        { id: "mermaid", module: "./mermaid.js", scope: "local" },
+      ],
+    })))));
+    const completed: string[] = [];
+    const result = await loadExternalPlugins(undefined, { moduleLoader: async (url) => {
+      if (url.endsWith("highlight.js")) await Promise.resolve();
+      completed.push(url);
+      return { default: { apiVersion: 5, name: url, activate: () => ({ contributions: {} }) } };
+    } });
+    expect(completed[0]).toContain("another.js");
+    expect(result.declarations.map(({ id }) => id)).toEqual(["pi-web.code-highlight", "another-highlighter", "mermaid"]);
+    expect(result.registrations.map(({ id }) => id)).toEqual(["pi-web.code-highlight", "another-highlighter", "mermaid"]);
+  });
+
   it("treats a missing default manifest as an explicit required-load failure", async () => {
     const fetchMock = vi.fn(() => Promise.resolve(new Response(null, { status: 404, statusText: "Not Found" })));
     vi.stubGlobal("fetch", fetchMock);

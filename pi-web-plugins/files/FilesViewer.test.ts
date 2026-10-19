@@ -19,6 +19,51 @@ afterEach(() => {
 });
 
 describe("workspace-file-viewer", () => {
+  it.each(["automatic", "manual"] as const)("uses a plugin's title for its %s view button", async (renderMode) => {
+    const draw = vi.fn(() => html`<b>Named view</b>`);
+    const contentRendering = createContentRenderingCapability(() => [{ id: "highlighted", label: "Highlighted", renderer: {
+      id: "highlighted", title: "Highlighted", renderMode, render: draw,
+    } }]);
+    const viewer = await mountViewer(textFile("source.txt", "source"), { contentRendering });
+    const namedButton = buttonWithText(viewer, "Highlighted");
+    expect(namedButton.getAttribute("aria-pressed")).toBe("false");
+    expect(draw).not.toHaveBeenCalled();
+    expect(viewer.renderRoot.querySelector("select")).toBeNull();
+    namedButton.click();
+    await viewer.updateComplete;
+    await viewer.renderRoot.querySelector<ContentRendererHost>("pi-web-content-renderer")?.updateComplete;
+    expect(namedButton.getAttribute("aria-pressed")).toBe("true");
+    expect(draw).toHaveBeenCalledOnce();
+    modeButton(viewer, "Raw").click();
+    await viewer.updateComplete;
+    expect(namedButton.getAttribute("aria-pressed")).toBe("false");
+    expect(viewer.renderRoot.querySelector("pi-web-files-code-viewer")).not.toBeNull();
+  });
+
+  it("defaults to the last automatic renderer, ignores later manual defaults, and preserves an explicit selection", async () => {
+    const choices = [
+      { id: "highlighted", label: "Highlighted", renderer: { id: "highlighted", renderMode: "automatic" as const, render: () => html`<b>Highlighted</b>` } },
+      { id: "diagram", label: "Diagram", renderer: { id: "diagram", renderMode: "automatic" as const, render: () => html`<b>Diagram</b>` } },
+    ];
+    const manual = { id: "manual", label: "Manual", renderer: { id: "manual", render: () => html`<b>Manual</b>` } };
+    const contentRendering = createContentRenderingCapability(() => [...choices, manual]);
+    const viewer = await mountViewer(textFile("graph.mmd", "A --> B"), { contentRendering, modeStore: { adopt: () => undefined, publish: vi.fn() } });
+    expect(viewer.renderRoot.querySelector("select")).toBeNull();
+    expect([...viewer.renderRoot.querySelectorAll(".viewer-mode button")].map((item) => item.textContent.trim()))
+      .toEqual(["Highlighted", "Diagram", "Manual", "Raw"]);
+    expect(buttonWithText(viewer, "Diagram").getAttribute("aria-pressed")).toBe("true");
+    buttonWithText(viewer, "Highlighted").click();
+    await viewer.updateComplete;
+    choices.push({ id: "later", label: "Later", renderer: { id: "later", renderMode: "automatic", render: () => html`<b>Later</b>` } });
+    viewer.requestUpdate();
+    await viewer.updateComplete;
+    expect(buttonWithText(viewer, "Highlighted").getAttribute("aria-pressed")).toBe("true");
+    modeButton(viewer, "Raw").click();
+    await viewer.updateComplete;
+    expect(viewer.renderRoot.querySelector("pi-web-content-renderer")).toBeNull();
+    expect(viewer.renderRoot.querySelector("pi-web-files-code-viewer")).not.toBeNull();
+  });
+
   it.each(["fresh", "saved", "url"] as const)("honors %s Markdown preview intent for manual fences while preserving block controls", async (preference) => {
     const alpha = vi.fn(() => html`<b>Alpha</b>`);
     const beta = vi.fn(() => html`<b>Beta</b>`);
@@ -44,10 +89,8 @@ describe("workspace-file-viewer", () => {
     await host.updateComplete;
     expect(alpha).toHaveBeenCalledOnce();
     expect(beta).not.toHaveBeenCalled();
-    const chooser = host.renderRoot.querySelector("select");
-    if (chooser === null) throw new Error("Expected block chooser");
-    chooser.value = "beta";
-    chooser.dispatchEvent(new Event("change"));
+    expect(host.renderRoot.querySelector("select")).toBeNull();
+    buttonWithText(host, "Beta").click();
     await host.updateComplete;
     expect(beta).toHaveBeenCalledOnce();
     const raw = [...host.renderRoot.querySelectorAll("button")].find((button) => button.textContent === "Raw");
@@ -59,7 +102,7 @@ describe("workspace-file-viewer", () => {
     await host.updateComplete;
     expect(host.renderRoot.querySelector("pre code")?.textContent).toBe("source");
     expect(host.renderRoot.querySelector(".preview")).toBeNull();
-    expect(chooser.value).toBe("beta");
+    expect(buttonWithText(host, "Raw").getAttribute("aria-pressed")).toBe("true");
     expect(beta).toHaveBeenCalledOnce();
     modeButton(viewer, "Raw").click();
     await viewer.updateComplete;
@@ -102,7 +145,7 @@ describe("workspace-file-viewer", () => {
     } }]);
     const viewer = await mountViewer(textFile("graph.mmd", "A --> B"), { contentRendering });
     expect(signal).toBeUndefined();
-    modeButton(viewer, "Render").click();
+    buttonWithText(viewer, "Diagram").click();
     await viewer.updateComplete;
     const host = viewer.shadowRoot?.querySelector("pi-web-content-renderer");
     if (!(host instanceof ContentRendererHost)) throw new Error("Expected preview host");
@@ -116,7 +159,7 @@ describe("workspace-file-viewer", () => {
     expect(signal?.aborted).toBe(true);
     expect(viewer.shadowRoot?.querySelector("pi-web-content-renderer")).toBeNull();
     expect(viewer.shadowRoot?.querySelector("pi-web-files-code-viewer")).not.toBeNull();
-    modeButton(viewer, "Render").click();
+    buttonWithText(viewer, "Diagram").click();
     await viewer.updateComplete;
     const replacement = viewer.shadowRoot?.querySelector("pi-web-content-renderer");
     if (!(replacement instanceof ContentRendererHost)) throw new Error("Expected resumed preview");
@@ -130,7 +173,7 @@ describe("workspace-file-viewer", () => {
     expect(previousSignal?.aborted).toBe(true);
     expect(signal).not.toBe(previousSignal);
     expect(changedHost?.shadowRoot?.querySelector("b")?.textContent).toBe("Diagram preview");
-    expect(modeButton(viewer, "Render").getAttribute("aria-pressed")).toBe("true");
+    expect(buttonWithText(viewer, "Diagram").getAttribute("aria-pressed")).toBe("true");
   });
 
   it("chooses alternatives in the header, preserves choice across modes, and resets for a different file", async () => {
@@ -143,25 +186,23 @@ describe("workspace-file-viewer", () => {
     } }));
     const contentRendering = createContentRenderingCapability(() => choices);
     const viewer = await mountViewer(textFile("first.mmd", "source"), { contentRendering });
-    const chooser = viewer.renderRoot.querySelector<HTMLSelectElement>('.viewer-header select[aria-label="File renderer"]');
-    if (chooser === null) throw new Error("Expected header chooser");
-    expect(chooser.value).toBe("Alpha");
+    expect(viewer.renderRoot.querySelector("select")).toBeNull();
+    expect(buttonWithText(viewer, "Alpha").getAttribute("aria-pressed")).toBe("false");
     expect(inputs).toHaveLength(0);
-    modeButton(viewer, "Render").click();
+    buttonWithText(viewer, "Alpha").click();
     await viewer.updateComplete;
     const host = viewer.renderRoot.querySelector<ContentRendererHost>("pi-web-content-renderer");
     if (host === null) throw new Error("Expected preview host");
     await host.updateComplete;
     expect(host.shadowRoot?.querySelector("select,button")).toBeNull();
     expect(inputs).toHaveLength(1);
-    chooser.value = "Beta";
-    chooser.dispatchEvent(new Event("change"));
+    buttonWithText(viewer, "Beta").click();
     await viewer.updateComplete;
     await host.updateComplete;
     expect(inputs[0]?.signal.aborted).toBe(true);
     expect(inputs).toHaveLength(2);
     expect(host.shadowRoot?.querySelector("b")?.textContent).toBe("Beta");
-    modeButton(viewer, "Render").click();
+    buttonWithText(viewer, "Beta").click();
     await viewer.updateComplete;
     await host.updateComplete;
     expect(host.shadowRoot?.querySelector("b")?.textContent).toBe("Beta");
@@ -169,8 +210,8 @@ describe("workspace-file-viewer", () => {
     modeButton(viewer, "Raw").click();
     await viewer.updateComplete;
     expect(inputs[1]?.signal.aborted).toBe(true);
-    expect(chooser.value).toBe("Beta");
-    modeButton(viewer, "Render").click();
+    expect(buttonWithText(viewer, "Raw").getAttribute("aria-pressed")).toBe("true");
+    buttonWithText(viewer, "Beta").click();
     await viewer.updateComplete;
     const resumed = viewer.renderRoot.querySelector<ContentRendererHost>("pi-web-content-renderer");
     if (resumed === null) throw new Error("Expected resumed preview");
@@ -179,7 +220,7 @@ describe("workspace-file-viewer", () => {
     viewer.selectedPath = "second.mmd";
     viewer.file = textFile("second.mmd", "other");
     await viewer.updateComplete;
-    expect(chooser.value).toBe("Alpha");
+    expect(buttonWithText(viewer, "Alpha").getAttribute("aria-pressed")).toBe("true");
   });
 
   it("passes Markdown policy and complete text files to the public rendering capability with machine scope", async () => {
@@ -642,7 +683,7 @@ function modeButton(viewer: WorkspaceFileViewer, text: "Preview" | "Render" | "R
   return buttonWithText(viewer, text);
 }
 
-function buttonWithText(viewer: WorkspaceFileViewer, text: string): HTMLButtonElement {
+function buttonWithText(viewer: WorkspaceFileViewer | ContentRendererHost, text: string): HTMLButtonElement {
   const button = [...(viewer.shadowRoot?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((candidate) => candidate.textContent.trim() === text);
   return requiredElement(button, `${text} button`);
 }

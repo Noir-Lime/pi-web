@@ -736,7 +736,7 @@ describe("application rendering boundaries", () => {
       terminalMode: "recovery-disabled", declarations: [{ id: "mermaid" }], failures: [],
       registrations: [{ id: "mermaid", plugin: {
         apiVersion: 4, name: "Mermaid", activate: () => ({ contributions: { contentRenderers: [{
-          id: "diagram", languages: ["mermaid"], render: draw,
+          id: "diagram", title: "Diagram", languages: ["mermaid"], render: draw,
         }] } }),
       } }],
     };
@@ -751,7 +751,7 @@ describe("application rendering boundaries", () => {
     if (order === "after") expect(formatted).toBe(initialFormatted);
     const host = formatted.shadowRoot?.querySelector("pi-web-content-renderer");
     if (!(host instanceof ContentRendererHost)) throw new Error("Expected diagram controls");
-    const renderButton = [...host.shadowRoot?.querySelectorAll("button") ?? []].find((button) => button.textContent === "Render");
+    const renderButton = [...host.shadowRoot?.querySelectorAll("button") ?? []].find((button) => button.textContent.trim() === "Diagram");
     expect(renderButton).toBeDefined();
     expect(draw).not.toHaveBeenCalled();
     renderButton?.click();

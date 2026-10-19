@@ -121,6 +121,9 @@ export interface PluginActivationResult {
 }
 export interface ContentRendererInput {
     readonly text: string;
+    readonly machineId?: string;
+    readonly language?: string;
+    readonly filePath?: string;
     /** Aborted when source, renderer, mode, mounting, or plugin lifetime changes. */
     readonly signal: AbortSignal;
     /** Report asynchronous failure; calls from obsolete renders are ignored. */
@@ -128,6 +131,10 @@ export interface ContentRendererInput {
 }
 export interface ContentRendererContribution {
     id: LocalContributionId;
+    /** Human-readable name used for renderer view buttons. */
+    title?: string;
+    /** Synchronous eligibility; replaces absent selectors or further restricts declared selectors. */
+    supports?(request: Readonly<ContentRenderRequest>): boolean;
     languages?: readonly string[];
     /** Extensions without a leading dot, matched case-insensitively. */
     fileExtensions?: readonly string[];
@@ -135,6 +142,37 @@ export interface ContentRendererContribution {
     renderMode?: "manual" | "automatic";
     /** Synchronous Lit template; own async work and activation efficiency in a component and honor signal. */
     render(input: ContentRendererInput): TemplateResult;
+}
+export type SyntaxHighlightTokenKind = "keyword" | "string" | "number" | "comment" | "type" | "function" | "variable" | "operator" | "punctuation" | "property" | "literal" | "meta";
+export interface SyntaxHighlightToken {
+    /** UTF-16 code-unit offsets: inclusive start, exclusive end. Sorted and nonoverlapping. */
+    readonly from: number;
+    readonly to: number;
+    readonly kind: SyntaxHighlightTokenKind;
+}
+export interface SyntaxHighlighterContribution {
+    id: LocalContributionId;
+    languages?: readonly string[];
+    /** Extensions without a leading dot, matched case-insensitively. */
+    fileExtensions?: readonly string[];
+    highlight(input: {
+        readonly text: string;
+        readonly signal: AbortSignal;
+    }): readonly SyntaxHighlightToken[] | Promise<readonly SyntaxHighlightToken[]>;
+}
+export interface SyntaxHighlightRequest {
+    machineId: string;
+    text: string;
+    language?: string;
+    filePath?: string;
+    signal: AbortSignal;
+}
+/** Host capability token: { pluginId: "pi-web", id: "syntax-highlighting", version: 1, parse }. */
+export interface SyntaxHighlightingCapability {
+    /** Whether a currently active grammar matches this machine and source metadata. */
+    supports(request: Pick<ContentRenderRequest, "machineId" | "language" | "filePath">): boolean;
+    /** Last discovered match; undefined when no match or over 100,000 UTF-16 units. Errors reject. */
+    highlight(request: SyntaxHighlightRequest): Promise<readonly SyntaxHighlightToken[] | undefined>;
 }
 export interface ContentRenderRequest {
     machineId: string;
@@ -146,6 +184,8 @@ export interface ContentRenderRequest {
 export interface ContentRendererOption {
     readonly id: string;
     readonly label: string;
+    /** Explicit plugin title, when supplied; label also includes the host's fallback name. */
+    readonly title?: string;
     readonly renderMode: "manual" | "automatic";
 }
 export type ContentTextRenderRequest = ContentRenderRequest & {
@@ -168,19 +208,19 @@ export interface ContentMarkdownRenderRequest {
 }
 /** Host capability token: { pluginId: "pi-web", id: "content-rendering", version: 1, parse }. */
 export interface ContentRenderingCapability {
-    /** Eligible choices in source plugin ID order, then local contribution ID order. */
+    /** Eligible choices in plugin discovery order, then contribution declaration order. */
     listRenderers(request: ContentRenderRequest): readonly ContentRendererOption[];
     /**
      * Undefined when no renderer claims the complete text file.
      * External controls require the caller to provide raw-source access, mode switching and a renderer chooser.
-     * Only external controls accept rendererId; absent or unavailable IDs use the first match.
+     * Only external controls accept rendererId; absent or unavailable IDs use the last automatic match, otherwise the first manual match.
      * Consumers authorize manual previews according to their own user-intent policy.
      * Listing and creating templates never call render.
      */
     renderText(request: ContentTextRenderRequest): TemplateResult | undefined;
     /**
      * The caller supplies its existing trusted HTML sanitizer; policies are not shared.
-     * Each eligible fence owns its chooser and Raw control. No remembered intent is stored.
+     * Each eligible fence owns its renderer buttons and Raw control. No remembered intent is stored.
      */
     renderMarkdown(request: ContentMarkdownRenderRequest): TemplateResult;
 }
@@ -221,6 +261,7 @@ export interface StylesheetContribution {
 export interface PluginContributions {
     stylesheets?: StylesheetContribution[];
     contentRenderers?: ContentRendererContribution[];
+    syntaxHighlighters?: SyntaxHighlighterContribution[];
     messageActions?: MessageActionContribution[];
     actions?: PluginAction[];
     applicationPanels?: ApplicationPanelContribution[];

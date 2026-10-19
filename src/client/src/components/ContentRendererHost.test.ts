@@ -36,21 +36,135 @@ function button(host: ContentRendererHost, label: string): HTMLButtonElement {
   return found;
 }
 
+it.each(["automatic", "manual"] as const)("names the %s view button after the selected renderer", async (renderMode) => {
+  const draw = vi.fn(() => html`<b>Named content</b>`);
+  const host = hostWith([{ id: "highlighted", label: "Highlighted", renderer: {
+    id: "highlighted", title: "Highlighted", renderMode, render: draw,
+  } }]);
+  document.body.append(host);
+  await host.updateComplete;
+  const namedButton = button(host, "Highlighted");
+  expect(namedButton.getAttribute("aria-pressed")).toBe(String(renderMode === "automatic"));
+  button(host, "Raw").click();
+  await host.updateComplete;
+  expect(namedButton.getAttribute("aria-pressed")).toBe("false");
+  namedButton.click();
+  await host.updateComplete;
+  expect(namedButton.getAttribute("aria-pressed")).toBe("true");
+  expect(host.renderRoot.querySelector("b")?.textContent).toBe("Named content");
+});
+
+it("shows every named view and Raw, and explicitly activates manual views while cancelling previous work", async () => {
+  const automatic = vi.fn<ContentRendererContribution["render"]>(() => html`<b>Automatic</b>`);
+  const manual = vi.fn<ContentRendererContribution["render"]>(() => html`<b>Manual</b>`);
+  const host = hostWith([
+    { id: "automatic", label: "Automatic fallback", renderer: { id: "automatic", title: "Highlighted", renderMode: "automatic", render: automatic } },
+    { id: "manual", label: "Diagram", renderer: { id: "manual", render: manual } },
+  ]);
+  document.body.append(host);
+  await host.updateComplete;
+  const views = [...host.renderRoot.querySelectorAll<HTMLButtonElement>(".views button")];
+  expect(views.map((view) => view.textContent.trim())).toEqual(["Highlighted", "Diagram", "Raw"]);
+  expect(views.map((view) => view.getAttribute("aria-pressed"))).toEqual(["true", "false", "false"]);
+  expect(host.renderRoot.querySelector("select")).toBeNull();
+  const diagram = button(host, "Diagram");
+  diagram.focus();
+  diagram.click();
+  await host.updateComplete;
+  expect(manual).toHaveBeenCalledOnce();
+  expect(automatic.mock.calls[0]?.[0].signal.aborted).toBe(true);
+  expect(views.map((view) => view.getAttribute("aria-pressed"))).toEqual(["false", "true", "false"]);
+  expect(host.shadowRoot?.activeElement).toBe(diagram);
+
+  host.choices = [...host.choices].reverse();
+  await host.updateComplete;
+  expect(button(host, "Diagram")).toBe(diagram);
+  expect(manual).toHaveBeenCalledOnce();
+  button(host, "Raw").click();
+  await host.updateComplete;
+  expect(manual.mock.calls[0]?.[0].signal.aborted).toBe(true);
+  expect(views.map((view) => view.getAttribute("aria-pressed"))).toEqual(["false", "false", "true"]);
+  diagram.click();
+  await host.updateComplete;
+  expect(manual).toHaveBeenCalledTimes(2);
+  expect(diagram.getAttribute("aria-pressed")).toBe("true");
+});
+
+it("updates the automatic default until a view is explicitly selected", async () => {
+  const first = { id: "first", label: "First", renderer: { id: "first", renderMode: "automatic" as const, render: () => html`<b>First</b>` } };
+  const last = { id: "last", label: "Last", renderer: { id: "last", renderMode: "automatic" as const, render: () => html`<b>Last</b>` } };
+  const host = hostWith([first]);
+  document.body.append(host);
+  await host.updateComplete;
+  host.choices = [first, last];
+  await host.updateComplete;
+  expect(button(host, "Last").getAttribute("aria-pressed")).toBe("true");
+  button(host, "First").click();
+  await host.updateComplete;
+  host.choices = [last];
+  await host.updateComplete;
+  expect(button(host, "Last").getAttribute("aria-pressed")).toBe("true");
+  expect(host.renderRoot.querySelector("b")?.textContent).toBe("Last");
+});
+
+it("uses last automatic defaults, ignores manual-last, and preserves explicit renderer and Raw choices", async () => {
+  const first = { id: "first", label: "First", renderer: { id: "first", renderMode: "automatic" as const, render: () => html`<b>First</b>` } };
+  const last = { id: "last", label: "Last", renderer: { id: "last", renderMode: "automatic" as const, render: () => html`<b>Last</b>` } };
+  const manual = vi.fn(() => html`manual`);
+  const host = hostWith([first, last, { id: "manual", label: "Manual", renderer: { id: "manual", render: manual } }]);
+  document.body.append(host);
+  await host.updateComplete;
+  expect(host.renderRoot.querySelector("b")?.textContent).toBe("Last");
+  expect(manual).not.toHaveBeenCalled();
+  button(host, "First").click();
+  await host.updateComplete;
+  host.choices = [last, first, { ...last, id: "new" }];
+  await host.updateComplete;
+  expect(host.renderRoot.querySelector("b")?.textContent).toBe("First");
+  button(host, "Raw").click();
+  await host.updateComplete;
+  host.choices = [first, last];
+  await host.updateComplete;
+  expect(host.renderRoot.querySelector("pre")?.textContent).toBe("source");
+  expect(button(host, "Raw").getAttribute("aria-pressed")).toBe("true");
+  expect(button(host, "First").getAttribute("aria-pressed")).toBe("false");
+});
+
+it("propagates metadata and cancels obsolete rendering for each metadata change", async () => {
+  const inputs: import("../../../plugin-api").ContentRendererInput[] = [];
+  const host = automaticHost((input) => { inputs.push(input); return html`preview`; });
+  host.machineId = "local";
+  host.language = "test";
+  host.filePath = "a.test";
+  document.body.append(host);
+  await host.updateComplete;
+  expect(inputs[0]).toMatchObject({ text: "source", machineId: "local", language: "test", filePath: "a.test" });
+  for (const key of ["machineId", "language", "filePath"] as const) {
+    const previous = inputs.at(-1);
+    host[key] = "changed";
+    await host.updateComplete;
+    expect(previous?.signal.aborted).toBe(true);
+    expect(inputs.at(-1)?.[key]).toBe("changed");
+  }
+  expect(inputs).toHaveLength(4);
+});
+
 it("shows the renderer label and an accessible Copy icon without activating a manual preview", async () => {
   const draw = vi.fn<ContentRendererContribution["render"]>(() => html`<b>Preview</b>`);
   const host = hostWith([{ id: "manual", label: "Mermaid / diagram", renderer: { id: "manual", render: draw } }]);
   document.body.append(host);
   await host.updateComplete;
-  expect(host.renderRoot.querySelector(".code-block-frame > .code-block-header .code-block-label")?.textContent).toBe("Mermaid / diagram");
+  const view = button(host, "Mermaid / diagram");
+  expect(view.closest(".code-block-header")).not.toBeNull();
   expect(draw).not.toHaveBeenCalled();
   const copy = button(host, "Copy source");
   expect(copy.textContent).toBe("⧉");
   expect(copy.getAttribute("title")).toBe("Copy source");
   expect(copy.querySelector('span[aria-hidden="true"]')).not.toBeNull();
   expect(copy.closest(".code-block-header")?.nextElementSibling?.id).toBe("content");
-  button(host, "Render").click();
+  view.click();
   await host.updateComplete;
-  expect(host.renderRoot.querySelector(".code-block-label")?.textContent).toBe("Mermaid / diagram");
+  expect(button(host, "Mermaid / diagram")).toBe(view);
   expect(host.renderRoot.querySelector("b")?.textContent).toBe("Preview");
   expect(host.renderRoot.querySelector(".copy")).toBe(copy);
 });
@@ -170,7 +284,7 @@ describe("content renderer disclosure lifecycle", () => {
     expect(host.renderRoot.textContent).not.toContain("Preview failed");
   });
 
-  it("preserves the chooser and manual activation across temporary closure without intent memory", async () => {
+  it("preserves view buttons and manual activation across temporary closure without intent memory", async () => {
     const first = vi.fn<ContentRendererContribution["render"]>(() => html`<b>First</b>`);
     const second = vi.fn<ContentRendererContribution["render"]>(() => html`<b>Second</b>`);
     const host = hostWith([
@@ -184,14 +298,9 @@ describe("content renderer disclosure lifecycle", () => {
     await host.updateComplete;
     expect(first).not.toHaveBeenCalled();
     expect(second).not.toHaveBeenCalled();
-    const chooser = host.renderRoot.querySelector("select");
-    if (chooser === null) throw new Error("Expected renderer chooser");
-    chooser.value = "second";
-    chooser.dispatchEvent(new Event("change"));
-    await host.updateComplete;
-    expect(chooser.closest(".code-block-header")).not.toBeNull();
-    expect(chooser.selectedOptions[0]?.textContent).toBe("Second");
-    button(host, "Render").click();
+    const view = button(host, "Second");
+    expect(view.closest(".code-block-header")).not.toBeNull();
+    view.click();
     await host.updateComplete;
     expect(second).toHaveBeenCalledOnce();
 
@@ -199,13 +308,14 @@ describe("content renderer disclosure lifecycle", () => {
     await host.updateComplete;
     expect(second.mock.calls[0]?.[0].signal.aborted).toBe(true);
     expect(second).toHaveBeenCalledOnce();
-    expect(chooser.value).toBe("second");
+    expect(view.getAttribute("aria-pressed")).toBe("false");
+    expect(button(host, "Raw").getAttribute("aria-pressed")).toBe("true");
 
     setDetailsOpen(group, true);
     await host.updateComplete;
     expect(group.querySelector("pi-web-content-renderer")).toBe(host);
-    expect(host.renderRoot.querySelector("select")).toBe(chooser);
-    expect(chooser.value).toBe("second");
+    expect(button(host, "Second")).toBe(view);
+    expect(view.getAttribute("aria-pressed")).toBe("true");
     expect(first).not.toHaveBeenCalled();
     expect(second).toHaveBeenCalledTimes(2);
     expect(host.renderRoot.querySelector("b")?.textContent).toBe("Second");
@@ -218,7 +328,7 @@ describe("content renderer disclosure lifecycle", () => {
     await host.updateComplete;
     expect(second).toHaveBeenCalledTimes(2);
     expect(host.renderRoot.querySelector("pre")?.textContent).toBe("source");
-    expect(chooser.value).toBe("second");
+    expect(view.getAttribute("aria-pressed")).toBe("false");
   });
 
   it("requires every nested details ancestor to be open, including outside a shadow host", async () => {

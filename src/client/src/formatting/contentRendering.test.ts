@@ -56,6 +56,23 @@ function button(host: ContentRendererHost, label: string): HTMLButtonElement {
 }
 
 describe("shared content rendering", () => {
+  it("passes file and chat fence metadata through the service to renderer inputs", async () => {
+    const draw = vi.fn<ContentRendererContribution["render"]>(() => html`preview`);
+    const capability = createContentRenderingCapability(() => [{ id: "test", label: "Test", renderer: renderer(draw) }]);
+    const root = document.createElement("div");
+    document.body.append(root);
+    render(capability.renderText({ machineId: "remote", text: "source", language: "test", filePath: "dir/a.test" }), root);
+    const host = root.querySelector<ContentRendererHost>("pi-web-content-renderer");
+    if (host === null) throw new Error("Expected host");
+    await host.updateComplete;
+    expect(draw.mock.calls[0]?.[0]).toMatchObject({ machineId: "remote", text: "source", language: "test", filePath: "dir/a.test" });
+    await renderPublicMarkdown(capability.renderMarkdown({ machineId: "other", text: "```js extra\ncode\n```", toSafeHtml: renderWorkspaceMarkdownHtml }), root);
+    const boundary = root.querySelector<ContentRenderingBoundary>("pi-web-content-rendering-boundary");
+    const fence = boundary?.renderRoot.querySelector<ContentRendererHost>("pi-web-content-renderer");
+    if (fence === undefined || fence === null) throw new Error("Expected fence host");
+    await fence.updateComplete;
+    expect(draw.mock.calls.at(-1)?.[0]).toMatchObject({ machineId: "other", text: "code", language: "js extra" });
+  });
   it("renders machine-scoped snapshots and refreshes unavailable renderers through the same input", async () => {
     let enabled = true;
     const registry = new PluginRegistry({ isContributionEnabled: () => enabled });
@@ -101,7 +118,7 @@ describe("shared content rendering", () => {
     element.intentKey = "memory-duplicates";
     await element.updateComplete;
     const host = await hostIn(element);
-    button(host, "Render").click();
+    button(host, "test / diagram").click();
     await host.updateComplete;
     expect(host.shadowRoot?.querySelector(".diagram")).not.toBeNull();
     element.remove();
@@ -131,22 +148,17 @@ describe("shared content rendering", () => {
     element.intentKey = "memory-chooser";
     await element.updateComplete;
     const host = await hostIn(element);
-    const chooser = host.renderRoot.querySelector("select");
-    if (chooser === null) throw new Error("Expected chooser");
-    chooser.value = "z:diagram";
-    chooser.dispatchEvent(new Event("change"));
-    await host.updateComplete;
-    button(host, "Render").click();
+    button(host, "z / diagram").click();
     await host.updateComplete;
     element.intentKey = "different-session";
     await element.updateComplete;
     await host.updateComplete;
-    expect(chooser.value).toBe("test:diagram");
+    expect(button(host, "test / diagram").getAttribute("aria-pressed")).toBe("false");
     expect(host.shadowRoot?.querySelector("pre")).not.toBeNull();
     element.intentKey = "memory-chooser";
     await element.updateComplete;
     await host.updateComplete;
-    expect(chooser.value).toBe("z:diagram");
+    expect(button(host, "z / diagram").getAttribute("aria-pressed")).toBe("true");
     expect(host.shadowRoot?.querySelector(".diagram")).not.toBeNull();
     button(host, "Raw").click();
     await host.updateComplete;
@@ -154,14 +166,15 @@ describe("shared content rendering", () => {
     document.body.append(element);
     await element.updateComplete;
     await host.updateComplete;
-    expect(chooser.value).toBe("z:diagram");
+    expect(button(host, "z / diagram").getAttribute("aria-pressed")).toBe("false");
+    expect(button(host, "Raw").getAttribute("aria-pressed")).toBe("true");
     expect(host.shadowRoot?.querySelector("pre")).not.toBeNull();
     element.text = "```diagram\nchanged\n```";
     await element.updateComplete;
     await host.updateComplete;
-    expect(chooser.value).toBe("test:diagram");
+    expect(button(host, "test / diagram").getAttribute("aria-pressed")).toBe("false");
     expect(host.shadowRoot?.querySelector("pre")?.textContent).toBe("changed");
-    button(host, "Render").click();
+    button(host, "test / diagram").click();
     await host.updateComplete;
     host.choices = host.choices.filter(({ id }) => id !== "test:diagram");
     await host.updateComplete;
@@ -181,7 +194,7 @@ describe("shared content rendering", () => {
     expect(host.shadowRoot?.querySelector("pre")).not.toBeNull();
     host.intentKey = undefined;
     await host.updateComplete;
-    button(host, "Render").click();
+    button(host, "test / diagram").click();
     await host.updateComplete;
     element.remove();
     document.body.append(element);
@@ -198,7 +211,7 @@ describe("shared content rendering", () => {
     const host = await hostIn(element);
     expect(draw).not.toHaveBeenCalled();
     expect(host.shadowRoot?.querySelector("pre")?.textContent).toBe("one");
-    button(host, "Render").click();
+    button(host, "test / diagram").click();
     await host.updateComplete;
     expect(draw).toHaveBeenCalledOnce();
     element.text += "\n\nMore prose";
@@ -211,7 +224,7 @@ describe("shared content rendering", () => {
     expect(draw.mock.calls[0]?.[0].signal.aborted).toBe(true);
     expect(draw).toHaveBeenCalledOnce();
     expect(host.shadowRoot?.querySelector("pre")?.textContent).toBe("two");
-    button(host, "Render").click();
+    button(host, "test / diagram").click();
     await host.updateComplete;
     const preview = host.shadowRoot?.querySelector("b");
     await registry.register({ id: "other", plugin: { apiVersion: 4, name: "Other", activate: () => ({ contributions: { contentRenderers: [{ ...manual, renderMode: "manual" }] } }) } });
@@ -222,15 +235,9 @@ describe("shared content rendering", () => {
     expect(host.shadowRoot?.querySelector("b")).toBe(preview);
     expect(draw).toHaveBeenCalledTimes(2);
     expect(draw.mock.calls[1]?.[0].signal.aborted).toBe(false);
-    const chooser = host.renderRoot.querySelector("select");
-    if (chooser === null) throw new Error("Expected chooser");
-    chooser.value = "other:diagram";
-    chooser.dispatchEvent(new Event("change"));
+    button(host, "other / diagram").click();
     await host.updateComplete;
-    expect(draw).toHaveBeenCalledTimes(2);
     expect(draw.mock.calls[1]?.[0].signal.aborted).toBe(true);
-    button(host, "Render").click();
-    await host.updateComplete;
     expect(draw).toHaveBeenCalledTimes(3);
     button(host, "Raw").click();
     await host.updateComplete;
@@ -280,7 +287,7 @@ describe("shared content rendering", () => {
     expect(first.intentKey).toBeUndefined();
     expect(first.codeBlocks).toBeUndefined();
     expect(first.renderRoot.querySelector(".copy")).not.toBeNull();
-    button(first, "Render").click();
+    button(first, "Manual").click();
     await first.updateComplete;
     expect(first.renderRoot.querySelector(".diagram")).not.toBeNull();
     render(null, root);
@@ -288,7 +295,7 @@ describe("shared content rendering", () => {
     expect(second.renderRoot.querySelector("pre")?.textContent).toBe("source");
   });
 
-  it("ignores an untyped rendererId with embedded controls and lets the chooser switch", async () => {
+  it("ignores an untyped rendererId with embedded controls and lets named buttons switch", async () => {
     const first = vi.fn<ContentRendererContribution["render"]>(() => html`<b>First</b>`);
     const second = vi.fn(() => html`<b>Second</b>`);
     const capability = createContentRenderingCapability(() => [
@@ -298,22 +305,19 @@ describe("shared content rendering", () => {
     const root = document.createElement("div");
     document.body.append(root);
     const request = { machineId: "local", text: "source" };
-    Reflect.set(request, "rendererId", "second"); // JavaScript consumer violates the public union.
+    Reflect.set(request, "rendererId", "first"); // JavaScript consumer violates the public union.
     render(capability.renderText(request), root);
     const host = root.querySelector<ContentRendererHost>("pi-web-content-renderer");
     if (host === null) throw new Error("Expected host");
     await host.updateComplete;
-    expect(first).toHaveBeenCalledOnce();
-    expect(second).not.toHaveBeenCalled();
-    expect(Object.keys(first.mock.calls[0]?.[0] ?? {}).sort()).toEqual(["fail", "signal", "text"]);
-    const chooser = host.renderRoot.querySelector("select");
-    if (chooser === null) throw new Error("Expected chooser");
-    chooser.value = "second";
-    chooser.dispatchEvent(new Event("change"));
-    await host.updateComplete;
     expect(second).toHaveBeenCalledOnce();
-    expect(chooser.value).toBe("second");
-    expect(host.renderRoot.querySelector("b")?.textContent).toBe("Second");
+    expect(first).not.toHaveBeenCalled();
+    button(host, "First").click();
+    await host.updateComplete;
+    expect(first).toHaveBeenCalledOnce();
+    expect(Object.keys(first.mock.calls[0]?.[0] ?? {}).sort()).toEqual(["fail", "machineId", "signal", "text"]);
+    expect(button(host, "First").getAttribute("aria-pressed")).toBe("true");
+    expect(host.renderRoot.querySelector("b")?.textContent).toBe("First");
   });
 
   it("omits embedded controls only on request and retains failure source and cancellation", async () => {
@@ -366,7 +370,7 @@ describe("shared content rendering", () => {
     await host.updateComplete;
     expect(host.shadowRoot?.querySelector("pre code")?.textContent).toBe("A --> B");
     expect(signal?.aborted).toBe(true);
-    button(host, "Preview").click();
+    button(host, "test / diagram").click();
     await host.updateComplete;
     expect(draw).toHaveBeenCalledTimes(2);
     element.remove();
@@ -405,7 +409,8 @@ describe("shared content rendering", () => {
     expect(host.shadowRoot?.querySelector("pre code")?.textContent).toBe("two");
     button(host, "Copy source").click();
     expect(writeClipboardText).toHaveBeenLastCalledWith("two");
-    button(host, "Preview").click();
+    expect(button(host, "test / diagram").getAttribute("aria-pressed")).toBe("false");
+    button(host, "test / diagram").click();
     await host.updateComplete;
     expect(host.shadowRoot?.querySelector("b")?.textContent).toBe("two");
     const failed = await mount("```diagram\nthrow\n```", renderer(() => { throw new Error("sync"); }));
@@ -487,12 +492,17 @@ describe("shared content rendering", () => {
     const second = element.renderRoot.querySelectorAll<ContentRendererHost>("pi-web-content-renderer")[1];
     if (second === undefined) throw new Error("Expected second diagram");
     await second.updateComplete;
-    const chooser = host.renderRoot.querySelector("select");
-    if (chooser === null) throw new Error("Expected renderer chooser");
-    expect([...chooser.options].map((option) => option.value)).toEqual(["test:diagram", "z-other:diagram"]);
-    expect(draw).not.toHaveBeenCalled();
-    chooser.value = "z-other:diagram";
-    chooser.dispatchEvent(new Event("change"));
+    expect(host.renderRoot.querySelector("select")).toBeNull();
+    expect([...host.renderRoot.querySelectorAll('.views button')].map((view) => view.textContent.trim()))
+      .toEqual(["test / diagram", "z-other / diagram", "Raw"]);
+    expect(draw).toHaveBeenCalledTimes(2); // New last automatic becomes the default.
+    for (const item of [host, second]) {
+      button(item, "test / diagram").click();
+      await item.updateComplete;
+    }
+    draw.mockClear();
+    inputs.length = 0;
+    button(host, "z-other / diagram").click();
     await host.updateComplete;
     expect(draw).toHaveBeenCalledOnce();
     expect(second.shadowRoot?.querySelector(".diagram")?.textContent).toBe("second");
@@ -500,12 +510,13 @@ describe("shared content rendering", () => {
     await element.updateComplete;
     await host.updateComplete;
     expect(draw).toHaveBeenCalledOnce();
-    expect(chooser.value).toBe("z-other:diagram");
+    expect(button(host, "z-other / diagram").getAttribute("aria-pressed")).toBe("true");
     inputs[0]?.fail(new Error("current"));
     await host.updateComplete;
     expect(host.shadowRoot?.textContent).toContain("Preview failed");
-    chooser.value = "test:diagram";
-    chooser.dispatchEvent(new Event("change"));
+    expect(button(host, "Raw").getAttribute("aria-pressed")).toBe("true");
+    expect(button(host, "z-other / diagram").getAttribute("aria-pressed")).toBe("false");
+    button(host, "test / diagram").click();
     await host.updateComplete;
     expect(inputs[0]?.signal.aborted).toBe(true);
     inputs[0]?.fail(new Error("stale"));
@@ -516,15 +527,12 @@ describe("shared content rendering", () => {
     expect(writeClipboardText).toHaveBeenLastCalledWith("first");
     button(host, "Raw").click();
     await host.updateComplete;
-    chooser.value = "z-other:diagram";
-    chooser.dispatchEvent(new Event("change"));
-    await host.updateComplete;
-    expect(draw).toHaveBeenCalledOnce();
-    button(host, "Preview").click();
+    button(host, "z-other / diagram").click();
     await host.updateComplete;
     expect(draw).toHaveBeenCalledTimes(2);
-    chooser.value = "test:diagram";
-    chooser.dispatchEvent(new Event("change"));
+    expect(button(host, "z-other / diagram").getAttribute("aria-pressed")).toBe("true");
+    expect(button(host, "Raw").getAttribute("aria-pressed")).toBe("false");
+    button(host, "test / diagram").click();
     await host.updateComplete;
     expect(inputs[1]?.signal.aborted).toBe(true);
   });

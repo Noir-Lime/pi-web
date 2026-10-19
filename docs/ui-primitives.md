@@ -124,6 +124,12 @@ The chat consumer owns these layout classes and message separators; `uiTranscrip
 - Keep the existing compact 28px desktop subsession disclosure as a specialized tree control; it is not a toolbar button.
 - Check geometry in a real browser. Native-control interaction tests still belong at the consuming component boundary.
 
+## Renderer headers
+
+Chat code blocks and Files expose each matching renderer as a named native button alongside Raw, rather than a select menu. Clicking a renderer button both selects and activates that view, including manual renderers. Use `aria-pressed` for selection; these are buttons, not ARIA tabs. Renderer titles supply names, with plugin/contribution IDs as the fallback.
+
+Keep the view buttons on one horizontally scrollable row, using native overflow scrolling like the existing shell headers. Buttons must not shrink or wrap their labels. Keyboard focus and touch scrolling keep off-screen views reachable. Chat keeps Copy outside the scrolling strip; Files keeps Open and Download outside it. Preserve the existing compact/coarse-pointer control sizing and inset focus indicators.
+
 ## Migration boundary
 
 The current consumers are navigation headings, session selection controls, navigation dropdowns, the chat composer's model/thinking/send/stop toolbar, main navigation tabs, the common selection/form dialogs, Settings, and chat transcript sections and controls. More specialized surfaces, such as session cleanup, are not yet migrated.
