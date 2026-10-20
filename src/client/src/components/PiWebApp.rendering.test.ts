@@ -739,7 +739,7 @@ describe("application rendering boundaries", () => {
     const result: ExternalPluginLoadResult = {
       terminalMode: "recovery-disabled", declarations: [{ id: "mermaid" }], failures: [],
       registrations: [{ id: "mermaid", plugin: {
-        apiVersion: 4, name: "Mermaid", activate: () => ({ contributions: { contentRenderers: [{
+        apiVersion: 5, name: "Mermaid", activate: () => ({ contributions: { contentRenderers: [{
           id: "diagram", title: "Diagram", languages: ["mermaid"], render: draw,
         }] } }),
       } }],
