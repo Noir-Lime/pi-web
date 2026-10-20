@@ -1,7 +1,18 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+// @vitest-environment happy-dom
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthController } from "../controllers/authController";
 import { SessionController } from "../controllers/sessionController";
 import { PiWebApp } from "./PiWebApp";
+import { themeStylesheetFetch } from "./themeStylesheetFetch.testSupport";
+
+// The app registers its built-in theme stylesheets on construction; keep that offline.
+const unexpectedRequest = vi.fn(() => Promise.reject(new Error("Auth routing tests must not make network requests")));
+
+beforeEach(() => {
+  unexpectedRequest.mockClear();
+  vi.stubGlobal("fetch", themeStylesheetFetch(unexpectedRequest));
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -27,10 +38,6 @@ describe("PiWebApp authentication command routing", () => {
 });
 
 function submit(text: string): void {
-  vi.stubGlobal("window", {
-    location: { search: "" },
-    localStorage: { getItem: () => null, setItem: () => undefined, removeItem: () => undefined },
-  });
   const app = new PiWebApp();
   const method: unknown = Reflect.get(app, "sendPrompt");
   if (typeof method !== "function") throw new Error("Missing sendPrompt");

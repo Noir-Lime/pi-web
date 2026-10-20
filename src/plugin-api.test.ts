@@ -165,7 +165,7 @@ describe("public browser plugin API", () => {
   });
 
   it("exposes the v4 dependency-ready browser lifecycle and shared capability contracts", () => {
-    expectTypeOf<PiWebPlugin["apiVersion"]>().toEqualTypeOf<4>();
+    expectTypeOf<PiWebPlugin["apiVersion"]>().toEqualTypeOf<4 | 5>();
     expectTypeOf<PluginActivationContext["apiVersion"]>().toEqualTypeOf<4>();
     expectTypeOf<keyof PiWebPlugin>().toEqualTypeOf<"apiVersion" | "name" | "requires" | "activate">();
     expectTypeOf<keyof PluginCapability>().toEqualTypeOf<"pluginId" | "id" | "version" | "parse">();

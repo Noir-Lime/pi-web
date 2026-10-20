@@ -1407,7 +1407,7 @@ describe("PiSessionService", () => {
       await vi.waitFor(() => {
         expect(parent.calls.sendCustomMessage).toHaveLength(1);
       });
-      expect(parent.calls.sendCustomMessage[0]?.message.content).toContain("Subsession child-1 stopped working");
+      expect(parent.calls.sendCustomMessage[0]?.message.content).toContain("(child-1) stopped working");
       expect(parent.calls.sendCustomMessage[0]?.message.content).toContain("--- SUBSESSION OUTPUT (this run): child-1 ---\nall done");
       expect(parent.calls.sendCustomMessage[0]?.message.content).not.toContain("earlier run");
       expect(parent.calls.sendCustomMessage[0]?.message.customType).toBe("subsession.completion");
@@ -1502,7 +1502,7 @@ describe("PiSessionService", () => {
           // The heartbeat records readiness; idle delivery runs on the next tick.
           await vi.advanceTimersByTimeAsync(20);
           expect(parent.calls.sendCustomMessage).toHaveLength(run);
-          expect(parent.calls.sendCustomMessage[run - 1]?.message.content).toContain("Subsession child-1 stopped working");
+          expect(parent.calls.sendCustomMessage[run - 1]?.message.content).toContain("(child-1) stopped working");
 
           // Further idle heartbeats must not duplicate the completed run.
           await vi.advanceTimersByTimeAsync(20);

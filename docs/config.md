@@ -51,13 +51,15 @@ defaults → global config file → environment overrides
 
 Supported project-local settings are then applied for that project's workspaces. For upload and prompt-attachment defaults, `<project>/.pi-web/config.json` overrides the global value.
 
-Environment overrides include `PI_WEB_HOST`, `PI_WEB_PORT` / `PORT`, `PI_WEB_ALLOWED_HOSTS`, `PI_WEB_MAX_UPLOAD_BYTES`, `PI_CODING_AGENT_DIR`, `PI_CODING_AGENT_SESSION_DIR`, `PI_WEB_SPAWN_SESSIONS`, `PI_WEB_SUBSESSIONS`, `PI_WEB_ASK_USER`, and `PI_WEB_ENVIRONMENT_FACTS`.
+Environment overrides include `PI_WEB_HOST`, `PI_WEB_PORT` / `PORT`, `PI_WEB_ALLOWED_HOSTS`, `PI_WEB_MAX_UPLOAD_BYTES`, `PI_WEB_SESSION_ARCHIVE_DIR`, `PI_CODING_AGENT_DIR`, `PI_CODING_AGENT_SESSION_DIR`, `PI_WEB_SPAWN_SESSIONS`, `PI_WEB_SUBSESSIONS`, `PI_WEB_ASK_USER`, and `PI_WEB_ENVIRONMENT_FACTS`.
 
 Process restarts depend on the key:
 
 - `host` / `port`: restart the gateway web/API service or process.
 - `maxUploadBytes`: restart both the web/API process and the session daemon on that machine.
 - `spawnSessions` / `subsessions` / `askUser` / `extensionDialogsTimeoutMs` / `environmentFacts`: restart the session daemon on that machine.
+- `sessionArchive.directory`: restart the session daemon on that machine; changes only the destination for new archives.
+- `sessionNaming`: saved model, token budget, thinking level, and timeout apply to the next naming request without a restart. Existing names and in-progress naming requests are unchanged.
 - `pathAccess`: applies on the next request; existing file views may need a browser refresh.
 - `uploads.defaultFolder`: applies to newly opened Files upload dialogs and new direct drag/drop batches after config/workspace refresh.
 - `attachments.defaultFolder`: applies to new prompt-attachment saves after config/workspace refresh.
@@ -91,6 +93,9 @@ The global gateway key is `defaultStreamingBehavior`: `steer` or `followUp`. It 
     "defaultFolder": ".pi-web/attachments"
   },
   "maxUploadBytes": 67108864,
+  "sessionArchive": {
+    "directory": "/srv/pi-web/archives"
+  },
   "spawnSessions": true,
   "subsessions": true,
   "askUser": true,
@@ -165,6 +170,8 @@ Rows with JSON key `—` are runtime-only environment variables, not config-file
 | Agent can spawn sessions | `spawnSessions` | `PI_WEB_SPAWN_SESSIONS` | Global/session daemon | Not supported locally | Restart session daemon on that machine |
 | Tracked subsessions | `subsessions` | `PI_WEB_SUBSESSIONS` | Global/session daemon | Not supported locally; also requires `spawnSessions` | Restart session daemon on that machine |
 | Agent can post question forms | `askUser` | `PI_WEB_ASK_USER` | Global/session daemon | Not supported locally | Restart session daemon on that machine |
+| Session archive directory | `sessionArchive.directory` | `PI_WEB_SESSION_ARCHIVE_DIR` | Global/session daemon | Not supported locally | Restart session daemon on that machine; new archives only |
+| Session naming | `sessionNaming.model`, `sessionNaming.maxTokens`, `sessionNaming.thinkingLevel`, `sessionNaming.timeoutMs` | — | Global/session daemon | Not supported locally | Next naming request; no restart |
 | Extension dialog auto-cancel timeout | `extensionDialogsTimeoutMs` | — | Global/session daemon | Not supported locally | Restart session daemon on that machine |
 | Session environment facts | `environmentFacts` | `PI_WEB_ENVIRONMENT_FACTS` | Global/session daemon | Not supported locally | Restart session daemon on that machine |
 | PI WEB plugin desired enablement | `plugins.<id>.enabled` | — | Global | Not supported locally | Browser-only: reload tab. Server-backed: manually restart sessiond, then reload tab |
@@ -196,11 +203,25 @@ Rows with JSON key `—` are runtime-only environment variables, not config-file
 
 `PI_WEB_DATA_DIR` sets the root for PI WEB-managed runtime state and defaults to `~/.pi-web`. Unless a more specific path override is configured, PI WEB stores its project and machine registries, locally discovered plugins, default session-daemon socket, and session archives beneath this root.
 
-Each data directory is independent: after pointing PI WEB at a new root, it starts there with empty registries and no session archives. To carry session archives over, stop PI WEB, then copy `archived-sessions.json` and the `archived-sessions/` directory from the old data directory into the new one before starting it again.
+Each data directory is independent: after pointing PI WEB at a new root, it starts there with empty registries and no archive index. Changing paths does not migrate data. Archive records retain their stored paths; see [Session archive directory](#session-archive-directory).
 
 Only one live session daemon may use a data directory. For a second instance, set a distinct `PI_WEB_DATA_DIR`, `PI_WEB_SESSIOND_SOCKET` (or `PI_WEB_SESSIOND_PORT` / `PI_WEB_SESSIOND_HOST`), and `PI_WEB_PORT`. Stale ownership markers are normally recovered automatically. If startup still refuses, verify the named owner is no longer running before deleting `sessiond-owner.json` as the error suggests.
 
 This setting does not change the PI WEB config file selected by `PI_WEB_CONFIG` or Pi-owned state such as the active session files selected by `PI_CODING_AGENT_SESSION_DIR`.
+
+### Session archive directory
+
+Set `sessionArchive.directory` in the global config file to choose where new session archives are written. It defaults to `$PI_WEB_DATA_DIR/archived-sessions`. Project-local overrides are not supported.
+
+```json
+{ "sessionArchive": { "directory": "/srv/pi-web/archives" } }
+```
+
+A nonempty `PI_WEB_SESSION_ARCHIVE_DIR` environment value takes precedence over the config file; an empty value is ignored. Relative paths resolve against the process working directory. Use an absolute path for a predictable destination; do not rely on tilde expansion.
+
+Restart the session daemon on the affected machine after changing either value. Only the destination for new archives changes: the index stays at `$PI_WEB_DATA_DIR/archived-sessions.json`, existing records keep their stored paths, and no migration occurs.
+
+Edit the global config file or daemon environment directly. Neither this destination nor the managed data directory is exposed in Settings.
 
 ### Agent process environment
 
@@ -309,6 +330,26 @@ This prevents accidental provider, configuration, or credential contamination be
 
 Configure providers before the daemon starts: use the active agent directory's `models.json`, or install the Pi extension globally in that agent directory. Project Pi extensions and project-level `models.json` files cannot add providers to PI WEB's shared baseline. After updating PI WEB—or after installing, removing, or updating a global Pi extension that registers providers—manually restart `pi-web-sessiond.service` (`systemctl --user restart pi-web-sessiond`). Restarting only the web/API service and running `/reload` do not rebuild the baseline.
 
+### MCP server sign-in and sign-out
+
+Select a nonarchived session, then choose **MCP login** or **MCP logout** from **Actions**. Each action asks you to select an eligible server, even when only one is available. MCP actions are separate from model-provider authentication; the provider dialogs have no MCP footer.
+
+Alternatively, open **Settings → MCP** to see enabled OAuth-eligible servers for the selected session on the settings machine. Each server has **Login** and **Logout** controls that target it directly, without another server picker. Disabled servers, servers using header-based authentication, and stdio servers are not listed as OAuth authentication candidates.
+
+Both entry points use the same MCP dialog flow, showing the chosen server and Pi’s progress and outcome without switching to Chat. They require an idle session in a trusted workspace with Pi’s built-in MCP command enabled. Finish the current MCP authentication operation before starting another on the same machine.
+
+Pi can reuse valid or refreshable credentials without asking you to authorize again. No browser prompt may mean credentials were reused; it is not proof of success. Read Pi’s messages for the outcome: **Operation finished** means the command ended, not that login succeeded. There is no force-reauthorization or switch-account control.
+
+If Pi provides an authorization link, open it and complete authentication in your browser. If the callback cannot reach the runtime—for example, with a remote or container deployment—paste the full redirected URL into the dialog when prompted.
+
+**Logout** removes the server’s local Pi credentials and disconnects its authenticated connection. Other sessions using the same saved credentials are also affected. It does not disable the server configuration or revoke access at the provider. To revoke access, use the provider’s account settings.
+
+**Cancel** requests that pending UI or future prompts stop. It may not immediately stop browser approval, token exchange, or reconnection already in progress; credentials may already have been saved if you cancel after approval.
+
+Pi owns OAuth tokens and server reconnection, storing MCP credentials in the active profile’s `mcp-auth.json`, separate from model-provider authentication. Ordinary `/mcp` commands entered in Chat still use Pi’s inline extension UI.
+
+After updating PI WEB, manually restart the session daemon to activate this flow. A browser reload or web/API restart is insufficient. For the systemd user service, run `systemctl --user restart pi-web-sessiond` from outside its hosted sessions; restarting interrupts active sessions and terminals.
+
 ### Background model catalog refresh
 
 PI WEB refreshes provider model catalogs automatically in the background and after login or logout. Reopen the model selector to see new models. Failed refreshes keep the last successful catalog and report problems in daemon logs. A refresh can briefly delay session startup; the activity line reports when model lists are refreshing.
@@ -363,6 +404,31 @@ Agents can ask questions with choices or free-text answers. You may leave questi
 Forms are saved in the conversation and survive restarts. Only a form at the end of the active conversation is open; answering, skipping, or sending another message closes it. Earlier forms remain expandable for read-only review. Returning the conversation to a question reopens it; archived conversations remain read-only.
 
 Restart the session daemon after changing `askUser` or after upgrading PI WEB to a version that introduces this tool. For the systemd user service, run `systemctl --user restart pi-web-sessiond`.
+
+### Session naming
+
+Use **Settings → Session daemon → Session naming** on the selected machine to choose a naming model, generation budget, thinking level, and timeout. The naming model button opens a searchable list of that machine's available models; choose **Use session model** to remove the model override. No active session is required. Refresh settings to reload the list after configuring a provider. By default, naming uses the session's model and **24 tokens**, including for reasoning models. Naming does not change the conversation's model.
+
+These settings are optional machine-global overrides:
+
+```json
+{
+  "sessionNaming": {
+    "model": "provider/model-id",
+    "maxTokens": 2048,
+    "thinkingLevel": "off",
+    "timeoutMs": 90000
+  }
+}
+```
+
+`model` must identify a model in that machine's model catalog, using its configured provider and credentials. Omit it to use the session model. `maxTokens` must be a positive integer; omit it to restore 24. This is a generation budget, not title length; providers may count reasoning against it. Project-local overrides are not supported.
+
+`thinkingLevel` defaults to `minimal`. Supported values are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. Choose `off` to disable optional reasoning where supported, while keeping a positive token budget for the title. Models and providers may limit or map thinking levels; `off` cannot disable mandatory reasoning. Naming settings do not change the conversation's thinking level.
+
+`timeoutMs` sets the total naming-request timeout, including gateway queueing, model loading, and generation. It defaults to `10000` (10 seconds). Use a positive integer in milliseconds, up to `2147483647`; Settings displays seconds. Increase it for local models that need time to load. Clearing the UI field restores 10 seconds. This is a total wall-time limit, not an idle timeout, and has no environment-variable override.
+
+Saved model, budget, thinking-level, and timeout changes apply to the next naming request without a restart or reload. Existing names and in-progress naming requests are unchanged. Agent permission changes in the same panel still require a session-daemon restart. Naming failures use the existing first-message fallback and are recorded in daemon logs.
 
 ### Extension dialogs
 

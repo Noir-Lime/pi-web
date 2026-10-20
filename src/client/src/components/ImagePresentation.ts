@@ -1,7 +1,9 @@
+import { stylesheetIntegrationCapability } from "../plugins/styles";
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { styleMap } from "lit/directives/style-map.js";
 import { validImageDimensions, type ImageDimensions } from "../../../shared/sessionMedia";
+import { uiButtonStyles } from "./ui/controlStyles";
 
 export interface ImageOpenDetail {
   src: string;
@@ -11,7 +13,13 @@ export interface ImageOpenDetail {
 /** The owner authorizes sources; the browser owns image loading and failure display. */
 @customElement("pi-web-image-presentation")
 export class ImagePresentation extends LitElement {
+  constructor() {
+    super();
+    stylesheetIntegrationCapability.createController(this);
+  }
+
   @property({ attribute: false }) source: string | undefined;
+  @property({ type: Boolean, reflect: true }) thumbnail = false;
   @property({ attribute: false }) dimensions: ImageDimensions | undefined;
   /** Optional metadata report; loading never changes this component's own state. */
   @property({ attribute: false }) onIntrinsicDimensions: ((source: string, dimensions: ImageDimensions) => void) | undefined;
@@ -50,11 +58,11 @@ export class ImagePresentation extends LitElement {
     const dimensions = this.dimensions;
     return html`
       <div class="frame">
-        <button class="placeholder" type="button" ?hidden=${!pending} ?disabled=${this.requestDisabled}
+        <button class="placeholder ui-button" type="button" ?hidden=${!pending} ?disabled=${this.requestDisabled}
           @click=${(event: MouseEvent) => { this.requestImage(event); }}>
           <span>${this.pendingLabel}</span>${this.label === "" ? null : html`<code>${this.label}</code>`}
         </button>
-        <button class="image-button" type="button" ?hidden=${pending} ?disabled=${pending}
+        <button class="image-button ui-button" type="button" ?hidden=${pending} ?disabled=${pending}
           aria-label=${`Enlarge ${this.description || "image"}`} title="Click to enlarge"
           @click=${(event: MouseEvent) => { this.open(event); }}
           @keydown=${(event: KeyboardEvent) => { if (event.key === "Enter" || event.key === " ") this.open(event); }}>
@@ -71,11 +79,11 @@ export class ImagePresentation extends LitElement {
     `;
   }
 
-  static override styles = css`
+  static override styles = [uiButtonStyles, css`
+    @layer pi-web-base {
     :host { display: block; max-width: 100%; min-width: 0; }
     .frame { max-width: 100%; }
-    button { font: inherit; color: inherit; background: var(--pi-surface); border: 1px solid var(--pi-border, #888); border-radius: 4px; padding: .3em .65em; cursor: pointer; }
-    button:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 2px; }
+    button { font: inherit; color: inherit; }
     .placeholder { box-sizing: border-box; display: grid; align-content: center; justify-items: center; gap: .5em; width: 320px; max-width: 100%; min-height: 110px; padding: 1em; border: 1px dashed var(--pi-border, #888); border-radius: 4px; background: var(--pi-surface); text-align: center; }
     .placeholder:disabled { cursor: default; }
     code { display: block; max-width: 100%; margin: 0; overflow-wrap: anywhere; color: var(--pi-text-secondary); font-size: .85em; }
@@ -85,5 +93,11 @@ export class ImagePresentation extends LitElement {
     /* A definite width plus the declared ratio reserves the final, height-capped
        footprint before lazy loading. CSS still handles narrow viewports. */
     img[width][height] { width: min(var(--image-width), calc(var(--pi-image-max-height, var(--image-height)) * var(--image-ratio))); }
-  `;
+    :host([thumbnail]) .frame { width: 128px; height: 96px; }
+    :host([thumbnail]) button { box-sizing: border-box; width: 100%; height: 96px; min-height: 96px; border-radius: 0; padding: 6px; background: var(--pi-surface); }
+    :host([thumbnail]) .image-button:hover { background: var(--pi-surface-hover); }
+    :host([thumbnail]) .placeholder code { display: none; }
+    :host([thumbnail]) img { width: 100%; height: 100%; max-height: none; border-radius: 0; }
+    }
+  `];
 }

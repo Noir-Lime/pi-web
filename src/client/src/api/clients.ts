@@ -23,6 +23,7 @@ import {
   parseMachinesResponse,
   parseMessagePage,
   parseModelSelectionResponse,
+  parseMcpAuthServersResponse,
   parseSessionModelCatalogResponse,
   parseMoveWorkspaceFileResponse,
   parseOAuthFlowState,
@@ -121,6 +122,7 @@ function pluginsPath(machineId?: string): string {
 }
 
 export const configApi = {
+  namingModels: (machineId = "local") => request(`${machinePrefix(machineId)}/models`, parseModelSelectionResponse),
   config: (machineId?: string) => request(configPath(machineId), parsePiWebConfigResponse),
   saveConfig: (config: PiWebConfigValues, machineId?: string) => request(configPath(machineId), parsePiWebConfigResponse, { method: "PUT", body: JSON.stringify({ config }) }),
 };
@@ -305,6 +307,11 @@ export const sessionsApi = {
   },
   startInteractiveApiKeyLogin: (providerId: string, machineId = "local") => request(`${machinePrefix(machineId)}/auth/api-key/interactive`, parseOAuthFlowState, { method: "POST", body: JSON.stringify({ providerId }) }),
   logoutProvider: (providerId: string, machineId = "local") => request(`${machinePrefix(machineId)}/auth/logout`, parseAccepted, { method: "POST", body: JSON.stringify({ providerId }) }),
+  mcpAuthServers: (session: SessionRef, machineId = "local") => request(sessionQueryPath(session, "mcp/auth/servers", machineId), parseMcpAuthServersResponse),
+  startMcpAuth: (session: SessionRef, mode: "login" | "logout", machineId = "local", serverName?: string) => request(sessionPath(session, "mcp/auth", machineId), parseOAuthFlowState, { method: "POST", body: sessionBody(session, { mode, ...(serverName === undefined ? {} : { serverName }) }) }),
+  mcpAuthFlow: (flowId: string, machineId = "local") => request(`${machinePrefix(machineId)}/auth/mcp/${encodeURIComponent(flowId)}`, parseOAuthFlowState),
+  respondMcpAuthFlow: (flowId: string, requestId: string, value: string, machineId = "local") => request(`${machinePrefix(machineId)}/auth/mcp/${encodeURIComponent(flowId)}/respond`, parseOAuthFlowState, { method: "POST", body: JSON.stringify({ requestId, value }) }),
+  cancelMcpAuthFlow: (flowId: string, machineId = "local") => request(`${machinePrefix(machineId)}/auth/mcp/${encodeURIComponent(flowId)}/cancel`, parseOAuthFlowState, { method: "POST" }),
   startOAuthLogin: (providerId: string, machineId = "local") => request(`${machinePrefix(machineId)}/auth/oauth`, parseOAuthFlowState, { method: "POST", body: JSON.stringify({ providerId }) }),
   oauthFlow: (flowId: string, machineId = "local") => request(`${machinePrefix(machineId)}/auth/oauth/${encodeURIComponent(flowId)}`, parseOAuthFlowState),
   respondOAuthFlow: (flowId: string, requestId: string, value: string, machineId = "local") => request(`${machinePrefix(machineId)}/auth/oauth/${encodeURIComponent(flowId)}/respond`, parseOAuthFlowState, { method: "POST", body: JSON.stringify({ requestId, value }) }),

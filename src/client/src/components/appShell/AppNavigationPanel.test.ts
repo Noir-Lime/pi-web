@@ -10,11 +10,14 @@ import { ProjectList } from "../ProjectList";
 import { WorkspaceList } from "../WorkspaceList";
 import { SessionList } from "../SessionList";
 import { AppNavigationPanel, shouldShowMachinesSection } from "./AppNavigationPanel";
+import type { NavigationSectionResizeHandle } from "./NavigationSectionResizeHandle";
+import { NAVIGATION_SECTION_SIZE_STORAGE_KEY } from "../../appShell/navigationSectionResizeController";
 
 afterEach(() => {
   document.body.replaceChildren();
   localStorage.clear();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("shouldShowMachinesSection", () => {
@@ -28,13 +31,140 @@ describe("shouldShowMachinesSection", () => {
   });
 });
 
+describe("folder workspace navigation", () => {
+  it.each([false, true])("skips hidden workspace controls in both keyboard directions (compact=%s)", async (compact) => {
+    const panel = await mountPanel({}, machine("local"));
+    panel.compact = compact;
+    panel.workspaceSelectionVisible = false;
+    panel.sessions = [session("root")];
+    panel.onFocusNavigationTarget = vi.fn();
+    await panel.updateComplete;
+    const projects = section(panel, "project-list", ProjectList);
+    const sessions = section(panel, "session-list", SessionList);
+    await Promise.all([projects.updateComplete, sessions.updateComplete]);
+
+    expect(panel.shadowRoot?.querySelector("workspace-list")).toBeNull();
+    expect(await panel.focusSection("workspaces")).toBe(false);
+    control(projects, ".action-row").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    expect(panel.onFocusNavigationTarget).toHaveBeenLastCalledWith("sessions");
+    control(sessions, ".action-row").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    expect(panel.onFocusNavigationTarget).toHaveBeenLastCalledWith("projects");
+  });
+});
+
+describe("section resize boundaries", () => {
+  it("disables resizing in one-column navigation without discarding saved desktop heights", async () => {
+    const saved = JSON.stringify({ version: 1, projects: 180, workspaces: 220 });
+    localStorage.setItem(NAVIGATION_SECTION_SIZE_STORAGE_KEY, saved);
+    const panel = await mountPanel({}, machine("local"), false);
+    const root = panel.shadowRoot;
+    if (root === null) throw new Error("Missing navigation panel root");
+    expect(root.querySelectorAll("[data-manual-size]")).toHaveLength(2);
+    panel.compact = true;
+    await panel.updateComplete;
+    expect(root.querySelector("navigation-section-resize-handle")).toBeNull();
+    expect(root.querySelector("[data-manual-size]")).toBeNull();
+    expect(localStorage.getItem(NAVIGATION_SECTION_SIZE_STORAGE_KEY)).toBe(saved);
+    panel.compact = false;
+    await panel.updateComplete;
+    expect(root.querySelectorAll("navigation-section-resize-handle")).toHaveLength(2);
+    expect(root.querySelectorAll("[data-manual-size]")).toHaveLength(2);
+    expect(localStorage.getItem(NAVIGATION_SECTION_SIZE_STORAGE_KEY)).toBe(saved);
+  });
+
+  it("owns layout observation, supplies measurements, and tracks replaced sections and reconnection", async () => {
+    const observers: LayoutObserver[] = [];
+    class LayoutObserver implements ResizeObserver {
+      readonly targets = new Set<Element>();
+      constructor(private readonly callback: ResizeObserverCallback) { observers.push(this); }
+      observe(target: Element): void { this.targets.add(target); }
+      unobserve(target: Element): void { this.targets.delete(target); }
+      disconnect(): void { this.targets.clear(); }
+      notify(): void { this.callback([], this); }
+    }
+    vi.stubGlobal("ResizeObserver", LayoutObserver);
+    const panel = await mountPanel({}, machine("local"), false);
+    const observer = observers.find((item) => item.targets.has(panel));
+    if (observer === undefined) throw new Error("Panel did not observe its layout");
+    const projects = section(panel, "project-list", ProjectList);
+    const workspaces = section(panel, "workspace-list", WorkspaceList);
+    const sessions = section(panel, "session-list", SessionList);
+    // Geometry is an injected browser boundary here, not a happy-dom layout assertion.
+    vi.spyOn(projects, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 400, 120));
+    vi.spyOn(workspaces, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 400, 80));
+    vi.spyOn(sessions, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 400, 300));
+    observer.notify();
+    await panel.updateComplete;
+    const handles = panel.shadowRoot?.querySelectorAll<NavigationSectionResizeHandle>("navigation-section-resize-handle");
+    expect(handles?.[0]?.measurement).toEqual({ height: 120, maxHeight: 376 });
+    expect(handles?.[1]?.measurement).toEqual({ height: 80, maxHeight: 336 });
+
+    panel.workspaceSelectionVisible = false;
+    await panel.updateComplete;
+    expect(observer.targets.has(workspaces)).toBe(false);
+    panel.workspaceSelectionVisible = true;
+    await panel.updateComplete;
+    const replacement = section(panel, "workspace-list", WorkspaceList);
+    expect(replacement).not.toBe(workspaces);
+    expect(observer.targets.has(replacement)).toBe(true);
+    vi.spyOn(replacement, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 400, 140));
+    observer.notify();
+    await panel.updateComplete;
+    const workspaceHandle = panel.shadowRoot?.querySelectorAll<NavigationSectionResizeHandle>("navigation-section-resize-handle")[1];
+    expect(workspaceHandle?.measurement).toEqual({ height: 140, maxHeight: 396 });
+
+    panel.remove();
+    expect(observer.targets.size).toBe(0);
+    document.body.append(panel);
+    await panel.updateComplete;
+    const reconnected = observers.find((item) => item.targets.has(panel));
+    expect(reconnected).toBeDefined();
+    expect(reconnected).not.toBe(observer);
+  });
+
+  it("assigns each divider to the expanded section above, including when workspaces are hidden", async () => {
+    const panel = await mountPanel({}, machine("local"), false);
+    const root = panel.shadowRoot;
+    if (root === null) throw new Error("Missing navigation panel root");
+    const controls = () => [...root.querySelectorAll<NavigationSectionResizeHandle>("navigation-section-resize-handle")]
+      .map((handle) => handle.controls);
+    expect(controls()).toEqual(["navigation-projects", "navigation-workspaces"]);
+
+    panel.workspaceSelectionVisible = false;
+    await panel.updateComplete;
+    expect(controls()).toEqual(["navigation-projects"]);
+
+    panel.workspaceSelectionVisible = true;
+    panel.projectsCollapsed = true;
+    await panel.updateComplete;
+    expect(controls()).toEqual(["navigation-workspaces"]);
+
+    panel.workspacesCollapsed = true;
+    await panel.updateComplete;
+    expect(controls()).toEqual([]);
+  });
+});
+
 describe("header identity", () => {
-  it("shows the plain brand without an icon or address", async () => {
+  it("leaves header identity to the machine switcher without a separate brand title", async () => {
     const panel = await mountHeaderPanel([machine("local")]);
 
-    expect(panel.shadowRoot?.querySelector("header strong")?.textContent).toBe("PI WEB");
-    expect(panel.shadowRoot?.querySelector(".brand-icon")).toBeNull();
-    expect(panel.shadowRoot?.querySelector(".brand-domain")).toBeNull();
+    expect(panel.shadowRoot?.querySelector("header")?.textContent).not.toContain("PI WEB");
+    expect(panel.shadowRoot?.querySelector("machine-switcher")).toBeInstanceOf(MachineSwitcher);
+  });
+
+  it("opens Actions from a named button with a decorative icon and responsive label", async () => {
+    const panel = await mountHeaderPanel([machine("local")]);
+    panel.onShowActions = vi.fn();
+    await panel.updateComplete;
+    const button = panel.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Show Actions"]');
+    if (!button) throw new Error("Missing Actions button");
+
+    expect(button.title).toBe("Show Actions");
+    expect(button.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+    expect(button.querySelector(".actions-label")?.textContent).toBe("Actions");
+    button.click();
+    expect(panel.onShowActions).toHaveBeenCalledOnce();
   });
 
   it("keeps the machine switcher visible with a single machine", async () => {
@@ -234,9 +364,9 @@ function session(id: string): SessionInfo {
   };
 }
 
-async function mountPanel(machineStatusSnapshots: Record<string, MachineStatusSnapshot>, selectedMachine: Machine | undefined): Promise<AppNavigationPanel> {
+async function mountPanel(machineStatusSnapshots: Record<string, MachineStatusSnapshot>, selectedMachine: Machine | undefined, compact = true): Promise<AppNavigationPanel> {
   const panel = new AppNavigationPanel();
-  panel.compact = true;
+  panel.compact = compact;
   panel.machines = [machine("local"), machine("remote-a")];
   if (selectedMachine !== undefined) panel.selectedMachine = selectedMachine;
   panel.projects = [project("project-1")];

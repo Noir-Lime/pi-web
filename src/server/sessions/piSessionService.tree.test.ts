@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
-import type { SessionTreeNavigateRequest, SessionTreeSummaryChoice } from "../../shared/apiTypes.js";
+import { ASK_USER_ANSWERS_CUSTOM_TYPE, type SessionTreeNavigateRequest, type SessionTreeSummaryChoice } from "../../shared/apiTypes.js";
 import { WorkspaceActivityService } from "../activity/workspaceActivityService.js";
 import { createPiSessionManagerGateway } from "./piSessionManagerGateway.js";
 import { PiSessionService, type PiAgentSession, type PiSessionManager, type PiSessionServiceDependencies } from "./piSessionService.js";
@@ -133,6 +133,64 @@ describe("PiSessionService session-tree behavior", () => {
       expect(executeBash).not.toHaveBeenCalled();
     } finally {
       await service.dispose();
+    }
+  });
+
+  it.each(["fork", "back"] as const)("%s to questions excludes the old answer", async (action) => {
+    const question = { id: "question", type: "message", message: {
+      role: "toolResult", toolName: "ask_user", isError: false, details: { ask: { askId: "ask-1" } },
+    } };
+    const answer = { id: "answer", type: "custom_message", customType: ASK_USER_ANSWERS_CUSTOM_TYPE, display: true };
+    const navigateTree = vi.fn<NavigateTree>(() => Promise.resolve({ cancelled: false }));
+    const fork = vi.fn(() => Promise.resolve({ cancelled: false }));
+    const { service, fake } = treeHarness({ getBranch: () => [question, answer] }, { navigateTree });
+    fake.runtime.fork = fork;
+    try {
+      if (action === "fork") {
+        await service.forkFromTree(sessionRef(SESSION_ID), { entryId: "question", expectedLeafId: "leaf-1", retainCheckpoint: true });
+        expect(fork).toHaveBeenCalledWith("question", { position: "at" });
+      } else {
+        await service.navigateTree(sessionRef(SESSION_ID), {
+          targetId: "question", expectedLeafId: "leaf-1", retainCheckpoint: true, summary: { mode: "none" },
+        });
+        expect(navigateTree).toHaveBeenCalledWith("question", { summarize: false });
+      }
+    } finally { await service.dispose(); }
+  });
+
+  it("reopens questions through native navigation and accepts a different answer", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-web-question-history-"));
+    const manager = SessionManager.inMemory(directory, { id: SESSION_ID });
+    const { session } = await createAgentSession({
+      cwd: directory, agentDir: join(directory, "agent"), modelRuntime: testModelRuntime, noTools: "all", sessionManager: manager,
+    });
+    const navigateTree: NavigateTree = (id, options) => session.navigateTree(id, options);
+    const fake = fakeRuntime(SESSION_ID, { sessionManager: manager, navigateTree });
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: TEST_AGENT_DIR, modelRuntime: testModelRuntime, archiveStore: emptyArchiveStore(),
+      createAgentRuntime: runtimeCreator(fake.runtime), sessionManager: sessionGateway([sessionRecord(SESSION_ID, directory)]), heartbeatIntervalMs: 60_000,
+    });
+    try {
+      const questionId = manager.appendMessage({ role: "toolResult", toolCallId: "call", toolName: "ask_user", isError: false,
+        content: [{ type: "text", text: "Posted questions" }], timestamp: Date.now(), details: { ask: {
+          askId: "ask-1", askedAt: "2026-01-01T00:00:00.000Z", questions: [{ id: "choice", question: "Which database?", options: [] }],
+        } },
+      });
+      manager.appendCustomMessageEntry(ASK_USER_ANSWERS_CUSTOM_TYPE, "Old answer", true, { askId: "ask-1" });
+      const ref = sessionRef(SESSION_ID, directory);
+      await service.navigateTree(ref, {
+        targetId: questionId, expectedLeafId: manager.getLeafId(), retainCheckpoint: true, summary: { mode: "none" },
+      });
+      expect(manager.getLeafId()).toBe(questionId);
+      expect(manager.getBranch().some((entry) => entry.type === "custom_message")).toBe(false);
+      await service.submitAsk(ref, "ask-1", { answers: [{ id: "choice", values: [], otherText: "A different database" }] });
+      expect(fake.calls.sendCustomMessage[0]?.message.details).toMatchObject({
+        askId: "ask-1", questions: [{ otherText: "A different database" }],
+      });
+    } finally {
+      await service.dispose();
+      session.dispose();
+      await rm(directory, { recursive: true, force: true });
     }
   });
 

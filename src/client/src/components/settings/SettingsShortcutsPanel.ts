@@ -1,3 +1,4 @@
+import { stylesheetIntegrationCapability } from "../../plugins/styles";
 import { css, html, LitElement, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { live } from "lit/directives/live.js";
@@ -5,6 +6,9 @@ import type { AppAction } from "../../actions";
 import type { PiWebConfigResponse, PiWebConfigValues, PiWebShortcutConfig } from "../../api";
 import { formatShortcut, parseShortcutInput, resolveShortcutBindings, shortcutPreferenceForAction, shortcutSequenceTimeoutMs, shortcutTokenFromEvent, type ShortcutBindingResolution } from "../../keyboardShortcuts";
 import { composerShortcutActions, isComposerShortcut } from "../../composerShortcuts";
+import { uiButtonStyles } from "../ui/controlStyles";
+import { uiFormStyles } from "../ui/formStyles";
+import { uiSettingsStyles } from "../ui/settingsStyles";
 import "./SettingsPanelFrame";
 import type { SettingsNotice } from "./SettingsPanelFrame";
 
@@ -16,6 +20,11 @@ function renderShortcutsDescription(): TemplateResult {
 
 @customElement("settings-shortcuts-panel")
 export class SettingsShortcutsPanel extends LitElement {
+  constructor() {
+    super();
+    stylesheetIntegrationCapability.createController(this);
+  }
+
   @property({ attribute: false }) actions: AppAction[] = [];
   @property({ attribute: false }) configResponse: PiWebConfigResponse | undefined;
   @property({ type: Boolean }) loading = false;
@@ -85,9 +94,9 @@ export class SettingsShortcutsPanel extends LitElement {
         .notices=${this.panelNotices()}
         .onAction=${this.onReload}
       >
-        ${this.configResponse === undefined && this.loading ? html`<div class="loading-card">Loading shortcuts…</div>` : html`
-          ${this.configResponse === undefined ? html`<div class="loading-card" role="status">Shortcut settings are unavailable. Refresh shortcuts to try again.</div>` : null}
-          <details class="config-path-card">
+        ${this.configResponse === undefined && this.loading ? html`<div class="loading-card ui-settings-path">Loading shortcuts…</div>` : html`
+          ${this.configResponse === undefined ? html`<div class="loading-card ui-settings-path" role="status">Shortcut settings are unavailable. Refresh shortcuts to try again.</div>` : null}
+          <details class="config-path-card ui-settings-path">
             <summary>Shortcut details</summary>
             <p>Unmodified app shortcuts work outside editable fields. Composer send shortcuts accept one key combination and take priority inside the editor. Unassigned Enter and Shift+Enter insert newlines.</p>
             <p>Touch or narrow screen applies with a coarse primary pointer or a viewport at most 760px wide. Otherwise, desktop applies.</p>
@@ -96,21 +105,21 @@ export class SettingsShortcutsPanel extends LitElement {
             <code>${this.configResponse?.path ?? "Unknown"}</code>
             <small>Shortcut overrides are saved under <code>shortcuts</code>. A value of <code>null</code> disables the action shortcut.</small>
           </details>
-          <section class="shortcut-group">
-            <h3>Send behavior</h3>
-            <label class="shortcut-input-label">
+          <section class="shortcut-group ui-settings-section">
+            <div class="ui-settings-heading"><h3>Send behavior</h3></div>
+            <label class="shortcut-input-label ui-form-field">
               <span>Send while agent is running</span>
-              <select aria-label="Send while agent is running" .value=${live(this.configResponse?.config.defaultStreamingBehavior ?? "steer")} ?disabled=${this.loading || this.saving || this.configResponse === undefined} @change=${(event: Event) => { void this.saveSendBehavior(event); }}>
+              <select class="ui-select" aria-label="Send while agent is running" .value=${live(this.configResponse?.config.defaultStreamingBehavior ?? "steer")} ?disabled=${this.loading || this.saving || this.configResponse === undefined} @change=${(event: Event) => { void this.saveSendBehavior(event); }}>
                 <option value="steer">Steer (default)</option>
                 <option value="followUp">Follow-up</option>
               </select>
             </label>
             <p>Keyboard shortcut only. Steer sends before the next model call; follow-up waits for the response to finish.</p>
           </section>
-          ${groups.length === 0 ? html`<div class="loading-card">No actions registered.</div>` : groups.map((group) => html`
-            <section class="shortcut-group">
-              <h3>${group.name}</h3>
-              <div class="shortcut-list">
+          ${groups.length === 0 ? html`<div class="loading-card ui-settings-path">No actions registered.</div>` : groups.map((group) => html`
+            <section class="shortcut-group ui-settings-section">
+              <div class="ui-settings-heading"><h3>${group.name}</h3></div>
+              <div class="shortcut-list ui-settings-list">
                 ${group.actions.map((action) => this.renderShortcutRow(action, shortcutResolutions.get(action.id)))}
               </div>
             </section>
@@ -148,7 +157,7 @@ export class SettingsShortcutsPanel extends LitElement {
     const conflictLabel = shortcutConflictLabel(resolution);
     const controlsDisabled = this.loading || this.saving || this.configResponse === undefined;
     return html`
-      <article class=${shortcutRowClass(resolution)}>
+      <article class=${`ui-settings-row ${shortcutRowClass(resolution)}`}>
         <div class="shortcut-main">
           <strong>${action.title}</strong>
           ${action.description !== undefined && action.description !== "" ? html`<small>${action.description}</small>` : null}
@@ -161,10 +170,10 @@ export class SettingsShortcutsPanel extends LitElement {
             <small class=${displayState}>${shortcutStateLabel(displayState)}${hasDraft ? " · Unsaved" : ""}</small>
             ${conflictLabel === undefined ? null : html`<small class=${shortcutConflictClass(resolution)}>${conflictLabel}</small>`}
           </div>
-          <label class="shortcut-input-label">
+          <label class="shortcut-input-label ui-form-field">
             <span>Shortcut</span>
             <input
-              class="shortcut-input"
+              class="shortcut-input ui-input"
               data-action-id=${action.id}
               aria-label=${`Shortcut for ${action.title}`}
               aria-describedby=${recordingHint !== "" ? `recording-${action.id}` : nothing}
@@ -178,11 +187,11 @@ export class SettingsShortcutsPanel extends LitElement {
             >
           </label>
           ${recordingHint !== "" ? html`<small class="recording-hint" id=${`recording-${action.id}`} role="status">${recordingHint}</small>` : null}
-          <div class="shortcut-actions">
-            <button class="primary" aria-label=${`Save shortcut for ${action.title}`} ?disabled=${controlsDisabled || !hasDraft || inputText.trim() === ""} @click=${() => { void this.saveShortcut(action); }}>Save</button>
-            <button aria-label=${`${this.recording?.actionId === action.id ? "Cancel recording" : "Record shortcut"} for ${action.title}`} ?disabled=${controlsDisabled} @click=${() => { void this.toggleRecording(action.id); }}>${this.recording?.actionId === action.id ? "Cancel recording" : "Record"}</button>
-            <button aria-label=${`Disable shortcut for ${action.title}`} ?disabled=${controlsDisabled || configured === null} @click=${() => { void this.setShortcutNone(action); }}>Disable shortcut</button>
-            <button aria-label=${`Restore default shortcut for ${action.title}`} ?disabled=${controlsDisabled || !hasConfiguredShortcut} @click=${() => { void this.resetShortcut(action); }}>Restore default</button>
+          <div class="shortcut-actions ui-settings-actions">
+            <button class="primary ui-button ui-button--action ui-button--primary" aria-label=${`Save shortcut for ${action.title}`} ?disabled=${controlsDisabled || !hasDraft || inputText.trim() === ""} @click=${() => { void this.saveShortcut(action); }}>Save</button>
+            <button class="ui-button ui-button--action" aria-label=${`${this.recording?.actionId === action.id ? "Cancel recording" : "Record shortcut"} for ${action.title}`} ?disabled=${controlsDisabled} @click=${() => { void this.toggleRecording(action.id); }}>${this.recording?.actionId === action.id ? "Cancel recording" : "Record"}</button>
+            <button class="ui-button ui-button--action" aria-label=${`Disable shortcut for ${action.title}`} ?disabled=${controlsDisabled || configured === null} @click=${() => { void this.setShortcutNone(action); }}>Disable shortcut</button>
+            <button class="ui-button ui-button--action" aria-label=${`Restore default shortcut for ${action.title}`} ?disabled=${controlsDisabled || !hasConfiguredShortcut} @click=${() => { void this.resetShortcut(action); }}>Restore default</button>
           </div>
         </div>
       </article>
@@ -337,47 +346,32 @@ export class SettingsShortcutsPanel extends LitElement {
     this.recordingListenerActive = false;
   }
 
-  static override styles = css`
+  static override styles = [uiButtonStyles, uiFormStyles, uiSettingsStyles, css`
     :host { display: block; }
     h3, p { margin: 0; }
-    h3 { font-size: 13px; line-height: 1.3; }
     p { color: var(--pi-muted); line-height: 1.45; }
-    button, input, select { font: inherit; }
-    select { border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-bg); color: var(--pi-text); padding: 8px 9px; }
-    select:disabled { opacity: .55; cursor: not-allowed; }
-    button { border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); color: var(--pi-text); padding: 7px 9px; cursor: pointer; }
-    button:disabled, input:disabled { opacity: .55; cursor: not-allowed; }
-    .primary { border-color: var(--pi-accent); background: var(--pi-selection-bg); color: var(--pi-text-bright); }
-    .loading-card, .config-path-card { border: 1px solid var(--pi-border); border-radius: 10px; background: var(--pi-surface); padding: 12px; }
-    .loading-card, .config-path-card { color: var(--pi-muted); }
-    .config-path-card { display: grid; gap: 5px; }
-    .config-path-card span { color: var(--pi-muted); font-size: 12px; font-weight: 700; text-transform: uppercase; }
-    code { border: 1px solid var(--pi-border-muted); border-radius: 5px; background: var(--pi-bg); padding: 1px 4px; color: var(--pi-text); font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+    .config-path-card span { color: var(--pi-muted); font-size: 12px; font-weight: 600; }
+    code { border: 1px solid var(--pi-border-muted); border-radius: 5px; background: var(--pi-bg); padding: 1px 4px; color: var(--pi-text); font: 12px var(--pi-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); overflow-wrap: anywhere; }
     .shortcut-group { margin: 0; }
-    .shortcut-group h3 { margin: 0 0 8px; color: var(--pi-muted); font-size: 12px; text-transform: uppercase; }
-    .shortcut-list { border: 1px solid var(--pi-border); border-radius: 10px; overflow: hidden; }
-    .shortcut-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 48%); gap: 14px; align-items: start; padding: 12px; border-bottom: 1px solid var(--pi-border-muted); background: var(--pi-surface); }
+    .shortcut-group:has(.shortcut-list) { padding: 0; gap: 0; }
+    .shortcut-group:has(.shortcut-list) > .ui-settings-heading { padding: 16px; background: var(--pi-surface); }
+    .shortcut-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 48%); align-items: start; }
     .shortcut-row.shadowed { background: color-mix(in srgb, var(--pi-warning) 5%, var(--pi-surface)); }
     .shortcut-row.shadowing { background: color-mix(in srgb, var(--pi-accent) 5%, var(--pi-surface)); }
     .shortcut-row:last-child { border-bottom: 0; }
     .shortcut-main { min-width: 0; display: grid; gap: 4px; }
-    .shortcut-main strong, .shortcut-main small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .shortcut-main strong, .shortcut-main small { overflow-wrap: anywhere; }
     .shortcut-main small { color: var(--pi-muted); }
-    .shortcut-id { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .shortcut-id { font-family: var(--pi-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); }
     .shortcut-editor { min-width: 0; display: grid; gap: 8px; }
     .shortcut-status { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
     .shortcut-status small { color: var(--pi-muted); font-size: 11px; }
     .shortcut-status small.custom { color: var(--pi-accent); }
     .shortcut-status small.disabled { color: var(--pi-warning); }
-    .shortcut-status small.conflict { border: 1px solid currentColor; border-radius: 999px; padding: 2px 7px; }
     .shortcut-status small.conflict.shadowing { color: var(--pi-accent); }
     .shortcut-status small.conflict.shadowed { color: var(--pi-warning); }
-    .shortcut-input-label { min-width: 0; display: grid; gap: 5px; }
-    .shortcut-input-label span { color: var(--pi-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; }
-    input { box-sizing: border-box; width: 100%; min-width: 0; border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-bg); color: var(--pi-text); padding: 8px 9px; outline: none; font: var(--pi-control-font-size, 16px) var(--pi-control-monospace-font-family, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); }
-    input:focus { border-color: var(--pi-accent); box-shadow: 0 0 0 1px var(--pi-accent-border); }
-    .shortcut-actions { display: flex; justify-content: flex-end; gap: 7px; flex-wrap: wrap; }
-    kbd { border: 1px solid var(--pi-border); border-radius: 6px; background: var(--pi-bg); color: var(--pi-text-secondary); padding: 3px 7px; font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; }
+    .shortcut-input { --ui-input-font-family: var(--pi-control-monospace-font-family, var(--pi-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace)); }
+    kbd { border: 1px solid var(--pi-border); border-radius: 6px; background: var(--pi-bg); color: var(--pi-text-secondary); padding: 3px 7px; font: 12px var(--pi-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); white-space: nowrap; }
     .unassigned { color: var(--pi-muted); font-size: 12px; }
     .recording-hint { color: var(--pi-accent); font-size: 12px; }
 
@@ -385,7 +379,7 @@ export class SettingsShortcutsPanel extends LitElement {
       .shortcut-row { grid-template-columns: minmax(0, 1fr); align-items: start; }
       .shortcut-status, .shortcut-actions { justify-content: flex-start; }
     }
-  `;
+  `];
 }
 
 interface RecordingState {

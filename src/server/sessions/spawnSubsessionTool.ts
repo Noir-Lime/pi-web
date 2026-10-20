@@ -138,6 +138,7 @@ const SpawnSubsessionParams = Type.Object({
     description: "Optional name for the child session, shown as a quoted name followed by (id) in spawn/list/check/read results and completion notices. Must be trimmed, non-empty, at most 60 characters, and contain no control characters (the ordinary session-naming rules). Duplicate names are allowed; the id remains the identity.",
   })),
   thinkingLevel: Type.Optional(Type.Enum(KNOWN_THINKING_LEVELS, {
+    type: "string",
     description: "Thinking level override for the child session. Set this field only when instructed to use a specific thinking level or to choose an appropriate one. Otherwise omit it to inherit this session's thinking level. An unknown value is rejected; valid levels are clamped to the selected model's capabilities.",
   })),
   prompt: Type.String({

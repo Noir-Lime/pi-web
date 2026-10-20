@@ -1,10 +1,26 @@
-import type { ChatLine, ChatPart } from "./components/shared";
+import type { ChatLine, ChatPart } from "./chatTypes";
 
 export type ChatGroup =
   | { kind: "message"; message: ChatLine; index: number }
   | { kind: "tool-image"; message: ChatLine; index: number; toolName?: string }
   // Members keep their source indexes even when invisible entries are skipped.
   | { kind: "group"; messages: { message: ChatLine; index: number }[]; startIndex: number; endIndex: number };
+
+export type ChatToolImageOutput = Extract<ChatGroup, { kind: "tool-image" }>;
+export type ChatDisplayGroup = Exclude<ChatGroup, ChatToolImageOutput>
+  | { kind: "tool-images"; outputs: [ChatToolImageOutput, ...ChatToolImageOutput[]] };
+
+/** Combine only adjoining image outputs; conversation and activity remain boundaries. */
+export function groupConsecutiveImageOutputs(groups: readonly ChatGroup[]): ChatDisplayGroup[] {
+  const result: ChatDisplayGroup[] = [];
+  for (const group of groups) {
+    if (group.kind !== "tool-image") { result.push(group); continue; }
+    const previous = result.at(-1);
+    if (previous?.kind === "tool-images") previous.outputs.push(group);
+    else result.push({ kind: "tool-images", outputs: [group] });
+  }
+  return result;
+}
 
 export function groupChatMessages(messages: ChatLine[], indexOffset = 0): ChatGroup[] {
   const groups: ChatGroup[] = [];
@@ -30,11 +46,13 @@ export function groupChatMessages(messages: ChatLine[], indexOffset = 0): ChatGr
 
     const absoluteIndex = indexOffset + index;
     const metadata = { ...(message.entryId === undefined ? {} : { entryId: message.entryId }), ...(message.source === undefined ? {} : { source: message.source }), ...(message.meta === undefined ? {} : { meta: message.meta }) };
-    if (technicalParts.length) pushEvent({ role: message.role, parts: technicalParts, ...metadata }, absoluteIndex);
+    if (technicalParts.length) {
+      const role = technicalParts.every((part) => part.type === "skillRead") ? "skill" : message.role;
+      pushEvent({ role, parts: technicalParts, ...metadata }, absoluteIndex);
+    }
     if (readableParts.length) {
       flushEvents();
-      const role = readableParts.every((part) => part.type === "skillRead") ? "skill" : message.role;
-      const readableMessage = { role, parts: readableParts, ...metadata };
+      const readableMessage = { role: message.role, parts: readableParts, ...metadata };
       if (isToolImageMessage(readableMessage)) {
         const toolName = toolNameFromParts(technicalParts);
         groups.push({ kind: "tool-image", message: readableMessage, index: absoluteIndex, ...(toolName === undefined ? {} : { toolName }) });
@@ -51,7 +69,7 @@ export function groupChatMessages(messages: ChatLine[], indexOffset = 0): ChatGr
 export function chatMessageHasHeader(message: ChatLine): boolean {
   return !(message.parts.length > 0 && (
     (message.role === "tool" && message.parts.every((part) => part.type === "toolExecution"))
-    || message.parts.every((part) => part.type === "askUserQuestion" || part.type === "askUserRecord")
+    || message.parts.every((part) => part.type === "askUserRecord")
   ));
 }
 
@@ -97,6 +115,6 @@ function toolNameFromParts(parts: ChatPart[]): string | undefined {
 
 function isReadablePart(message: ChatLine, part: ChatPart): boolean {
   if (message.source === "compaction" || message.source === "branch_summary") return false;
-  if (part.type === "skillInvocation" || part.type === "skillRead" || part.type === "image" || part.type === "askUserQuestion" || part.type === "askUserRecord") return true;
+  if (part.type === "skillInvocation" || part.type === "image" || part.type === "askUserQuestion" || part.type === "askUserRecord") return true;
   return part.type === "text" && (message.role === "user" || message.role === "assistant" || message.role === "system" || message.role === "bash");
 }

@@ -13,6 +13,7 @@ beforeEach(() => {
   // The dialog loads gateway and selected-machine settings data when it
   // connects; stub those boundary calls so the shell tests stay deterministic.
   vi.spyOn(configApi, "config").mockResolvedValue(configResponse({}));
+  vi.spyOn(configApi, "namingModels").mockResolvedValue({ models: [] });
   vi.spyOn(pluginsApi, "plugins").mockResolvedValue(pluginsResponse([]));
   vi.spyOn(piPackagesApi, "packages").mockResolvedValue({ packages: [] });
 });
@@ -40,7 +41,7 @@ describe("settings-dialog modal surface", () => {
     expect(plugins?.savedMessage).toBe("");
     dialog.section = "sessiond";
     await dialog.updateComplete;
-    expect(dialog.shadowRoot?.querySelector<SettingsSessiondPanel>("settings-sessiond-panel")?.savedMessage).toContain("Agent permissions saved");
+    expect(dialog.shadowRoot?.querySelector<SettingsSessiondPanel>("settings-sessiond-panel")?.savedMessage).toContain("Session daemon settings saved");
   });
 
   it("preserves an unsaved gateway edit when switching settings sections", async () => {

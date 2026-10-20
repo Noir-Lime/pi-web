@@ -56,8 +56,8 @@ export function createContentRenderingService(select: SelectRenderer): ChatConte
     if (request.truncated === true || request.text.length > MAX_CONTENT_RENDERER_LENGTH) return [];
     return select(request);
   };
-  const host = (text: string, choices: readonly ContentRendererChoice[], externalControls = false, rendererId?: string, allowManualPreview = false, intentKey?: string, sourcePolicy?: CodeBlockSourcePolicy): TemplateResult => html`<pi-web-content-renderer
-    .codeBlocks=${sourcePolicy} .intentKey=${intentKey} .externalControls=${externalControls} .text=${text} .choices=${choices} .rendererId=${rendererId} .allowManualPreview=${allowManualPreview}
+  const host = (request: ContentRenderRequest, choices: readonly ContentRendererChoice[], externalControls = false, rendererId?: string, allowManualPreview = false, intentKey?: string, sourcePolicy?: CodeBlockSourcePolicy): TemplateResult => html`<pi-web-content-renderer
+    .codeBlocks=${sourcePolicy} .intentKey=${intentKey} .externalControls=${externalControls} .text=${request.text} .machineId=${request.machineId} .language=${request.language} .filePath=${request.filePath} .choices=${choices} .rendererId=${rendererId} .allowManualPreview=${allowManualPreview}
   ></pi-web-content-renderer>`;
 
   const renderMarkdown = (request: ContentMarkdownRenderRequest, identity?: string, sourcePolicy?: CodeBlockSourcePolicy): TemplateResult => {
@@ -84,7 +84,7 @@ export function createContentRenderingService(select: SelectRenderer): ChatConte
         if (selected.length > 0) {
           // Replace the whole source block, including its optional copy controls.
           const root = block.parentElement?.classList.contains("code-block-wrapper") === true ? block.parentElement : block;
-          hosts.set(root, host(text, selected, false, undefined, request.allowManualPreview, intentKey, sourcePolicy));
+          hosts.set(root, host({ machineId: request.machineId, text, ...(token.lang === undefined ? {} : { language: token.lang }) }, selected, false, undefined, request.allowManualPreview, intentKey, sourcePolicy));
         }
       });
 
@@ -109,17 +109,19 @@ export function createContentRenderingService(select: SelectRenderer): ChatConte
   };
   const capability: ContentRenderingCapability = Object.freeze({
     listRenderers(request: ContentRenderRequest) {
-      return selection(request).map(({ id, label, renderer }) => ({ id, label, renderMode: renderer.renderMode ?? "manual" }));
+      return selection(request).map(({ id, label, renderer }) => ({ id, label, renderMode: renderer.renderMode ?? "manual",
+        ...(renderer.title === undefined ? {} : { title: renderer.title }),
+      }));
     },
     renderText(request: ContentTextRenderRequest): TemplateResult | undefined {
       const selected = selection(request);
       const external = request.controls === "external";
-      return selected.length === 0 ? undefined : host(request.text, selected, external, external ? request.rendererId : undefined, request.allowManualPreview);
+      return selected.length === 0 ? undefined : host(request, selected, external, external ? request.rendererId : undefined, request.allowManualPreview);
     },
     // Plain templates cross Lit copies, but directive instances do not (notably
     // the dev host's unsafeHTML/ref inside the production-bundled Files plugin).
     renderMarkdown: (request: ContentMarkdownRenderRequest) => html`<pi-web-content-rendering-boundary
-      style="display: contents" .content=${renderMarkdown(request)}
+      style="display: contents" .source=${request.text} .renderContent=${() => renderMarkdown(request)}
     ></pi-web-content-rendering-boundary>`,
   });
   return { capability, renderMarkdown };

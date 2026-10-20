@@ -76,7 +76,7 @@ describe("plugin delivery artifacts", () => {
     expect(packagedFiles).toEqual(expect.arrayContaining([
       "dist/cli.js", "dist/server/app.js", "dist/server/index.js", "dist/server/sessiond.js",
       "dist/plugin-api.d.ts", "dist/server-plugin-api.d.ts", "dist/server-plugin-api.js",
-      "dist/shared/pluginApiTypes.d.ts",
+      "dist/shared/pluginApiTypes.d.ts", "dist/shared/pluginCatalogTypes.d.ts", "dist/shared/pluginCatalogTypes.js",
       "plugin-api.d.ts", "server-plugin-api.d.ts", "dist/client/index.html",
       "examples/session-bridge-plugin/package.json",
       "dist/pi-web-plugins/git/workspace-discovery-notify.cjs",
@@ -111,6 +111,8 @@ describe("plugin delivery artifacts", () => {
     expect(builtPackageFiles).toEqual(expect.arrayContaining([
       "dist/pi-packages/workflows/package.json",
       "dist/pi-packages/workflows/browser/pi-web-plugin.js",
+      "dist/pi-packages/workflows/browser/worktreeDialog.js",
+      "dist/pi-packages/workflows/server-plugin.js",
       "dist/pi-packages/workflows/prompts/worktree.md",
     ]));
     // Check the materialized build output, not words in agent instructions.
@@ -172,13 +174,33 @@ describe("plugin delivery artifacts", () => {
       browserRoot: expect.objectContaining({ path: "browser" }),
     })]);
     const browserModule = snapshot.plugins[0].browserModule.filePath;
-    expect(moduleSpecifiers(await readFile(browserModule, "utf8"))).toEqual([]);
-    expect((await import(pathToFileURL(browserModule).href)).default.name).toBe("Workflows");
+    expect(moduleSpecifiers(await readFile(browserModule, "utf8"))).toEqual(["./worktreeDialog.js"]);
+    expect((await import(pathToFileURL(browserModule).href)).default).toMatchObject({ name: "Workflows", apiVersion: 5 });
+    const serverModule = join(source, metadata.piWeb.plugins[0].serverModule);
+    expect(moduleSpecifiers(await readFile(serverModule, "utf8"))).toEqual([]);
+    expect((await import(pathToFileURL(serverModule).href)).default).toMatchObject({ name: "Workflows", apiVersion: 5 });
     enabled = false;
     expect((await catalog.snapshot()).plugins[0].enabled).toBe(false);
     // Disabling web contributions leaves Pi prompt resources installed.
     await loader.reload();
     expect(loader.getPrompts().prompts.map(({ name }) => name)).toEqual(["worktree"]);
+  });
+
+  it("ships Code highlighting as a self-contained, enabled portable browser plugin", async () => {
+    const target = join(repoRoot, "dist/pi-web-plugins/code-highlight");
+    expect(await recursiveFiles(target)).toEqual(["browser/pi-web-plugin.js", "package.json"]);
+    const entry = await readFile(join(target, "browser/pi-web-plugin.js"), "utf8");
+    expect(moduleSpecifiers(entry)).toEqual([]);
+    expect(Buffer.byteLength(entry)).toBeLessThan(PI_WEB_PLUGIN_ARTIFACT_MAX_BYTES);
+    const catalog = new PiWebPluginCatalog({
+      roots: [{ path: join(repoRoot, "dist/pi-web-plugins"), source: "bundled", scope: "bundled" }],
+      packageProvider: { listPackages: () => [], getInstalledPath: () => undefined },
+    });
+    const snapshot = await catalog.snapshot();
+    expect(snapshot.diagnostics).toEqual([]);
+    expect(snapshot.plugins).toContainEqual(expect.objectContaining({
+      id: "code-highlight", enabled: true, machineSpecific: false,
+    }));
   });
 
   describe("Mermaid browser package build", () => {

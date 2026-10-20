@@ -58,7 +58,7 @@ export class WorkspaceController {
 
   clearSelection(options?: { updateUrl?: boolean | undefined }) {
     this.sessions.clearActiveSession();
-    this.setState({ selectedProject: undefined, selectedWorkspace: undefined, workspaces: [], isLoadingWorkspaces: false, ...resetWorkspaceScopedState() });
+    this.setState({ selectedProject: undefined, workspaceResolution: undefined, selectedWorkspace: undefined, workspaces: [], isLoadingWorkspaces: false, ...resetWorkspaceScopedState() });
     if (options?.updateUrl !== false) this.updateUrl();
   }
 
@@ -76,15 +76,17 @@ export class WorkspaceController {
     const machineId = selectedMachineId(this.getState());
     const errorScope = projectBrowserErrorScope(machineId, project.id);
     this.sessions.clearActiveSession();
-    this.setState({ selectedProject: project, selectedWorkspace: undefined, workspaces: [], isLoadingWorkspaces: true, ...resetWorkspaceScopedState() });
+    this.setState({ selectedProject: project, workspaceResolution: undefined, selectedWorkspace: undefined, workspaces: [], isLoadingWorkspaces: true, ...resetWorkspaceScopedState() });
     const listRequestIsCurrent = this.beginWorkspaceListRequest(project.id, machineId);
     try {
-      const workspaces = await this.api.workspaces(project.id, machineId);
+      const resolution = await this.api.workspaceResolution(project.id, machineId);
+      const workspaces = [...resolution.workspaces];
       if (!listRequestIsCurrent()
         || !this.navigationIsCurrent(navigation)
         || selectedMachineId(this.getState()) !== machineId
         || this.getState().selectedProject?.id !== project.id) return;
-      this.setState({ workspaces, workspacesByProjectId: { ...this.getState().workspacesByProjectId, [project.id]: workspaces }, isLoadingWorkspaces: false });
+      this.setState({ workspaceResolution: resolution, workspaces, workspacesByProjectId: { ...this.getState().workspacesByProjectId, [project.id]: workspaces }, isLoadingWorkspaces: false });
+      if (resolution.status === "degraded") throw new Error(resolution.diagnostics.map(({ message }) => message).join("; ") || "Workspace authority is degraded");
       const workspace = selectPreferredWorkspace(workspaces, { targetWorkspaceId: target?.workspaceId, latestWorkspaceId: this.workspaceSelection.latestWorkspaceId(machineProjectKey(machineId, project.id)) });
       if (workspace) {
         return await this.selectWorkspace(workspace, { sessionId: target?.sessionId, updateUrl: target?.updateUrl, navigation });
@@ -126,7 +128,7 @@ export class WorkspaceController {
       this.setState({ sessions });
       const session = this.sessions.preferredSession(workspace.path, sessions, target?.sessionId);
       if (!this.navigationIsCurrent(navigation) || !workspaceMutationIsCurrent(target)) return;
-      if (session) await this.sessions.selectSession(session, { updateUrl: target?.updateUrl, ...(navigation === undefined ? {} : { navigation }) });
+      if (session) await this.sessions.selectSession(session, { deferChatLoading: true, updateUrl: target?.updateUrl, ...(navigation === undefined ? {} : { navigation }) });
       else if (target?.sessionId !== undefined && target.sessionId !== "") {
         this.browserErrors.report(errorScope, `Session not found: ${target.sessionId}`);
         return `Session not found: ${target.sessionId}`;
@@ -157,10 +159,13 @@ export class WorkspaceController {
     const project = this.getState().projects.find((candidate) => candidate.id === projectId);
     if (project === undefined) throw new Error("Project not found");
     const isCurrent = this.beginWorkspaceListRequest(projectId, machineId);
-    const workspaces = options?.signal === undefined
-      ? await this.api.workspaces(project.id, machineId)
-      : await this.api.workspaces(project.id, machineId, { signal: options.signal });
+    const resolution = options?.signal === undefined
+      ? await this.api.workspaceResolution(project.id, machineId)
+      : await this.api.workspaceResolution(project.id, machineId, { signal: options.signal });
+    const workspaces = [...resolution.workspaces];
     if (isCurrent() && workspaceMutationIsCurrent(options) && selectedMachineId(this.getState()) === machineId) {
+      if (this.getState().selectedProject?.id === project.id) this.setState({ workspaceResolution: resolution });
+      if (resolution.status === "degraded") throw new Error(resolution.diagnostics.map(({ message }) => message).join("; ") || "Workspace authority is degraded");
       this.applyProjectWorkspaces(project.id, workspaces);
     }
     return { workspaces, isCurrent };
@@ -196,6 +201,7 @@ export class WorkspaceController {
         const resolution = await this.api.workspaceResolution(project.id, machineId);
         const current = this.getState();
         if (!listRequestIsCurrent() || selectedMachineId(current) !== machineId || current.selectedProject?.id !== project.id) return;
+        this.setState({ workspaceResolution: resolution });
         // A provider outage is not evidence of removal. Automatic hints and
         // reconnects must not replace a previously healthy topology with fallback.
         if (resolution.status === "degraded") {

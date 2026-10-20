@@ -6,11 +6,12 @@ import { markCachedNewSessionInfo } from "../cachedNewSessions";
 import { machineScopedPluginId } from "../../../shared/machinePluginIds";
 import { corePlugin } from "./core";
 import { PluginRegistry, installWorkspaceLabelScope, installWorkspacePanelScope } from "./registry";
-import { themePackPlugin } from "./themes";
-import type { PiWebPlugin, PluginActivationResult, PluginCapability, PluginRuntimeContext, QualifiedContributionId, ThemeTokens, WorkspaceFiles, WorkspaceHost, WorkspaceInvalidation, WorkspaceLabelContext, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePanelContribution, WorkspacePluginBinding } from "./types";
+import type { PiWebPlugin, PluginActivationResult, PluginCapability, PluginRuntimeContext, QualifiedContributionId, WorkspaceFiles, WorkspaceHost, WorkspaceInvalidation, WorkspaceLabelContext, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePanelContribution, WorkspacePluginBinding } from "./types";
 import { createPluginPeer } from "./pluginPeer";
 import { adaptPublicPlugin, publicPluginState } from "./publicContext";
 import type { PluginBackendRequestTarget } from "../api/pluginBackends";
+import type { PluginCapability as PublicPluginCapability, StylesheetIntegrationCapabilityV1 } from "../../../plugin-api";
+import { stylesheetIntegrationCapability, stylesheetIntegrationCapabilityToken } from "./styles";
 
 it("resolves file-opening panels by availability, applicability, order and scoped context", async () => {
   let enabled = true;
@@ -48,6 +49,7 @@ function createContext(statePatch: Partial<AppState> = {}) {
     },
     piWebUnstable: {
       openSettings: vi.fn(() => { calls.push("openSettings"); }),
+      openMcpAuth: vi.fn((mode: "login" | "logout") => { calls.push(`openMcpAuth:${mode}`); }),
     },
     openActionPalette: vi.fn(() => { calls.push("openActionPalette"); }),
     focusPrompt: vi.fn(() => { calls.push("focusPrompt"); }),
@@ -77,6 +79,125 @@ function createContext(statePatch: Partial<AppState> = {}) {
   };
   return { context, calls };
 }
+
+describe("PluginRegistry v5 host services", () => {
+  it("activates matching versions and warns once per legacy source plugin", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const activate = vi.fn((context: import("./types").PluginActivationContext) => {
+      expect(context.signal).toBeInstanceOf(AbortSignal);
+      return { contributions: {} };
+    });
+    const registry = new PluginRegistry();
+    try {
+      await registry.register({ id: "old-local", sourcePluginId: "old", plugin: { apiVersion: 4, name: "Old", activate } });
+      await registry.register({ id: "old-remote", sourcePluginId: "old", machineId: "remote", plugin: { apiVersion: 4, name: "Old", activate } });
+      await registry.register({ id: "modern", plugin: { apiVersion: 5, name: "Modern", activate } });
+      expect(activate.mock.calls.map(([context]) => context.apiVersion)).toEqual([4, 4, 5]);
+      expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("deprecated API v4"));
+      expect(activate.mock.calls[2]?.[0]).not.toHaveProperty("catalog");
+    } finally {
+      await registry.dispose();
+      warn.mockRestore();
+    }
+  });
+
+  it("captures portable action catalogs per invocation across selection changes without a backend", async () => {
+    const registry = new PluginRegistry();
+    const captured: PluginRuntimeContext[] = [];
+    await registry.register({ id: "portable", backendRevision: "revision", pairedRequestVersion: 1, plugin: {
+      apiVersion: 5, name: "Portable", activate: () => ({ contributions: {
+        actions: [{ id: "run", title: "Run", run: (context) => { captured.push(context); } }],
+      } }),
+    } });
+    const context = createContext().context;
+    await registry.getActions(context)[0]?.run();
+    context.state = { ...context.state, selectedMachine: { id: "remote", name: "Remote", kind: "remote", baseUrl: "https://remote.test", createdAt: "now", updatedAt: "now" } };
+    await registry.getActions(context)[0]?.run();
+    expect(captured.map((value) => value.catalog?.machineId)).toEqual(["local", "remote"]);
+    expect(captured.every((value) => value.backend === undefined)).toBe(true);
+    expect(context).not.toHaveProperty("catalog");
+    await registry.dispose();
+  });
+
+  it("uses the scoped callback machine rather than selected machine and binds backend ownership", async () => {
+    const registry = new PluginRegistry();
+    const render = vi.fn((context: WorkspacePanelContext) => html`${context.machine.id}`);
+    for (const [id, machineId, machineSpecific] of [["portable", undefined, false], ["local", undefined, true], ["remote", "remote", false]] as const) {
+      await registry.register({ id, ...(machineId === undefined ? {} : { machineId }), machineSpecific,
+        backendRevision: "revision", pairedRequestVersion: 1,
+        plugin: { apiVersion: 5, name: id, activate: () => ({ contributions: { workspacePanels: [{ id: "panel", title: "Panel", render }] } }) },
+      });
+    }
+    const context = createWorkspacePanelContext("remote");
+    // The local machine-specific panel stays hidden; portable and remote panels receive remote context.
+    for (const panel of registry.getWorkspacePanels()) panel.render(context);
+    const received = render.mock.calls.map(([value]) => value);
+    expect(received.map((value) => value.catalog?.machineId)).toEqual(["remote", "remote"]);
+    expect(received.map((value) => value.backend?.machineId)).toEqual([undefined, "remote"]);
+    expect(context).not.toHaveProperty("catalog");
+    await registry.dispose();
+  });
+});
+
+describe("PluginRegistry stylesheet integration capability", () => {
+  const request: PublicPluginCapability<StylesheetIntegrationCapabilityV1> = {
+    pluginId: "pi-web", id: "stylesheet-integration", version: 1,
+    parse: stylesheetIntegrationCapabilityToken.parse,
+  };
+
+  it("supplies host-managed styling through the public requirement during start", async () => {
+    const registry = new PluginRegistry();
+    const start = vi.fn((context: import("../../../plugin-api").PluginStartContext) => {
+      expect(context.capabilities.resolve(request)).toBe(stylesheetIntegrationCapability);
+      expect(() => context.capabilities.resolve({ ...request, version: 2 })).toThrow("did not declare required capability pi-web/stylesheet-integration v2");
+    });
+    try {
+      await registry.register({ id: "external-styles", plugin: adaptPublicPlugin({
+        apiVersion: 5, name: "External styles", requires: [request],
+        activate: () => ({ contributions: {}, start }),
+      }) });
+      expect(start).toHaveBeenCalledOnce();
+    } finally {
+      await registry.dispose();
+    }
+  });
+
+  it("rejects an unavailable integration version before start", async () => {
+    const registry = new PluginRegistry();
+    const start = vi.fn();
+    try {
+      await expect(registry.register({ id: "external-styles", plugin: adaptPublicPlugin({
+        apiVersion: 5, name: "External styles", requires: [{ ...request, version: 2 }],
+        activate: () => ({ contributions: {}, start }),
+      }) })).rejects.toThrow("requires unavailable capability pi-web/stylesheet-integration v2");
+      expect(start).not.toHaveBeenCalled();
+    } finally {
+      await registry.dispose();
+    }
+  });
+
+  it("does not resolve styling without a declared requirement", async () => {
+    const registry = new PluginRegistry();
+    const start = vi.fn((context: import("../../../plugin-api").PluginStartContext) => {
+      expect(() => context.capabilities.resolve(request)).toThrow("did not declare required capability pi-web/stylesheet-integration v1");
+    });
+    try {
+      await registry.register({ id: "external-styles", plugin: adaptPublicPlugin({
+        apiVersion: 5, name: "External styles", activate: () => ({ contributions: {}, start }),
+      }) });
+      expect(start).toHaveBeenCalledOnce();
+    } finally {
+      await registry.dispose();
+    }
+  });
+
+  it("validates the host integration value", () => {
+    expect(stylesheetIntegrationCapabilityToken.parse(stylesheetIntegrationCapability)).toBe(stylesheetIntegrationCapability);
+    for (const value of [undefined, null, "css", {}, { registerRoot: 1 }]) {
+      expect(() => stylesheetIntegrationCapabilityToken.parse(value)).toThrow("Stylesheet integration capability v1 is unavailable");
+    }
+  });
+});
 
 describe("PluginRegistry", () => {
   it("projects selected-session state for external action checks and execution", async () => {
@@ -127,7 +248,7 @@ describe("PluginRegistry", () => {
           render: panelRender,
         }],
         workspaceLabels: [{ id: "label", items: labelItems }],
-        themes: [{ id: "light", name: "Light", colorScheme: "light", tokens: testThemeTokens() }],
+        themes: [{ id: "light", name: "Light", colorScheme: "light" }],
         themePairs: [{ id: "pair", name: "Pair", light: "light", dark: "light" }],
       },
     }));
@@ -190,7 +311,7 @@ describe("PluginRegistry", () => {
               render: () => html`<p>Portable</p>`,
             }],
             workspaceLabels: [{ id: "label", items: () => [{ type: "text", text: "portable" }] }],
-            themes: [{ id: "theme", name: "Portable", colorScheme: "light", tokens: testThemeTokens() }],
+            themes: [{ id: "theme", name: "Portable", colorScheme: "light" }],
           },
         }),
       },
@@ -232,7 +353,7 @@ describe("PluginRegistry", () => {
     Reflect.set(legacyPlugin, "apiVersion", 3);
 
     await expect(registry.register({ id: "legacy", plugin: legacyPlugin })).rejects.toThrow(
-      "Unsupported browser plugin API version for legacy: 3 (expected 4)",
+      "Unsupported browser plugin API version for legacy: 3 (expected 4 or 5)",
     );
     expect(registry.hasPlugin("legacy")).toBe(false);
   });
@@ -1357,6 +1478,23 @@ describe("PluginRegistry", () => {
     expect(calls).toEqual(["openModelPicker", "openThinkingLevelPicker"]);
   });
 
+  it("offers separate MCP actions requiring a selected nonarchived session", async () => {
+    const registry = new PluginRegistry();
+    await registry.register({ id: "core", plugin: corePlugin });
+    const unavailable = registry.getActions(createContext().context);
+    expect(unavailable.find((action) => action.id === "core:mcp.login")?.enabled).toBe(false);
+    const archived = registry.getActions(createContext({ selectedSession: { ...testSession(), archived: true } }).context);
+    expect(archived.find((action) => action.id === "core:mcp.logout")?.enabled).toBe(false);
+    const { context, calls } = createContext({ selectedSession: testSession() });
+    const actions = registry.getActions(context);
+    expect(actions.find((action) => action.id === "core:mcp.login")).toMatchObject({ title: "MCP login", enabled: true });
+    expect(actions.find((action) => action.id === "core:mcp.logout")).toMatchObject({ title: "MCP logout", enabled: true });
+    await actions.find((action) => action.id === "core:mcp.login")?.run();
+    await actions.find((action) => action.id === "core:mcp.logout")?.run();
+    expect(calls).toEqual(["openMcpAuth:login", "openMcpAuth:logout"]);
+    await registry.dispose();
+  });
+
   it("routes app reload and settings actions through the runtime context", async () => {
     const registry = new PluginRegistry();
     await registry.register({ id: "core", plugin: corePlugin });
@@ -1388,20 +1526,6 @@ describe("PluginRegistry", () => {
     expect(new Set(shortcuts.map(([, shortcut]) => shortcut)).size).toBe(shortcuts.length);
   });
 
-  it("collects built-in PI WEB themes from an in-app plugin", async () => {
-    const registry = new PluginRegistry();
-    await registry.register({ id: "themes", plugin: themePackPlugin });
-
-    expect(registry.getThemes().map((theme) => ({ id: theme.id, colorScheme: theme.colorScheme }))).toEqual([
-      { id: "themes:pi-web-dark", colorScheme: "dark" },
-      { id: "themes:pi-web-light", colorScheme: "light" },
-      { id: "themes:classic", colorScheme: "dark" },
-    ]);
-    expect(registry.getThemePairs().map((pair) => ({ id: pair.id, light: pair.light, dark: pair.dark }))).toEqual([
-      { id: "themes:pi-web", light: "themes:pi-web-light", dark: "themes:pi-web-dark" },
-    ]);
-  });
-
   it("collects theme contributions in contribution order", async () => {
     const registry = new PluginRegistry();
     await registry.register({
@@ -1412,8 +1536,8 @@ describe("PluginRegistry", () => {
         activate: () => ({
           contributions: {
             themes: [
-              { id: "last", name: "Last", order: 20, colorScheme: "dark", tokens: testThemeTokens() },
-              { id: "first", name: "First", order: 10, colorScheme: "light", tokens: testThemeTokens() },
+              { id: "last", name: "Last", order: 20, colorScheme: "dark" },
+              { id: "first", name: "First", order: 10, colorScheme: "light" },
             ],
             themePairs: [
               { id: "pair", name: "Pair", light: "first", dark: "last" },
@@ -1507,7 +1631,7 @@ describe("PluginRegistry", () => {
             actions: [{ id: "do-thing", title: "Do Thing", run: () => undefined }],
             workspacePanels: [{ id: "workspace.tools", title: "Tools", render: () => html`<p>Tools</p>` }],
             workspaceLabels: [{ id: "badge", items: () => [{ type: "text", text: "remote" }] }],
-            themes: [{ id: "remote-theme", name: "Remote Theme", colorScheme: "dark", tokens: testThemeTokens() }],
+            themes: [{ id: "remote-theme", name: "Remote Theme", colorScheme: "dark" }],
           },
         }),
       },
@@ -1947,45 +2071,5 @@ function lifecyclePlugin(
     name,
     ...(requires === undefined ? {} : { requires }),
     activate: () => ({ contributions: {}, ...activation }),
-  };
-}
-
-function testThemeTokens(): ThemeTokens {
-  return {
-    "--pi-bg": "#000000",
-    "--pi-surface": "#000000",
-    "--pi-surface-hover": "#000000",
-    "--pi-terminal-bg": "#000000",
-    "--pi-terminal-text": "#000000",
-    "--pi-border": "#000000",
-    "--pi-border-muted": "#000000",
-    "--pi-text": "#000000",
-    "--pi-text-secondary": "#000000",
-    "--pi-text-bright": "#000000",
-    "--pi-muted": "#000000",
-    "--pi-dim": "#000000",
-    "--pi-accent": "#000000",
-    "--pi-accent-border": "#000000",
-    "--pi-selection-bg": "#000000",
-    "--pi-success": "#000000",
-    "--pi-success-border": "#000000",
-    "--pi-success-bg": "#000000",
-    "--pi-success-surface": "#000000",
-    "--pi-success-ring": "#000000",
-    "--pi-warning": "#000000",
-    "--pi-warning-border": "#000000",
-    "--pi-warning-surface": "#000000",
-    "--pi-danger": "#000000",
-    "--pi-purple": "#000000",
-    "--pi-purple-border": "#000000",
-    "--pi-purple-surface": "#000000",
-    "--pi-overlay": "#000000",
-    "--pi-shadow-soft": "#000000",
-    "--pi-shadow": "#000000",
-    "--pi-shadow-strong": "#000000",
-    "--pi-bg-overlay-soft": "#000000",
-    "--pi-bg-overlay": "#000000",
-    "--pi-success-bg-overlay": "#000000",
-    "--pi-terminal-selection": "#000000",
   };
 }

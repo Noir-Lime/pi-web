@@ -159,6 +159,22 @@ it("restores an empty live composer without confirming or waiting for history", 
   expect(view.shadowRoot?.querySelector(".suggested-input")).toBeNull();
 });
 
+it("going back to an assistant message preserves the draft without a replacement warning", async () => {
+  const { editor, view, navigateTree, transcriptSnapshot } = await setupComposerChat("unsent draft", "assistant");
+  navigateTree.mockResolvedValue({ cancelled: false });
+  const confirm = vi.fn(() => false);
+  vi.stubGlobal("confirm", confirm);
+  click(view, "Go back to this message");
+  await vi.waitFor(() => {
+    expect(navigateTree).toHaveBeenCalledOnce();
+    expect(transcriptSnapshot).toHaveBeenCalledOnce();
+    expect(editor.disabled).toBe(false);
+  });
+  expect(confirm).not.toHaveBeenCalled();
+  expect(editor.view?.state.doc.toString()).toBe("unsent draft");
+  expect(loadDraft(machineSessionKey("local", session.id))).toBe("unsent draft");
+});
+
 it("cancelling replacement leaves the live draft and history unchanged", async () => {
   const { editor, view, runCommand, navigateTree } = await setupComposerChat("unsent draft");
   const confirm = vi.fn(() => false);
@@ -254,12 +270,12 @@ it.each([false, true])("locks the composer during queue recall and warns only fo
   await vi.waitFor(() => { expect(editor.disabled).toBe(false); });
 });
 
-async function setupComposerChat(draft: string) {
+async function setupComposerChat(draft: string, role: "user" | "assistant" = "user") {
   const context = await setupChat([
-    { role: "user", entryId: "entry-1", parts: [{ type: "text", text: "Hello" }] },
+    { role, entryId: "entry-1", parts: [{ type: "text", text: "Hello" }] },
   ], new MessageActionApp());
   const runCommand = vi.fn<typeof api.runCommand>(() => Promise.resolve({ type: "tree", tree: {
-    nodes: [{ id: "entry-1", parentId: null, kind: "user", summary: "Hello" }], activeLeafId: "entry-1", activePathIds: ["entry-1"],
+    nodes: [{ id: "entry-1", parentId: null, kind: role, summary: "Hello" }], activeLeafId: "entry-1", activePathIds: ["entry-1"],
   } }));
   const navigateTree = vi.fn<typeof api.navigateTree>(() => Promise.resolve({ cancelled: false, editorText: "Hello" }));
   const transcriptSnapshot = vi.fn<typeof api.transcriptSnapshot>(freshTranscript);

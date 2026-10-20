@@ -63,7 +63,7 @@ describe("browser message projection", () => {
   it("projects images in pages, snapshot partials, and every image-carrying event without URLs or mutation", () => {
     const data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=";
     const image = Object.freeze({ type: "image", data, mimeType: "image/png" });
-    const message = { role: "assistant", content: [...signedAssistantMessage().content, image] };
+    const message = { role: "assistant", streamId: "stream-1", content: [...signedAssistantMessage().content, image] };
     const original = structuredClone(message);
     const index = new SessionMediaIndex();
     const images = (block: Record<string, unknown>) => index.reference({ id: "s1", cwd: "/workspace" }, block);
@@ -71,7 +71,7 @@ describe("browser message projection", () => {
     const projectedMessage = { ...message, content: [{ type: "thinking", thinking: "private chain", redacted: true }, ...message.content.slice(1, -1), reference] };
     const page = { messages: [message], start: 0, total: 1 };
     expect(projectBrowserMessageResponse(page, images)).toEqual({ ...page, messages: [projectedMessage] });
-    for (const type of ["message.append", "message.end"] as const) {
+    for (const type of ["assistant.start", "message.append", "message.end"] as const) {
       expect(projectBrowserSessionEvent({ type, message }, images)).toEqual({ type, message: projectedMessage });
     }
     for (const type of ["tool.update", "tool.end"] as const) {

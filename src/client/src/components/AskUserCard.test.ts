@@ -82,7 +82,7 @@ describe("ask-user-card live form", () => {
     const textarea = requiredElement(root.querySelector("textarea"), "custom textarea");
     const label = requiredElement(textarea.closest("label"), "custom label");
     expect(label.textContent).toContain("Custom answer");
-    expect(getComputedStyle(textarea).fontSize).toBe("16px");
+    expect(textarea.classList.contains("ui-input")).toBe(true);
     expect(root.activeElement).toBe(textarea);
 
     textarea.value = "Svelte";
@@ -173,7 +173,11 @@ describe("ask-user-card closed request", () => {
     const root = renderRoot(card);
     const disclosure = requiredElement(root.querySelector("details"), "closed question disclosure");
     expect(disclosure.open).toBe(false);
-    requiredElement(disclosure.querySelector("summary"), "question summary").click();
+    const summary = requiredElement(disclosure.querySelector("summary"), "question summary");
+    expect(summary.classList.contains("ui-transcript-disclosure")).toBe(true);
+    expect(summary.querySelector(".disclosure-indicator")).toBeNull();
+    expect(summary.textContent).toContain("Questions");
+    summary.click();
     expect(disclosure.open).toBe(true);
     expect(root.textContent).toContain("Used for examples.");
     expect(root.textContent).toContain("Vim");

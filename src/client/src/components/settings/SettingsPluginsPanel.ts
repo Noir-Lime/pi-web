@@ -1,9 +1,12 @@
+import { stylesheetIntegrationCapability } from "../../plugins/styles";
 import { css, html, LitElement, nothing, type TemplateResult } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { live } from "lit/directives/live.js";
 import type { PiWebConfigResponse, PiWebPluginInfo, PiWebPluginsResponse } from "../../api";
 import { PI_WEB_PLUGIN_RECOVERY_COMMANDS } from "../../../../shared/pluginRecoveryCommands";
 import { REQUIRED_TERMINAL_PLUGIN_ID } from "../../../../shared/requiredTerminalPlugin";
+import { uiFormStyles } from "../ui/formStyles";
+import { uiSettingsStyles } from "../ui/settingsStyles";
 import "./SettingsPanelFrame";
 import type { SettingsNotice } from "./SettingsPanelFrame";
 
@@ -11,6 +14,11 @@ export type SettingsPluginRow = PiWebPluginInfo & { configOnly: boolean; editabl
 
 @customElement("settings-plugins-panel")
 export class SettingsPluginsPanel extends LitElement {
+  constructor() {
+    super();
+    stylesheetIntegrationCapability.createController(this);
+  }
+
   @property({ attribute: false }) pluginsResponse: PiWebPluginsResponse | undefined;
   @property({ attribute: false }) configResponse: PiWebConfigResponse | undefined;
   @property({ type: Boolean }) loading = false;
@@ -117,19 +125,19 @@ export class SettingsPluginsPanel extends LitElement {
   private renderPanelContent(plugins: SettingsPluginRow[], hasPluginResponse: boolean): TemplateResult {
     if (!hasPluginResponse && plugins.length === 0) {
       return html`
-        <div class="loading-card">${this.loading ? "Loading PI WEB plugins…" : `PI WEB plugin list unavailable for ${this.targetLabel}. Choose Refresh plugins to try again.`}</div>
+        <div class="loading-card ui-settings-summary">${this.loading ? "Loading PI WEB plugins…" : `PI WEB plugin list unavailable for ${this.targetLabel}. Choose Refresh plugins to try again.`}</div>
         ${this.renderRecoveryCommands()}
       `;
     }
     if (plugins.length === 0) {
       return html`
-        <div class="loading-card">No PI WEB plugins are discovered or active on ${this.targetLabel}.</div>
+        <div class="loading-card ui-settings-summary">No PI WEB plugins are discovered or active on ${this.targetLabel}.</div>
         ${this.renderRecoveryCommands()}
       `;
     }
     return html`
-      <div class="plugin-note">Changes save automatically on ${this.targetLabel}. Toggles show saved settings, not whether a plugin is running. Reload this browser tab for browser-only changes; server-plugin changes require a session daemon restart.</div>
-      <div class="plugin-list">
+      <div class="plugin-note ui-settings-summary">Changes save automatically on ${this.targetLabel}. Toggles show saved settings, not whether a plugin is running. Reload this browser tab for browser-only changes; server-plugin changes require a session daemon restart.</div>
+      <div class="plugin-list ui-settings-list">
         ${plugins.map((plugin) => this.renderPlugin(plugin))}
       </div>
       ${this.renderRecoveryCommands()}
@@ -144,7 +152,7 @@ export class SettingsPluginsPanel extends LitElement {
         ? "Package no longer available in saved settings"
         : configured?.enabled === false ? "Saved: disabled" : configured?.enabled === true ? "Saved: enabled" : "Enabled by default";
     return html`
-      <article class=${`plugin-card${plugin.enabled ? "" : " disabled"}`}>
+      <article class=${`plugin-card ui-settings-row${plugin.enabled ? "" : " disabled"}`}>
         <div class="plugin-main">
           <strong>${plugin.id}</strong>
           <small>${plugin.configOnly ? "Saved settings only · package not found" : `${plugin.source} · ${plugin.scope}${plugin.machineSpecific ? " · machine-specific" : ""}${plugin.required === true ? " · required" : ""}${plugin.discovered ? "" : " · running version only"}`}</small>
@@ -154,7 +162,7 @@ export class SettingsPluginsPanel extends LitElement {
           ${plugin.server?.health?.message === undefined ? nothing : html`<small class="diagnostic">Health: ${plugin.server.health.message}</small>`}
           ${plugin.server === undefined || plugin.required === true ? nothing : html`<small class="command">Offline disable: <code>${plugin.server.disableCommand}</code></small>`}
         </div>
-        <label class="toggle">
+        <label class="toggle ui-checkbox-field">
           <input type="checkbox" aria-label=${plugin.required === true ? `${plugin.id} is required` : `Enable ${plugin.id}`} .checked=${live(plugin.enabled)} ?disabled=${this.loading || this.saving || this.configResponse === undefined || !plugin.editable} @change=${(event: Event) => { void this.togglePlugin(plugin, event); }}>
           <span>${plugin.required === true ? "Required" : "Enable plugin"}</span>
         </label>
@@ -181,7 +189,7 @@ export class SettingsPluginsPanel extends LitElement {
     const recovery = responseRecovery ?? (this.recoveryCommandsSupported ? PI_WEB_PLUGIN_RECOVERY_COMMANDS : undefined);
     if (recovery === undefined) return nothing;
     return html`
-      <aside class="recovery" aria-label="Offline server-plugin recovery commands">
+      <aside class="recovery ui-settings-summary" aria-label="Offline server-plugin recovery commands">
         <strong>Offline recovery on ${this.targetLabel}</strong>
         <small>Run these commands in a terminal on ${this.targetLabel}. They edit settings without connecting to the session daemon or loading plugins. They never include machine credentials.</small>
         <small>Commands with <code>--restart</code> restart services and interrupt active sessions.</small>
@@ -198,17 +206,13 @@ export class SettingsPluginsPanel extends LitElement {
     await this.onTogglePlugin?.(plugin.id, enabled);
   }
 
-  static override styles = css`
+  static override styles = [uiFormStyles, uiSettingsStyles, css`
     :host { display: block; }
-    input { font: inherit; }
-    input:disabled { opacity: .55; cursor: not-allowed; }
-    .loading-card, .plugin-note, .plugin-card, .recovery { border: 1px solid var(--pi-border); border-radius: 10px; background: var(--pi-surface); padding: 12px; }
     .loading-card, .plugin-note { color: var(--pi-muted); }
-    code { border: 1px solid var(--pi-border-muted); border-radius: 5px; background: var(--pi-bg); padding: 1px 4px; color: var(--pi-text); font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
-    .plugin-list { display: grid; gap: 10px; }
-    .plugin-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; }
+    code { color: var(--pi-text); font: 12px var(--pi-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); overflow-wrap: anywhere; }
+    .plugin-card { align-items: center; }
     .plugin-card.disabled { opacity: .8; }
-    .plugin-main { min-width: 0; display: grid; gap: 5px; }
+    .plugin-main { flex: 1 1 280px; min-width: 0; display: grid; gap: 5px; }
     .plugin-main > strong, .plugin-main > small:not(.command) { overflow-wrap: anywhere; }
     .plugin-main small { color: var(--pi-muted); }
     .diagnostic { color: var(--pi-text) !important; }
@@ -218,17 +222,14 @@ export class SettingsPluginsPanel extends LitElement {
     .status.success { border-color: var(--pi-success-border); color: var(--pi-success); background: var(--pi-success-surface); }
     .status.warning { border-color: var(--pi-warning-border); color: var(--pi-text); background: var(--pi-warning-surface); }
     .status.error { border-color: var(--pi-danger); color: var(--pi-danger); }
-    .toggle { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
-    .toggle input { width: 18px; height: 18px; accent-color: var(--pi-accent); }
-    .recovery { display: grid; gap: 7px; }
+    .toggle { white-space: nowrap; }
     .recovery small { color: var(--pi-muted); line-height: 1.4; }
     .recovery code { display: block; width: fit-content; max-width: 100%; }
 
     @media (max-width: 760px) {
-      .plugin-card { grid-template-columns: minmax(0, 1fr); align-items: start; }
-      .toggle { justify-self: start; }
+      .plugin-main { flex-basis: 100%; }
     }
-  `;
+  `];
 }
 
 export function settingsPluginRows(

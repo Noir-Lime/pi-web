@@ -70,7 +70,6 @@ describe("SessionController factual tree invalidation", () => {
       expect(observer.state().sessions.map((session) => session.id)).toEqual([replacementSession.id, oldSession.id]);
       expect(observer.state().messages[0]?.parts).toEqual([{ type: "text", text: "changed branch" }]);
       expect(observer.state().status?.suggestedInput).toBe("optional text");
-      expect(observer.state().suppressedSuggestedInputs).toEqual({});
       expect(observer.state().pendingTreeActions).toEqual([]);
       expect(observer.removed).toEqual([sourceKey]);
       expect(observer.cache.get(sourceKey)).toEqual(page("changed branch"));
@@ -220,7 +219,6 @@ describe("SessionController factual tree invalidation", () => {
     const first = controller.navigateTree("root", { mode: "none" });
     const second = controller.navigateTree("root", { mode: "none" });
     expect(state.pendingTreeActions).toHaveLength(2);
-    expect(state.suppressedSuggestedInputs).toEqual({});
     firstResult.resolve({ cancelled: true });
     await first;
     expect(state.pendingTreeActions).toEqual([{ machineId: "local", sessionId: oldSession.id }]);
@@ -268,14 +266,13 @@ describe("SessionController factual tree invalidation", () => {
       expect(state.selectedSession?.id).toBe(replacementSession.id);
       expect(loadDraft(sourceKey)).toBe("original unsent draft");
       expect(loadDraft(forkKey)).toBe("explicit fork");
-      expect(state.suppressedSuggestedInputs[forkKey]).toBe("explicit fork");
     }
     controller.dispose();
   });
 });
 
-describe("SessionController go-back suggestion timing", () => {
-  it.each(["before response", "after refresh"] as const)("restores an empty composer without waiting for history and acknowledges status arriving %s", async (arrival) => {
+describe("SessionController go-back editor restoration", () => {
+  it.each(["before response", "after refresh"] as const)("restores an empty composer without waiting for history or overwriting later edits when status arrives %s", async (arrival) => {
     const navigation = deferred<Awaited<ReturnType<typeof defaultApi.navigateTree>>>();
     const refresh = deferred<SessionTranscriptSnapshot>();
     const socket = new EmitSocket();
@@ -296,7 +293,6 @@ describe("SessionController go-back suggestion timing", () => {
     const acting = controller.actOnMessage("root", "back");
     await vi.waitFor(() => { expect(navigateTree).toHaveBeenCalledOnce(); });
     expect(state.pendingTreeActions).toEqual([{ machineId: "local", sessionId: oldSession.id }]);
-    expect(state.suppressedSuggestedInputs[sourceKey]).toBeUndefined();
     const suggestion = { ...status(oldSession.id), suggestedInput: "original prompt" };
     if (arrival === "before response") {
       socket.emit({ type: "status.update", status: suggestion, seq: 1 });
@@ -307,7 +303,6 @@ describe("SessionController go-back suggestion timing", () => {
     navigation.resolve({ cancelled: false, editorText: "original prompt" });
     await vi.waitFor(() => {
       expect(transcriptSnapshot).toHaveBeenCalledTimes(2);
-      expect(state.suppressedSuggestedInputs[sourceKey]).toBe("original prompt");
     });
     // The transcript read is still unresolved, but the empty composer is restored.
     expect(loadDraft(sourceKey)).toBe("original prompt");
@@ -319,52 +314,18 @@ describe("SessionController go-back suggestion timing", () => {
     refresh.resolve({ page: page("new branch"), status: arrival === "before response" ? suggestion : status(oldSession.id), seq: 2, partial: null });
     await acting;
     expect(state.pendingTreeActions).toEqual([]);
-    expect(state.suppressedSuggestedInputs[sourceKey]).toBe("original prompt");
     expect(liveDraft).toBe("typed while history was loading");
     expect(loadDraft(sourceKey)).toBe(liveDraft);
     socket.emit({ type: "status.update", status: suggestion, seq: 3 });
     runPendingAnimationFrames();
-    // Late status must not reoffer text that this browser already applied.
+    // Status remains authoritative without replacing subsequent composer edits.
     expect(state.status?.suggestedInput).toBe("original prompt");
-    expect(state.suppressedSuggestedInputs[sourceKey]).toBe("original prompt");
-    expect(replacePromptEditorText).toHaveBeenCalledOnce();
-    // A cleared suggestion ends the acknowledgement, so a later action can
-    // offer the same text again without automatically overwriting a draft.
-    socket.emit({ type: "status.update", status: status(oldSession.id), seq: 4 });
-    runPendingAnimationFrames();
-    expect(state.suppressedSuggestedInputs[sourceKey]).toBeUndefined();
-    socket.emit({ type: "status.update", status: suggestion, seq: 5 });
-    runPendingAnimationFrames();
-    expect(state.suppressedSuggestedInputs[sourceKey]).toBeUndefined();
+    expect(liveDraft).toBe("typed while history was loading");
+    expect(loadDraft(sourceKey)).toBe(liveDraft);
     expect(replacePromptEditorText).toHaveBeenCalledOnce();
     controller.dispose();
   });
 
-  it.each(["cancel", "fail"] as const)("makes an unapplied suggestion available again when go-back actions %s", async (outcome) => {
-    const navigation = deferred<Awaited<ReturnType<typeof defaultApi.navigateTree>>>();
-    let state: AppState = { ...initialAppState(), selectedSession: oldSession, status: { ...status(oldSession.id), suggestedInput: "keep available" } };
-    const replacePromptEditorText = vi.fn();
-    const controller = new SessionController(() => state, (patch) => { state = { ...state, ...patch }; }, () => undefined, undefined, {
-      api: { ...defaultApi, navigateTree: () => navigation.promise, runCommand: () => Promise.resolve({ type: "tree", tree }) },
-      socket: new EmitSocket(), replacePromptEditorText,
-    });
-    const acting = controller.actOnMessage("root", "back");
-    await vi.waitFor(() => { expect(state.pendingTreeActions).toEqual([{ machineId: "local", sessionId: oldSession.id }]); });
-    if (outcome === "cancel") {
-      navigation.resolve({ cancelled: true });
-      await acting;
-    } else {
-      const rejected = expect(acting).rejects.toThrow("Navigation failed");
-      navigation.reject(new Error("Navigation failed"));
-      await rejected;
-    }
-    expect(state.pendingTreeActions).toEqual([]);
-    expect(state.suppressedSuggestedInputs[sourceKey]).toBeUndefined();
-    expect(state.status?.suggestedInput).toBe("keep available");
-    expect(replacePromptEditorText).not.toHaveBeenCalled();
-    expect(loadDraft(sourceKey)).toBe("");
-    controller.dispose();
-  });
 });
 
 function page(text: string): MessagePage {

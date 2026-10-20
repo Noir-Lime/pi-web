@@ -67,18 +67,18 @@ it("preserves lifecycle callback receivers while adapting contributions", async 
   expect(source.started).toBe(false);
 });
 
-it("projects state for every external workspace callback without changing the host context", async () => {
+it.each([4, 5] as const)("projects state for API v%s external workspace callbacks without changing the host context", async (apiVersion) => {
   const visible = vi.fn(() => true);
   const badge = vi.fn(() => "badge");
   const onInvalidate = vi.fn();
   const render = vi.fn(() => html`panel`);
   const items = vi.fn(() => []);
-  const plugin = adaptPublicPlugin({ apiVersion: 4, name: "External", activate: () => ({ contributions: {
+  const plugin = adaptPublicPlugin({ apiVersion, name: "External", activate: () => ({ contributions: {
     workspacePanels: [{ id: "panel", title: "Panel", visible, badge, onInvalidate, render }],
     workspaceLabels: [{ id: "label", visible, items }],
     sessionLabels: [{ id: "session-label", visible, items }],
   } }) });
-  const activation = await plugin.activate({ apiVersion: 4, pluginId: "external", runtimePluginId: "external", html, svg,
+  const activation = await plugin.activate({ apiVersion, pluginId: "external", runtimePluginId: "external", html, svg,
     signal: new AbortController().signal, lifetimeSignal: new AbortController().signal });
   const unused = () => { throw new Error("Unexpected host call"); };
   const context: WorkspacePanelContext = {

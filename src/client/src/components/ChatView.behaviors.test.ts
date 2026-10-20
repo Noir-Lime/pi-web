@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { render } from "lit";
 import { DEFAULT_CHAT_BEHAVIORS, type ChatBehaviors } from "../chatBehaviors";
 import { PLAIN_CODE_BLOCK_POLICY } from "../formatting/codeBlockPolicy";
 import { MANUAL_CHAT_BEHAVIORS } from "../chatBehaviors.testSupport";
@@ -11,6 +12,7 @@ import type { ChatLine } from "./shared";
 import type { TranscriptImage } from "./TranscriptImage";
 import type { FormattedText } from "./FormattedText";
 import { nativeImage, settleImage } from "./imagePresentation.testSupport";
+import { ToolExecutionView } from "./ToolExecutionView";
 
 const messages: ChatLine[] = [
   { entryId: "thought-entry", role: "assistant", parts: [{ type: "thinking", text: "A technical body" }] },
@@ -45,6 +47,22 @@ function required(root: ParentNode, selector: string): HTMLElement {
   if (!node) throw new Error(`Expected ${selector}`);
   return node;
 }
+async function openGroup(view: ChatView): Promise<HTMLDetailsElement> {
+  const group = required(view.renderRoot, ".event-group");
+  if (!(group instanceof HTMLDetailsElement)) throw new Error("Expected native details");
+  group.open = true;
+  group.dispatchEvent(new Event("toggle"));
+  await view.updateComplete;
+  return group;
+}
+async function settleFormatting(elements: FormattedText[]): Promise<void> {
+  await Promise.all(elements.map((element) => element.updateComplete));
+  while (frames.size > 0) {
+    flushFrames();
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.all(elements.map((element) => element.updateComplete));
+  }
+}
 function flushFrames(): void {
   const batch = [...frames.values()]; frames.clear();
   for (const callback of batch) callback(0);
@@ -73,41 +91,187 @@ describe("composable normal chat", () => {
     expect(required(view.renderRoot, '.chat-jumps [aria-label="Jump to end"]').textContent).toBe("↓");
   });
 
-  it("keeps closed disclosure bodies mounted and records toggles without rerendering", async () => {
+  it("can render navigation in another surface while retaining scroll behavior and follow state", async () => {
     const view = await mount();
-    const group = required(view.renderRoot, ".event-group");
-    if (!(group instanceof HTMLDetailsElement)) throw new Error("Expected native details");
+    const viewport = scrollingViewport(view);
+    const controls = document.createElement("div");
+    document.body.append(controls);
+    view.onNavigationChange = (navigation) => { render(navigation, controls); };
+    await view.updateComplete;
+    expect(view.renderRoot.querySelector(".chat-jumps")).toBeNull();
+    required(controls, '[aria-label="Jump to top"]').click();
+    flushFrames();
+    expect(viewport.write).toHaveBeenLastCalledWith(0);
+    required(controls, '[aria-label="Jump to end"]').click();
+    flushFrames();
+    expect(viewport.write).toHaveBeenLastCalledWith(6000);
+    await view.updateComplete;
+    expect(required(controls, '[aria-label="Jump to end"]').classList.contains("following")).toBe(true);
+    view.behaviors = { ...view.behaviors, followTail: false };
+    await view.updateComplete;
+    expect(required(controls, '[aria-label="Jump to end"]').title).toBe("Jump to end");
+  });
+
+  it("defers closed group bodies, detaches on close and restores the same children on reopen", async () => {
+    const view = await mount();
+    const closed = required(view.renderRoot, ".event-group");
+    const anchor = closed.getAttribute("data-scroll-anchor-id");
+    expect(closed.querySelector(".group-body, formatted-text, pi-web-transcript-image")).toBeNull();
+    const group = await openGroup(view);
     const body = required(group, ".group-body");
     const image = required(group, "pi-web-transcript-image");
-    expect(group.open).toBe(false);
-    expect(body.textContent).toContain("thinking");
-    const render = vi.spyOn(view, "render");
-    group.open = true; group.dispatchEvent(new Event("toggle"));
+    const thinking = required(body, ".thinking");
+    if (!(thinking instanceof HTMLDetailsElement)) throw new Error("Expected thinking");
+    thinking.open = false; thinking.dispatchEvent(new Event("toggle"));
+    await view.updateComplete;
     group.open = false; group.dispatchEvent(new Event("toggle"));
     await view.updateComplete;
+    expect(group.querySelector(".group-body")).toBeNull();
+    expect(body.isConnected).toBe(false);
+    expect(group.getAttribute("data-scroll-anchor-id")).toBe(anchor);
+    await openGroup(view);
     expect(required(group, ".group-body")).toBe(body);
     expect(required(group, "pi-web-transcript-image")).toBe(image);
-    expect(render).not.toHaveBeenCalled();
+    expect(required(group, ".thinking")).toBe(thinking);
+    expect(thinking.open).toBe(false);
+    expect(thinking.querySelector("formatted-text")).toBeNull();
     expect(localStorage.getItem(groupStorageKey(view.sessionId))).not.toBeNull();
   });
 
-  it.each([true, false])("follows native group and nested toggles without rerendering (remember choices: %s)", async (rememberDisclosures) => {
+  it("does not mount tools in closed groups and preserves tool disclosure state across detachment", async () => {
+    const toolRender = vi.spyOn(ToolExecutionView.prototype, "render");
+    const view = await mount({ ...DEFAULT_CHAT_BEHAVIORS, rememberDisclosures: false });
+    view.messages = [{ role: "tool", entryId: "tool", parts: [{
+      type: "toolExecution", toolName: "edit", summary: "file.ts", status: "success", details: { diff: "+changed" },
+    }] }];
+    await view.updateComplete;
+    expect(view.renderRoot.querySelector("tool-execution-view")).toBeNull();
+    expect(toolRender).not.toHaveBeenCalled();
+    const group = await openGroup(view);
+    const tool = group.querySelector<ToolExecutionView>("tool-execution-view");
+    if (tool === null) throw new Error("Expected tool");
+    await tool.updateComplete;
+    expect(toolRender).toHaveBeenCalled();
+    const diff = tool.renderRoot.querySelector<HTMLDetailsElement>(".diff-details");
+    if (diff === null) throw new Error("Expected diff");
+    diff.open = false; diff.dispatchEvent(new Event("toggle"));
+    await tool.updateComplete;
+    group.open = false; group.dispatchEvent(new Event("toggle"));
+    await view.updateComplete;
+    expect(tool.isConnected).toBe(false);
+    toolRender.mockClear();
+    view.messages = [...view.messages];
+    await view.updateComplete;
+    expect(toolRender).not.toHaveBeenCalled();
+    await openGroup(view);
+    expect(group.querySelector("tool-execution-view")).toBe(tool);
+    expect(diff.open).toBe(false);
+    expect(tool.renderRoot.querySelector(".diff")).toBeNull();
+  });
+
+  it.each([false, true])("keeps skill loading in activity and opens only the live tail by default (streaming: %s)", async (streaming) => {
+    const view = await mount({ ...DEFAULT_CHAT_BEHAVIORS, rememberDisclosures: false });
+    view.isSendingPrompt = streaming;
+    view.messages = [{ role: "skill", entryId: "load-skill", parts: [{ type: "skillRead", name: "ux-writing", path: "/skills/ux-writing/SKILL.md" }] }];
+    await view.updateComplete;
+    const group = required(view.renderRoot, ".event-group");
+    expect(group.hasAttribute("open")).toBe(streaming);
+    if (!streaming) expect(group.querySelector(".skill-read")).toBeNull();
+    await openGroup(view);
+    expect(required(group, ".skill-read").textContent).toContain("Loaded ux-writing");
+    expect(view.renderRoot.querySelector("article.skill")).toBeNull();
+    expect(group.querySelector(".conversation-message")).toBeNull();
+  });
+
+  it("identifies thinking and failed tool results inside an initially collapsed activity group", async () => {
+    const view = await mount();
+    view.messages = [
+      { role: "assistant", parts: [{ type: "thinking", text: "Check the file first." }] },
+      { role: "tool", parts: [{ type: "toolResult", toolName: "read", text: "File not found", isError: true }] },
+      { role: "assistant", parts: [{ type: "text", text: "The file was not found." }] },
+    ];
+    await view.updateComplete;
+    const group = required(view.renderRoot, ".event-group");
+    expect(group.hasAttribute("open")).toBe(false);
+    expect(group.querySelector(".thinking, .tool-result")).toBeNull();
+    await openGroup(view);
+    const thinking = required(group, ".thinking");
+    const result = required(group, ".tool-result");
+    expect(group).toBeInstanceOf(HTMLDetailsElement);
+    expect(required(thinking, "summary").textContent).toContain("Thinking");
+    expect(thinking.hasAttribute("open")).toBe(true);
+    expect(required(result, "summary").textContent).toContain("read result · Failed");
+    expect(result.hasAttribute("open")).toBe(true);
+  });
+
+  it.each([false, true])("expands thinking by default while only opening the live outer group (live: %s)", async (live) => {
+    const view = await mount();
+    view.messages = [{ role: "assistant", entryId: "default-thinking", parts: [{ type: "thinking", text: "Plan the work." }] }];
+    view.isSendingPrompt = live;
+    await view.updateComplete;
+    expect(required(view.renderRoot, ".event-group").hasAttribute("open")).toBe(live);
+    await openGroup(view);
+    expect(required(view.renderRoot, ".thinking").hasAttribute("open")).toBe(true);
+  });
+
+  it.each([true, false])("keeps thinking individually collapsible and remembers its choice only when enabled (%s)", async (rememberDisclosures) => {
+    const behaviors = { ...DEFAULT_CHAT_BEHAVIORS, rememberDisclosures };
+    const view = await mount(behaviors);
+    await openGroup(view);
+    const thinking = required(view.renderRoot, ".thinking");
+    if (!(thinking instanceof HTMLDetailsElement)) throw new Error("Expected thinking disclosure");
+    thinking.open = false;
+    thinking.dispatchEvent(new Event("toggle"));
+    await view.updateComplete;
+    expect(thinking.querySelector("formatted-text")).toBeNull();
+    view.messages = [...view.messages];
+    await view.updateComplete;
+    expect(required(view.renderRoot, ".thinking").hasAttribute("open")).toBe(false);
+    view.remove();
+
+    const restored = await mount(behaviors);
+    await openGroup(restored);
+    expect(required(restored.renderRoot, ".thinking").hasAttribute("open")).toBe(!rememberDisclosures);
+    restored.sessionId = "another-session";
+    await restored.updateComplete;
+    await openGroup(restored);
+    expect(required(restored.renderRoot, ".thinking").hasAttribute("open")).toBe(true);
+  });
+
+  it("keeps a remembered collapse scoped to its entry when earlier thinking is prepended", async () => {
+    const view = await mount();
+    await openGroup(view);
+    const thinking = required(view.renderRoot, ".thinking");
+    if (!(thinking instanceof HTMLDetailsElement)) throw new Error("Expected thinking disclosure");
+    thinking.open = false;
+    thinking.dispatchEvent(new Event("toggle"));
+    view.messages = [{ role: "assistant", entryId: "earlier-thinking", parts: [{ type: "thinking", text: "Earlier plan." }] }, ...view.messages];
+    await view.updateComplete;
+    const entries = view.renderRoot.querySelectorAll<HTMLDetailsElement>(".thinking");
+    expect(entries).toHaveLength(2);
+    expect(entries[0]?.open).toBe(true);
+    expect(entries[1]?.open).toBe(false);
+  });
+
+  it.each([true, false])("follows native group and nested lazy toggles (remember choices: %s)", async (rememberDisclosures) => {
     const view = await mount({ ...DEFAULT_CHAT_BEHAVIORS, rememberDisclosures });
     const { metrics, write } = controlledChatViewport(view);
     flushFrames(); await view.updateComplete;
     write.mockClear();
     const render = vi.spyOn(view, "render");
     const group = required(view.renderRoot, ".event-group");
-    const nested = required(group, ".group-body details.part");
-    if (!(group instanceof HTMLDetailsElement) || !(nested instanceof HTMLDetailsElement)) throw new Error("Expected native disclosures");
+    if (!(group instanceof HTMLDetailsElement)) throw new Error("Expected native disclosure");
 
     group.open = true; metrics.height = 2500;
     group.dispatchEvent(new Event("toggle", { bubbles: false }));
     expect(write).not.toHaveBeenCalled();
+    await view.updateComplete;
     flushFrames();
     expect(write).toHaveBeenNthCalledWith(1, 2500);
 
-    nested.open = true; metrics.height = 3000;
+    const nested = required(group, ".group-body details.part");
+    if (!(nested instanceof HTMLDetailsElement)) throw new Error("Expected nested disclosure");
+    nested.open = false; metrics.height = 3000;
     nested.dispatchEvent(new Event("toggle", { bubbles: false }));
     flushFrames();
     expect(write).toHaveBeenNthCalledWith(2, 3000);
@@ -119,7 +283,8 @@ describe("composable normal chat", () => {
     expect(write).toHaveBeenNthCalledWith(3, 2000);
     expect(write).toHaveBeenCalledTimes(3);
     expect(required(view.renderRoot, '[aria-label="Jump to end"]').classList.contains("following")).toBe(true);
-    expect(render).not.toHaveBeenCalled();
+    expect(render).toHaveBeenCalled();
+    expect(group.querySelector(".group-body")).toBeNull();
   });
 
   it.each(["paused", "disabled"])("leaves disclosure layout alone when following is %s", async (mode) => {
@@ -316,6 +481,7 @@ describe("composable normal chat", () => {
 
   it("propagates the image switch into persistent normal-chat disclosure bodies", async () => {
     const view = await mount({ ...DEFAULT_CHAT_BEHAVIORS, loadImages: false });
+    await openGroup(view);
     const image = view.renderRoot.querySelector<TranscriptImage>("pi-web-transcript-image");
     if (image === null) throw new Error("Expected transcript image");
     const presentation = await settleImage(image);
@@ -326,7 +492,8 @@ describe("composable normal chat", () => {
     expect(native.src).toBe("data:image/png;base64,QUJD");
   });
 
-  it("defaults to horizontally scrolling code with Copy in every Markdown surface and retains independent rollbacks, including closed groups", async () => {
+  it("defaults to horizontally scrolling code with Copy in lazily opened Markdown surfaces and retains independent rollbacks", async () => {
+    vi.stubGlobal("IntersectionObserver", undefined);
     const view = await mount();
     const text = "```text\nfirst\n  second\n```";
     view.clientQueuedMessages = [{ kind: "followUp", text }];
@@ -337,10 +504,15 @@ describe("composable normal chat", () => {
       { type: "toolResult", toolName: "read", text, isError: false },
     ] }];
     await view.updateComplete;
+    await openGroup(view);
+    for (const disclosure of view.renderRoot.querySelectorAll<HTMLDetailsElement>(".skill-invocation, .tool-result")) {
+      disclosure.open = true; disclosure.dispatchEvent(new Event("toggle"));
+    }
+    await view.updateComplete;
     expect(view.behaviors.codeBlocks).toEqual({ presentation: "code", overflow: "scroll", copy: true, previews: true });
     const formatted = [...view.renderRoot.querySelectorAll<FormattedText>("formatted-text")];
     expect(formatted).toHaveLength(5);
-    await Promise.all(formatted.map((element) => element.updateComplete));
+    await settleFormatting(formatted);
     for (const element of formatted) {
       expect(element.codeBlocks).toBe(view.behaviors.codeBlocks);
       expect(element.renderRoot.querySelector("pre code")?.textContent).toBe("first\n  second\n");
@@ -353,7 +525,7 @@ describe("composable normal chat", () => {
     const copyButtons = formatted.map((element) => element.renderRoot.querySelector(".code-copy-button"));
     view.behaviors = { ...view.behaviors, codeBlocks: { ...view.behaviors.codeBlocks, overflow: "wrap" } };
     await view.updateComplete;
-    await Promise.all(formatted.map((element) => element.updateComplete));
+    await settleFormatting(formatted);
     formatted.forEach((element, index) => {
       expect(element.codeBlocks).toBe(view.behaviors.codeBlocks);
       expect(element.renderRoot.querySelector(".code-blocks-scroll, pi-web-content-renderer")).toBeNull();
@@ -362,7 +534,7 @@ describe("composable normal chat", () => {
 
     view.behaviors = { ...view.behaviors, codeBlocks: PLAIN_CODE_BLOCK_POLICY };
     await view.updateComplete;
-    await Promise.all(formatted.map((element) => element.updateComplete));
+    await settleFormatting(formatted);
     for (const element of formatted) {
       expect(element.codeBlocks).toBe(PLAIN_CODE_BLOCK_POLICY);
       expect(element.renderRoot.querySelector(".plain-code-block")?.textContent).toBe("first\n  second\n");
@@ -371,7 +543,7 @@ describe("composable normal chat", () => {
 
     view.behaviors = { ...DEFAULT_CHAT_BEHAVIORS, codeBlocks: { ...DEFAULT_CHAT_BEHAVIORS.codeBlocks, overflow: "wrap", copy: false, previews: false } };
     await view.updateComplete;
-    await Promise.all(formatted.map((element) => element.updateComplete));
+    await settleFormatting(formatted);
     for (const element of formatted) {
       expect(element.codeBlocks).toBe(view.behaviors.codeBlocks);
       expect(element.renderRoot.querySelector("pre code")?.textContent).toBe("first\n  second\n");
@@ -381,7 +553,7 @@ describe("composable normal chat", () => {
 
     view.behaviors = DEFAULT_CHAT_BEHAVIORS;
     await view.updateComplete;
-    await Promise.all(formatted.map((element) => element.updateComplete));
+    await settleFormatting(formatted);
     for (const element of formatted) {
       expect(element.codeBlocks).toBe(view.behaviors.codeBlocks);
       expect(element.renderRoot.querySelectorAll(".code-copy-button")).toHaveLength(1);

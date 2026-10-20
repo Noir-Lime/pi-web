@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { ASK_USER_TEXT_MAX_LENGTH, EXTENSION_DIALOG_TEXT_MAX_LENGTH, SESSION_NOTIFICATION_LIMIT, SESSION_NOTIFICATION_MESSAGE_BYTES, SESSION_UNREAD_CATALOG_ID_MAX_LENGTH } from "../../../shared/apiTypes";
-import { parseAskUserRequest, parseAskUserOutcome, parseAuthProvidersResponse, parseCommandResult, parseExtensionDialogCloseResponse, parseFileContentResponse, parseFileSuggestion, parseMachineRuntime, parseMessagePage, parseOAuthFlowState, parsePiPackageMutationResponse, parsePiPackagesResponse, parsePiWebConfigResponse, parsePiWebPluginsResponse, parsePiWebRuntimeResponse, parsePiWebStatusResponse, parseRealtimeStreamEvent, parseSessionBulkArchiveResponse, parseSessionBulkDeleteArchivedResponse, parseSessionCleanupExecuteResponse, parseSessionCleanupPreviewResponse, parseSessionInfo, parseSessionModelCatalogResponse, parseSessionNotificationInboxEvent, parseSessionNotificationInboxSnapshot, parseSessionStartupProgressEvent, parseSessionStatus, parseSessionStreamEvent, parseSessionStreamSnapshot, parseSessionTreeForkResult, parseSessionTreeNavigateResult, parseSessionTreeSnapshot, parseSessionUnreadCatalogSnapshot, parseSessionUnreadEvent, parseSlashCommand, parseWorkspace, parseWorkspaceProviderResolution } from "./parsers";
+import { parseAskUserRequest, parseAskUserOutcome, parseAuthProvidersResponse, parseCommandResult, parseExtensionDialogCloseResponse, parseFileContentResponse, parseFileSuggestion, parseMachineRuntime, parseMessagePage, parseMcpAuthServersResponse, parseOAuthFlowState, parsePiPackageMutationResponse, parsePiPackagesResponse, parsePiWebConfigResponse, parsePiWebPluginsResponse, parsePiWebRuntimeResponse, parsePiWebStatusResponse, parseRealtimeStreamEvent, parseSessionBulkArchiveResponse, parseSessionBulkDeleteArchivedResponse, parseSessionCleanupExecuteResponse, parseSessionCleanupPreviewResponse, parseSessionInfo, parseSessionModelCatalogResponse, parseSessionNotificationInboxEvent, parseSessionNotificationInboxSnapshot, parseSessionStartupProgressEvent, parseSessionStatus, parseSessionStreamEvent, parseSessionStreamSnapshot, parseSessionTreeForkResult, parseSessionTreeNavigateResult, parseSessionTreeSnapshot, parseSessionUnreadCatalogSnapshot, parseSessionUnreadEvent, parseSlashCommand, parseWorkspace, parseWorkspaceProviderResolution } from "./parsers";
+
+import { KNOWN_THINKING_LEVELS } from "../../../shared/thinkingLevels";
 
 const legacyActivityWarning = {
   severity: "info", source: "PI-WEB",
@@ -40,6 +42,22 @@ describe("API parsers", () => {
     });
   });
 
+  it("preserves SDK MCP server descriptions without interpreting them as authentication status", () => {
+    const response = { servers: [{ name: "Budgeter", description: "connected" }, { name: "other" }] };
+    expect(parseMcpAuthServersResponse(response)).toEqual(response);
+    expect(() => parseMcpAuthServersResponse({ servers: [{ description: "missing name" }] })).toThrow();
+    const flow = { flowId: "mcp", providerId: "mcp", providerName: "Budgeter", target: "mcp", mcpMode: "logout", status: "running", progress: [] };
+    expect(parseOAuthFlowState(flow)).toEqual(flow);
+    expect(() => parseOAuthFlowState({ ...flow, mcpMode: "disconnect" })).toThrow("Invalid MCP authentication mode");
+  });
+
+  it("preserves MCP operation and cancellation state without treating completion as authentication", () => {
+    const flow = { flowId: "mcp-flow", providerId: "mcp", providerName: "MCP server", status: "complete", progress: ["Pi finished"], target: "mcp", cancelRequested: true };
+    expect(parseOAuthFlowState(flow)).toEqual(flow);
+    expect(() => parseOAuthFlowState({ ...flow, target: "unknown" })).toThrow("Invalid login flow target");
+    expect(() => parseOAuthFlowState({ ...flow, cancelRequested: "yes" })).toThrow();
+  });
+
   it("requires semantic prompt types on OAuth wire prompts", () => {
     const flow = {
       flowId: "flow-1",
@@ -69,6 +87,12 @@ describe("API parsers", () => {
     });
   });
 
+  it("preserves archive destinations for config round-trips without a UI control", () => {
+    const sessionArchive = { directory: "/external/archives" };
+    const response = { path: "/tmp/config.json", exists: true, config: { sessionArchive }, effectiveConfig: { sessionArchive }, envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, askUser: false } };
+    expect(parsePiWebConfigResponse(response)).toMatchObject({ config: { sessionArchive }, effectiveConfig: { sessionArchive } });
+  });
+
   it("preserves theme defaults and rejects malformed theme data", () => {
     const defaultTheme = { themeId: "themes:pi-web-light", auto: false };
     const response = {
@@ -94,6 +118,28 @@ describe("API parsers", () => {
       for (const defaultStreamingBehavior of ["", "followup", "queue", null, false, 42, {}, []]) {
         expect(() => parsePiWebConfigResponse({ ...response, [field]: { defaultStreamingBehavior } })).toThrow("PI WEB config defaultStreamingBehavior");
       }
+    }
+  });
+
+  it("preserves naming configuration and rejects malformed naming fields", () => {
+    const response = {
+      path: "/tmp/config.json", exists: true, config: {}, effectiveConfig: {},
+      envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, askUser: false },
+    };
+    for (const field of ["config", "effectiveConfig"] as const) {
+      for (const sessionNaming of [{}, { model: "openai/gpt-5" }, { maxTokens: 48 }, { timeoutMs: 1 }, { timeoutMs: 10000 }, { timeoutMs: 2147483647 }, { model: "openai/gpt-5", maxTokens: 32, thinkingLevel: "off", timeoutMs: 15000 }, ...KNOWN_THINKING_LEVELS.map((thinkingLevel) => ({ thinkingLevel }))]) {
+        expect(parsePiWebConfigResponse({ ...response, [field]: { sessionNaming } })[field]).toEqual({ sessionNaming });
+      }
+      for (const sessionNaming of [[], "model", { model: 42 }, { model: "no-provider" }, { maxTokens: 0 }, { maxTokens: -1 }, { maxTokens: 1.5 }]) {
+        expect(() => parsePiWebConfigResponse({ ...response, [field]: { sessionNaming } })).toThrow();
+      }
+      for (const thinkingLevel of ["", "ultra", "MINIMAL", " minimal ", null, false, 42, {}, []]) {
+        expect(() => parsePiWebConfigResponse({ ...response, [field]: { sessionNaming: { thinkingLevel } } })).toThrow();
+      }
+      for (const timeoutMs of [0, -1, 1.5, 2147483648, Number.MAX_SAFE_INTEGER, NaN, Infinity, -Infinity, "10000", null, false, {}, []]) {
+        expect(() => parsePiWebConfigResponse({ ...response, [field]: { sessionNaming: { timeoutMs } } })).toThrow();
+      }
+      expect(parsePiWebConfigResponse(response)[field]).not.toHaveProperty("sessionNaming");
     }
   });
 

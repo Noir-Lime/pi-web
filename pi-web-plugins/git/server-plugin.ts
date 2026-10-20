@@ -40,7 +40,7 @@ interface GitWorktreeInfo {
   prunable?: boolean;
 }
 
-const plugin: PiWebServerPlugin = {
+const plugin: Extract<PiWebServerPlugin, { apiVersion: 3 }> = {
   apiVersion: 3,
   name: "Git",
   activate(context) {
@@ -61,7 +61,15 @@ export function createGitWorkspaceProvider(context: ServerPluginActivationContex
       const result = await runGit(context, project.path, ["rev-parse", "--is-inside-work-tree"], signal);
       if (result.signal !== null) throw new Error(`git repository probe ended from signal ${result.signal}`);
       if (result.exitCode !== 0) return "pass";
-      return result.stdout.trim() === "true" ? "claim" : "pass";
+      if (result.stdout.trim() !== "true") return "pass";
+      const root = await requireGit(
+        runGit(context, project.path, ["rev-parse", "--show-toplevel"], signal),
+        "resolve the Git worktree root",
+      );
+      if (root.stdout.trim() === "") throw new Error("Git returned an empty worktree root");
+      // Folder projects keep their exact working directory; only checkout
+      // roots opt into worktree discovery and management.
+      return resolve(root.stdout.trim()) === resolve(project.path) ? "claim" : "pass";
     },
     async list(project: ProjectInput, signal: AbortSignal): Promise<ProviderWorkspace[]> {
       const rootResult = await requireGit(

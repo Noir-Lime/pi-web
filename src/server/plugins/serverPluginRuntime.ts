@@ -7,15 +7,15 @@ import type {
   JsonValue,
   PluginCapability,
   PluginCapabilityProvision,
-  ServerPluginPeer,
+  ServerPluginPeerV5 as ServerPluginPeer,
   ServerPluginPeerChannel,
   ServerPluginPeerChannelCloseContext,
-  ServerPluginPeerChannelOpenContext,
-  ServerPluginPeerRequestContext,
+  ServerPluginPeerChannelOpenContextV5 as ServerPluginPeerChannelOpenContext,
+  ServerPluginPeerRequestContextV5 as ServerPluginPeerRequestContext,
   ProjectInput,
   ProviderRemoveContext,
-  ServerPluginActivation,
-  ServerPluginActivationContext,
+  ServerPluginActivationV5 as ServerPluginActivation,
+  ServerPluginActivationContextV5 as ServerPluginActivationContext,
   ServerPluginExecFileRequest,
   ServerPluginExecFileResult,
   ServerPluginHealth,
@@ -82,6 +82,8 @@ export interface ServerPluginProviderContribution {
 }
 
 export interface ServerPluginPairedBackendContribution {
+  /** Missing only for legacy internal callers. */
+  apiVersion?: 3 | 5;
   pluginId: string;
   pluginName: string;
   packageRoot: string;
@@ -153,9 +155,10 @@ export interface CreateServerPluginRuntimeOptions {
 }
 
 interface LoadedServerPlugin {
+  readonly apiVersion: 3 | 5;
   readonly name: string;
   readonly requires?: readonly PluginCapability[];
-  readonly activate: (context: ServerPluginActivationContext) => unknown;
+  readonly activate: (context: Omit<ServerPluginActivationContext, "apiVersion"> & { readonly apiVersion: 3 | 5 }) => unknown;
 }
 
 interface StagedServerPlugin {
@@ -466,11 +469,14 @@ export class ServerPluginRuntime {
       const dataDirectory = resolve(this.dataDir, "plugin-data", entry.id);
       await mkdir(dataDirectory, { recursive: true });
       const scopedLogger = createScopedLogger(entry.id, this.logger);
+      if (loadedPlugin.apiVersion === 3) {
+        this.logger.warn({ pluginId: entry.id, apiVersion: 3 }, "Server plugin API v3 is deprecated; migrate to API v5");
+      }
       noticeReporter = createScopedNoticeReporter(entry.id, this.noticeSink);
       const resolveProjectSettings = this.projectSettingsResolver?.bind(undefined, entry.id, settings);
       const workspaceNotifications = this.workspaceNotificationsFactory?.(entry.id);
       const activationValue = await runBounded(entry.id, phase, this.lifecycleTimeoutMs, (signal) => loadedPlugin.activate(Object.freeze({
-        apiVersion: 3,
+        apiVersion: loadedPlugin.apiVersion,
         pluginId: entry.id,
         packageRoot: entry.packageRoot,
         dataDirectory,
@@ -485,7 +491,7 @@ export class ServerPluginRuntime {
       })));
       rollbackDispose = activationDisposeForRollback(activationValue);
       phase = "validate";
-      const loadedActivation = parseActivation(activationValue, entry.id);
+      const loadedActivation = parseActivation(activationValue, entry.id, loadedPlugin.apiVersion);
       if (this.enforceRequiredTerminal && entry.id === REQUIRED_TERMINAL_PLUGIN_ID) {
         requireTerminalActivation(loadedActivation);
       }
@@ -735,6 +741,7 @@ export class ServerPluginRuntime {
           source: staged.entry.source,
           scope: staged.entry.scope,
           moduleRevision: requireServerModule(staged.entry).revision,
+          apiVersion: staged.plugin.apiVersion,
           backend: staged.activation.peer,
         });
     const active = Object.freeze({
@@ -929,7 +936,7 @@ function parsePluginExport(imported: unknown): LoadedServerPlugin {
   const apiVersion = plugin["apiVersion"];
   const name = plugin["name"];
   const activateValue = plugin["activate"];
-  if (apiVersion !== 3) {
+  if (apiVersion !== 3 && apiVersion !== 5) {
     throw new IncompatibleServerPluginError(`Unsupported server plugin API version: ${formatUnknown(apiVersion)}`);
   }
   if (typeof name !== "string" || name === "") {
@@ -940,9 +947,10 @@ function parsePluginExport(imported: unknown): LoadedServerPlugin {
   }
   const requires = snapshotCapabilityRequirements(plugin["requires"], `Server plugin ${name} requirements`);
   return Object.freeze({
+    apiVersion,
     name,
     ...(requires.length === 0 ? {} : { requires }),
-    activate(context: ServerPluginActivationContext): unknown {
+    activate(context: Omit<ServerPluginActivationContext, "apiVersion"> & { readonly apiVersion: 3 | 5 }): unknown {
       const result: unknown = Reflect.apply(activateValue, plugin, [context]);
       return result;
     },
@@ -958,7 +966,7 @@ function activationDisposeForRollback(value: unknown): ((signal: AbortSignal) =>
   };
 }
 
-function parseActivation(value: unknown, pluginId: string): ServerPluginActivation {
+function parseActivation(value: unknown, pluginId: string, apiVersion: 3 | 5): ServerPluginActivation {
   if (!isRecord(value)) throw new IncompatibleServerPluginError("Server plugin activation must be an object");
   if (value["workspaceProviders"] !== undefined) {
     throw new IncompatibleServerPluginError("Server plugins may contribute only one workspaceProvider");
@@ -974,7 +982,7 @@ function parseActivation(value: unknown, pluginId: string): ServerPluginActivati
   const provides = snapshotCapabilityProvisions(value["provides"], pluginId, `Server plugin ${pluginId} provisions`);
   const candidate = {
     workspaceProvider: workspaceProviderValue === undefined ? undefined : snapshotWorkspaceProvider(workspaceProviderValue),
-    peer: peerValue === undefined ? undefined : snapshotPluginPeer(peerValue),
+    peer: peerValue === undefined ? undefined : snapshotPluginPeer(peerValue, apiVersion),
     provides,
     start: value["start"],
     dispose: value["dispose"],
@@ -1315,7 +1323,7 @@ function combinedDisposalError(pluginError: unknown, hostCleanupError: unknown):
   );
 }
 
-function snapshotPluginPeer(value: unknown): ServerPluginPeer {
+function snapshotPluginPeer(value: unknown, apiVersion: 3 | 5): ServerPluginPeer {
   if (!isPluginPeer(value)) {
     throw new IncompatibleServerPluginError("Server plugin peer must include a request or channel handler");
   }
@@ -1323,11 +1331,11 @@ function snapshotPluginPeer(value: unknown): ServerPluginPeer {
   const openChannel = value.openChannel?.bind(value);
   const snapshotRequest = request === undefined
     ? undefined
-    : (context: ServerPluginPeerRequestContext): JsonValue | Promise<JsonValue> => request(context);
+    : (context: ServerPluginPeerRequestContext): JsonValue | Promise<JsonValue> => request(peerContextForVersion(context, apiVersion));
   const snapshotOpenChannel = openChannel === undefined
     ? undefined
     : async (context: ServerPluginPeerChannelOpenContext): Promise<ServerPluginPeerChannel> => (
-        snapshotPluginPeerChannel(await openChannel(context))
+        snapshotPluginPeerChannel(await openChannel(peerContextForVersion(context, apiVersion)))
       );
   if (snapshotRequest !== undefined && snapshotOpenChannel !== undefined) {
     return Object.freeze({ request: snapshotRequest, openChannel: snapshotOpenChannel });
@@ -1337,7 +1345,17 @@ function snapshotPluginPeer(value: unknown): ServerPluginPeer {
   throw new IncompatibleServerPluginError("Server plugin peer must include a request or channel handler");
 }
 
-function isPluginPeer(value: unknown): value is ServerPluginPeer {
+function peerContextForVersion(context: ServerPluginPeerRequestContext | ServerPluginPeerChannelOpenContext, apiVersion: 3 | 5): unknown {
+  if (apiVersion === 5) return context;
+  if (context.scope.kind !== "workspace") throw new Error("Server plugin API v3 requires workspace scope");
+  const { scope, ...invocation } = context;
+  return Object.freeze({ ...invocation, project: scope.project, workspace: scope.workspace });
+}
+
+function isPluginPeer(value: unknown): value is {
+  request?: (context: unknown) => JsonValue | Promise<JsonValue>;
+  openChannel?: (context: unknown) => unknown;
+} {
   if (!isRecord(value)) return false;
   const request = value["request"];
   const openChannel = value["openChannel"];

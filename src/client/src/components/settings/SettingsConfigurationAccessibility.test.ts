@@ -106,6 +106,18 @@ describe("configuration accessibility and activation guidance", () => {
     expect(select.value).toBe("steer");
   });
 
+  it("links to community plugins even when the package list is unavailable", async () => {
+    const panel = new SettingsPackagesPanel();
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    const link = panel.shadowRoot?.querySelector<HTMLAnchorElement>('a[href="https://pi-web.dev/community-plugins"]');
+    expect(link?.textContent).toContain("Find community plugins");
+    expect(link?.target).toBe("_blank");
+    expect(link?.rel).toContain("noopener");
+    expect(panel.shadowRoot?.querySelector("#package-source")).toBeNull();
+  });
+
   it("associates package validation with the input and retains source after a failed install", async () => {
     const panel = new SettingsPackagesPanel();
     panel.packagesResponse = { packages: [] };

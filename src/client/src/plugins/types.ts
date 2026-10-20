@@ -1,5 +1,5 @@
 import type { TemplateResult } from "lit";
-import type { PluginNavigate, PluginProjects, PluginPromptEditor, PluginSelectedSession, PluginSelectionService } from "../../../plugin-api";
+import type { PluginBackend, PluginCatalog, PluginNavigate, PluginProjects, PluginPromptEditor, PluginSelectedSession, PluginSelectionService } from "../../../plugin-api";
 import type { AppAction } from "../actions";
 import type { DeleteWorkspaceFileResponse, FileContentResponse, FileTreeResponse, JsonValue, Machine, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, TerminalCommandRunHandle, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse, Workspace } from "../api";
 import type { PluginCapability, PluginCapabilityProvision } from "../../../shared/pluginApiTypes";
@@ -40,14 +40,14 @@ export interface WorkspacePluginBinding {
 type MaybePromise<T> = T | Promise<T>;
 
 export interface PiWebPlugin {
-  apiVersion: 4;
+  apiVersion: 4 | 5;
   name: string;
   requires?: readonly PluginCapability[];
-  activate: (context: PluginActivationContext) => MaybePromise<PluginActivationResult>;
+  activate(context: PluginActivationContext): MaybePromise<PluginActivationResult>;
 }
 
 export interface PluginActivationContext {
-  readonly apiVersion: 4;
+  readonly apiVersion: 4 | 5;
   /** Stable package/source identity, including on federated machines. */
   readonly pluginId: PluginId;
   /** Host-unique identity for qualified contribution references in this runtime. */
@@ -77,8 +77,19 @@ export interface PluginActivationResult {
   dispose?(signal: AbortSignal): MaybePromise<void>;
 }
 
+export type StylesheetContribution = import("../../../plugin-api").StylesheetContribution;
+
+export interface QualifiedStylesheetContribution extends StylesheetContribution {
+  id: QualifiedContributionId;
+  pluginId: PluginId;
+  machineId?: string;
+  sourcePluginId?: PluginId;
+}
+
 export interface PluginContributions {
+  stylesheets?: StylesheetContribution[];
   contentRenderers?: import("../../../plugin-api").ContentRendererContribution[];
+  syntaxHighlighters?: import("../../../plugin-api").SyntaxHighlighterContribution[];
   messageActions?: import("../../../plugin-api").MessageActionContribution[];
   actions?: PluginAction[];
   applicationPanels?: ApplicationPanelContribution[];
@@ -185,6 +196,8 @@ export interface WorkspaceHost {
 }
 
 export interface WorkspaceContext {
+  catalog?: PluginCatalog;
+  backend?: PluginBackend;
   machine: PluginMachine;
   workspace: Workspace;
   state: AppState;
@@ -208,6 +221,7 @@ export interface WorkspacePanelTerminal {
 
 export interface PiWebUnstableRuntimeContext {
   openSettings?: (section?: SettingsSection) => void;
+  openMcpAuth?: (mode: "login" | "logout") => void | Promise<void>;
 }
 
 export type { PluginPromptEditor } from "../../../plugin-api";
@@ -215,6 +229,8 @@ export type { PluginPromptEditor } from "../../../plugin-api";
 export type { PluginNavigate, PluginNavigationPatchDestination, PluginNavigationOptions } from "../../../plugin-api";
 
 export interface PluginRuntimeContext {
+  catalog?: PluginCatalog;
+  backend?: PluginBackend;
   navigate: PluginNavigate;
   state: AppState;
   projects?: PluginProjects;
@@ -288,6 +304,8 @@ export interface WorkspacePanelContext extends WorkspaceContext {
 }
 
 export interface ApplicationPanelContext {
+  catalog?: PluginCatalog;
+  backend?: PluginBackend;
   machine: PluginMachine;
   state: AppState;
   projects?: PluginProjects;
@@ -410,52 +428,13 @@ export interface QualifiedSessionLabelContribution extends SessionLabelContribut
 
 export type ThemeColorScheme = "dark" | "light";
 
-export type ThemeToken =
-  | "--pi-bg"
-  | "--pi-surface"
-  | "--pi-surface-hover"
-  | "--pi-terminal-bg"
-  | "--pi-terminal-text"
-  | "--pi-border"
-  | "--pi-border-muted"
-  | "--pi-text"
-  | "--pi-text-secondary"
-  | "--pi-text-bright"
-  | "--pi-muted"
-  | "--pi-dim"
-  | "--pi-accent"
-  | "--pi-accent-border"
-  | "--pi-selection-bg"
-  | "--pi-success"
-  | "--pi-success-border"
-  | "--pi-success-bg"
-  | "--pi-success-surface"
-  | "--pi-success-ring"
-  | "--pi-warning"
-  | "--pi-warning-border"
-  | "--pi-warning-surface"
-  | "--pi-danger"
-  | "--pi-purple"
-  | "--pi-purple-border"
-  | "--pi-purple-surface"
-  | "--pi-overlay"
-  | "--pi-shadow-soft"
-  | "--pi-shadow"
-  | "--pi-shadow-strong"
-  | "--pi-bg-overlay-soft"
-  | "--pi-bg-overlay"
-  | "--pi-success-bg-overlay"
-  | "--pi-terminal-selection";
-
-export type ThemeTokens = Record<ThemeToken, string>;
-
 export interface ThemeContribution {
   id: LocalContributionId;
   name: string;
   description?: string;
   order?: number;
   colorScheme: ThemeColorScheme;
-  tokens: ThemeTokens;
+  stylesheets?: StylesheetContribution[];
 }
 
 export interface ThemePairContribution {

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
-import type { FileContentResponse, FileTreeEntry, FileTreeResponse, WorkspaceFiles, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
+import type { FileContentResponse, FileTreeEntry, FileTreeResponse, StylesheetIntegrationCapabilityV1, WorkspaceFiles, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
 import { RELAYS_ROOT, type RelayDiscoveryFiles, type RelayTreeNode } from "./relayDiscovery";
 import {
   collapsedAncestorOfSelectedFile,
@@ -11,6 +11,7 @@ import {
 
 interface RelaysPanelTestElement extends HTMLElement {
   context: WorkspacePanelContext | undefined;
+  stylesheetIntegration: StylesheetIntegrationCapabilityV1 | undefined;
 }
 
 declare global {
@@ -23,6 +24,80 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
 });
+
+describe("host stylesheet integration", () => {
+  it("registers shared UI on connect and releases and reacquires it on reconnect", () => {
+    defineRelaysPanelElement();
+    const panel = document.createElement(relaysPanelTagName);
+    const integration = stylesheetIntegrationFake();
+    panel.stylesheetIntegration = integration;
+    expect(integration.registerRoot).not.toHaveBeenCalled();
+
+    document.body.append(panel);
+    expect(integration.registerRoot).toHaveBeenCalledExactlyOnceWith(shadow(panel), { sharedUi: true });
+    panel.stylesheetIntegration = integration;
+    expect(integration.registerRoot).toHaveBeenCalledTimes(1);
+
+    panel.remove();
+    expect(integration.release).toHaveBeenCalledOnce();
+    document.body.append(panel);
+    expect(integration.registerRoot).toHaveBeenCalledTimes(2);
+    expect(integration.registerRoot).toHaveBeenLastCalledWith(shadow(panel), { sharedUi: true });
+    panel.remove();
+    expect(integration.release).toHaveBeenCalledTimes(2);
+  });
+
+  it("replaces or clears a connected integration without replacing regions or controls", async () => {
+    const panel = await mountPanel(panelContext(twoRelays()));
+    const first = stylesheetIntegrationFake();
+    const second = stylesheetIntegrationFake();
+    const root = shadow(panel);
+    const regions = [root.querySelector(".toolbar"), root.querySelector(".document-tabs"), root.querySelector(".viewer")];
+    const tab = activeTab(panel);
+    panel.stylesheetIntegration = first;
+    expect(first.registerRoot).toHaveBeenCalledExactlyOnceWith(root, { sharedUi: true });
+    panel.stylesheetIntegration = second;
+    expect(first.release).toHaveBeenCalledOnce();
+    expect(second.registerRoot).toHaveBeenCalledExactlyOnceWith(root, { sharedUi: true });
+    panel.stylesheetIntegration = undefined;
+    expect(second.release).toHaveBeenCalledOnce();
+    panel.remove();
+    expect(second.release).toHaveBeenCalledOnce();
+
+    expect(root.querySelector(".toolbar")).toBe(regions[0]);
+    expect(root.querySelector(".document-tabs")).toBe(regions[1]);
+    expect(root.querySelector(".viewer")).toBe(regions[2]);
+    expect(activeTab(panel)).toBe(tab);
+    expect(root.querySelector(".toolbar")?.classList.contains("ui-toolbar")).toBe(true);
+    expect(root.querySelector("[data-refresh]")?.classList.contains("ui-button--icon")).toBe(true);
+    expect(picker(panel)?.classList.contains("ui-select")).toBe(true);
+    expect(root.querySelector(".document-tabs")?.classList.contains("ui-tabs")).toBe(true);
+    expect(tab?.matches("button.ui-button.ui-tab[aria-current='page']")).toBe(true);
+  });
+
+  it("uses only the latest integration when replaced while disconnected", () => {
+    defineRelaysPanelElement();
+    const panel = document.createElement(relaysPanelTagName);
+    const first = stylesheetIntegrationFake();
+    const second = stylesheetIntegrationFake();
+    panel.stylesheetIntegration = first;
+    panel.stylesheetIntegration = second;
+    document.body.append(panel);
+    expect(first.registerRoot).not.toHaveBeenCalled();
+    expect(first.release).not.toHaveBeenCalled();
+    expect(second.registerRoot).toHaveBeenCalledExactlyOnceWith(shadow(panel), { sharedUi: true });
+  });
+});
+
+function stylesheetIntegrationFake() {
+  const release = vi.fn();
+  return {
+    registerRoot: vi.fn<StylesheetIntegrationCapabilityV1["registerRoot"]>(() => release),
+    createController: vi.fn<StylesheetIntegrationCapabilityV1["createController"]>(),
+    subscribe: vi.fn<StylesheetIntegrationCapabilityV1["subscribe"]>(),
+    release,
+  } satisfies StylesheetIntegrationCapabilityV1 & { release: typeof release };
+}
 
 describe("workspace states", () => {
   it("asks for a workspace when no context is set", async () => {
@@ -997,7 +1072,7 @@ function tabNames(panel: RelaysPanelTestElement): string[] {
 }
 
 function activeTab(panel: RelaysPanelTestElement): Element | null {
-  return shadow(panel).querySelector("button[data-document-path].active");
+  return shadow(panel).querySelector("button[data-document-path].selected");
 }
 
 function tabNamed(panel: RelaysPanelTestElement, name: string): HTMLElement {

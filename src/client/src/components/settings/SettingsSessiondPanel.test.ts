@@ -15,7 +15,8 @@ describe("session daemon panel notices", () => {
 
   it("keeps restart timing and interruption consequences in the description", () => {
     const description = sessiondDescription("local (local gateway)");
-    expect(description).toContain("Changes save immediately and take effect after that machine’s session daemon restarts.");
+    expect(description).toContain("Naming changes apply to the next naming request without a restart.");
+    expect(description).toContain("Agent permission changes require that machine’s session daemon to restart.");
     expect(description).toContain("Restarting interrupts active sessions and running work.");
   });
 

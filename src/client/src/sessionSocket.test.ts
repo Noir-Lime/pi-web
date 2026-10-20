@@ -199,6 +199,9 @@ describe("socket stream validation", () => {
   it("accepts the full session stream vocabulary with valid payloads", () => {
     const validFrames = [
       { type: "message.append", message: { role: "user", content: [] } },
+      { type: "assistant.start", message: { role: "assistant", streamId: "stream-1", content: [] } },
+      { type: "assistant.delta", text: "hello", streamId: "stream-1" },
+      { type: "assistant.thinking.delta", text: "plan", streamId: "stream-1" },
       { type: "assistant.delta", text: "hello" },
       { type: "assistant.thinking.delta", text: "thinking" },
       { type: "tool.start", toolName: "read", toolCallId: "call-1", summary: "read file", args: { path: "/a" } },
@@ -216,6 +219,7 @@ describe("socket stream validation", () => {
       { type: "activity.update", activity: activityWire() },
       { type: "command.output", level: "success", message: "done" },
       { type: "session.error", message: "boom" },
+      { type: "session.diagnostic", message: "Provider returned HTTP 400" },
       { type: "session.name", sessionId: "session-1", name: "rename" },
       { type: "session.created", session: sessionInfoWire() },
       { type: "session.tree.changed" },
@@ -234,6 +238,8 @@ describe("socket stream validation", () => {
 
   it("drops malformed session stream frames instead of accepting them on type alone", () => {
     expect(parseSessionSocketEvent({ type: "message.append" })).toBeUndefined();
+    expect(parseSessionSocketEvent({ type: "assistant.start" })).toBeUndefined();
+    expect(parseSessionSocketEvent({ type: "assistant.delta", text: "hello", streamId: 7 })).toBeUndefined();
     expect(parseSessionSocketEvent({ type: "assistant.delta" })).toBeUndefined();
     expect(parseSessionSocketEvent({ type: "assistant.delta", text: 7 })).toBeUndefined();
     expect(parseSessionSocketEvent({ type: "assistant.thinking.delta", text: true })).toBeUndefined();
@@ -247,6 +253,8 @@ describe("socket stream validation", () => {
     expect(parseSessionSocketEvent({ type: "command.output", level: "verbose", message: "x" })).toBeUndefined();
     expect(parseSessionSocketEvent({ type: "command.output", level: "info" })).toBeUndefined();
     expect(parseSessionSocketEvent({ type: "session.error" })).toBeUndefined();
+    expect(parseSessionSocketEvent({ type: "session.diagnostic" })).toBeUndefined();
+    expect(parseSessionSocketEvent({ type: "session.diagnostic", message: {} })).toBeUndefined();
     expect(parseSessionSocketEvent({ type: "session.name", name: "rename" })).toBeUndefined();
     expect(parseSessionSocketEvent({ type: "session.name", sessionId: "" })).toBeUndefined();
     expect(parseSessionSocketEvent({ type: "session.created", session: { id: "session-1" } })).toBeUndefined();
@@ -347,6 +355,35 @@ describe("socket instance isolation", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("logs diagnostics with session context without forwarding them to chat state", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const socket = new SessionSocket();
+    try {
+      const onEvent = vi.fn();
+      const target = { id: "session-1", cwd: "/repo" };
+      socket.connect(target, onEvent, undefined, "machine-a");
+      const connection = FakeWebSocket.instances[0];
+      if (connection === undefined) throw new Error("expected session socket");
+      connection.onmessage?.({ data: JSON.stringify({ type: "session.diagnostic", message: "Compaction failed: HTTP 400", seq: 1 }) });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(error).toHaveBeenCalledExactlyOnceWith("[PI WEB] Session diagnostic", {
+        machineId: "machine-a", sessionId: target.id, cwd: target.cwd, message: "Compaction failed: HTTP 400",
+      });
+      expect(onEvent).not.toHaveBeenCalled();
+
+      // A frame queued on the old socket must not be logged for its replacement.
+      connection.onmessage?.({ data: JSON.stringify({ type: "session.diagnostic", message: "Stale failure" }) });
+      socket.connect(target, onEvent, undefined, "machine-b");
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(error).toHaveBeenCalledTimes(1);
+    } finally {
+      socket.close();
+      error.mockRestore();
+    }
   });
 
   it("drops queued session frames and close callbacks from a replaced machine socket", async () => {

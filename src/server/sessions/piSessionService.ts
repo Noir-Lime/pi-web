@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
-import type { SessionQueueMessageMutation } from "../../shared/apiTypes.js";
+import type { McpAuthServerOption, McpAuthServersResponse, OAuthFlowState, SessionQueueMessageMutation } from "../../shared/apiTypes.js";
 import { QueueCompatibilityGuard, mirroredQueueEntries, mutableQueueAgent, mutableTextMirror, parseQueueMessageMutation, queuedMessageAttachmentCounts, queuedMessageAttachmentCount, snapshotAgentQueues, type QueueAgent } from "./queuedMessageMutation.js";
 import {
   createAgentSessionFromServices,
@@ -34,11 +34,13 @@ import {
   type ProjectTrustEvent,
   type ProjectTrustEventResult,
   type ResourceDiagnostic,
+  type RegisteredCommand,
 } from "@earendil-works/pi-coding-agent";
 import type { ClientArchiveSessionsResponse, ClientCommand, ClientCommandResult, ClientMessagePage, ClientSession, ClientSessionCleanupExecuteResponse, ClientSessionCleanupPreviewResponse, ClientSessionModel, ClientSessionModelCatalogEntry, ClientSessionStatus, ClientSessionTreeForkRequest, ClientSessionTreeForkResult, ClientSessionTreeNavigateRequest, ClientSessionTreeNavigateResult, ClientThinkingLevel, SessionStreamSnapshot, SessionTranscriptSnapshot, SessionUiEvent } from "../types.js";
 import { projectBrowserMessage } from "../browserMessageProjection.js";
 import { isSessionMediaId } from "../../shared/sessionMedia.js";
 import { getBuiltinExtensionFactories } from "./builtinExtensionFactories.js";
+import { McpAuthFlowService } from "./mcpAuthFlowService.js";
 import type { SessionMedia } from "./sessionMediaIndex.js";
 import { pageMessagesAtSafeBoundary } from "./messagePaging.js";
 import { clientSessionFirstMessagePreview } from "./clientSessionPreview.js";
@@ -51,6 +53,7 @@ import { messageHistoryTargetId } from "./messageHistoryTarget.js";
 import { SessionArchiveStore, type ArchivedSessionRecord, type ArchiveSessionInput } from "./sessionArchiveStore.js";
 import { findArchiveCandidateByExactId, planSessionArchiveTree, type SessionArchiveTreeCandidate } from "./sessionArchiveTree.js";
 import type { ActiveSession } from "./sessionRuntimeStore.js";
+import type { PluginSessionSnapshot } from "../../shared/pluginCatalogTypes.js";
 import type { PiWebHostPiSessionConnection } from "../../server-plugin-api.js";
 import { PiSessionEventConnections } from "./piSessionEventConnections.js";
 import { fallbackSessionName, generateShortSessionName, requireInitialSessionName } from "./sessionNameGenerator.js";
@@ -472,6 +475,7 @@ export interface PiAgentSession {
    * workspace override is exposed separately and remains read-only.
    */
   settingsManager: {
+    isProjectTrusted?(): boolean;
     getWarnings(): { anthropicExtraUsage?: boolean };
     setWarnings(warnings: { anthropicExtraUsage?: boolean }): void;
     getEnabledModels(): string[] | undefined;
@@ -501,7 +505,7 @@ export interface PiAgentSession {
   isBashRunning: boolean;
   pendingMessageCount: number;
   extensionRunner: {
-    getRegisteredCommands(): readonly { invocationName: string; description?: string }[];
+    getRegisteredCommands(): readonly ({ invocationName: string; description?: string; sourceInfo?: { path: string } } & Pick<RegisteredCommand, "getArgumentCompletions">)[];
     getMarkdownTransformers(): MarkdownTransformer[];
     getUIContext(): ExtensionUIContext;
     setUIContext(uiContext?: ExtensionUIContext, mode?: "rpc"): void;
@@ -1188,10 +1192,10 @@ export interface PiSessionServiceDependencies {
    */
   catalogRefreshStatus?: CatalogRefreshStatus;
   /**
-   * Live global config reader used to resolve workspace-effective request
-   * defaults, currently the attachments save folder. Read at request time so
-   * Settings edits apply without a daemon restart. When omitted, only the
-   * project-local layer applies on top of the built-in defaults.
+   * Live global config reader for attachments and automatic session naming.
+   * Read fresh at request time so Settings edits apply without a daemon restart.
+   * When omitted, built-in
+   * defaults apply, with the project-local layer supported for attachments only.
    */
   config?: Pick<PiWebConfigService, "read">;
 }
@@ -1223,10 +1227,15 @@ export class PiSessionService implements SessionRouteService {
   private readonly suggestedInputs = new Map<string, string>();
   /** Counts async operations that may append an entry before they settle. */
   private readonly sessionEntryMutationCounts = new WeakMap<PiAgentSession, number>();
+  private readonly manualCompactionEnded = new WeakSet<PiAgentSession>();
   /** Exempt only a command's own prompt receipt while it invokes guarded session control. */
   private readonly extensionCommandExecution = new AsyncLocalStorage<ExtensionCommandExecution>();
+  readonly mcpAuthFlows = new McpAuthFlowService();
+  private readonly runtimeMessageCounts = new WeakMap<PiAgentSession, number>();
+  private readonly snapshotMessageCounts = new WeakMap<readonly unknown[], number>();
   private readonly pendingPromptEchoes = new WeakMap<PiAgentSession, { userIndex: number; message: ReturnType<typeof userMessage> }[]>();
   private readonly publishedAssistantPartials = new WeakMap<PiAgentSession, unknown>();
+  private readonly assistantStreamIds = new WeakMap<PiAgentSession, string>();
   /** Settings-wide queue preventing enabled-model read/modify/write races across sessions. */
   private modelScopeMutationQueue: Promise<void> = Promise.resolve();
   /** Global and workspace-owned enabled-model states; live session scopes project one entry lazily. */
@@ -1360,12 +1369,17 @@ export class PiSessionService implements SessionRouteService {
       {
         onCompactionStart: (session) => {
           this.beginSessionEntryMutation(session, "compact the session");
+          this.manualCompactionEnded.delete(session);
           this.publishActivity(session, "compacting", "active");
           this.publishStatus(session);
         },
         onCompactionEnd: (session, result, detail) => {
           this.endSessionEntryMutation(session);
-          this.publishActivity(session, result === "success" ? "compaction complete" : "compaction failed", result === "success" ? "idle" : "error", detail);
+          // The SDK terminal event carries the authoritative aborted flag, even
+          // when an extension cancels by throwing an otherwise ordinary error.
+          if (!this.manualCompactionEnded.delete(session) && result === "error") {
+            this.publishCompactionOutcome(session, { reason: "manual", errorMessage: `Compaction failed: ${detail ?? "Unknown error"}` });
+          }
           this.publishStatus(session);
         },
         reloadSession: (session) => this.reloadSessionRuntime(session),
@@ -1492,6 +1506,7 @@ export class PiSessionService implements SessionRouteService {
   }
 
   async dispose(): Promise<void> {
+    this.mcpAuthFlows.dispose();
     this.unreadPublicationStopped = true;
     this.clearUnreadPublicationRetry();
     clearInterval(this.heartbeat);
@@ -1573,6 +1588,42 @@ export class PiSessionService implements SessionRouteService {
       .filter(isDefined)
       .sort((a, b) => Date.parse(b.modified) - Date.parse(a.modified));
     return [...unarchivedSessions, ...archivedSessions];
+  }
+
+  /** Read-only plugin catalog: do not open runtimes or reconcile unread/activity state. */
+  async listCatalogSessions(cwd: string, signal?: AbortSignal): Promise<readonly PluginSessionSnapshot[]> {
+    signal?.throwIfAborted();
+    const [entries, archives] = await Promise.all([this.sessionManager.list(cwd), this.archiveStore.list()]);
+    signal?.throwIfAborted();
+    const archived = archives.filter((record) => cwdPathsEqual(record.cwd, cwd));
+    const archivedIds = new Set(archived.map((record) => record.sessionId));
+    const rows = new Map(entries.filter((entry) => !archivedIds.has(entry.id)).map((entry) => [entry.id, clientSessionFromListEntry(entry)]));
+    const runtimes = new Map<string, PiAgentSession>();
+    for (const active of new Set(this.active.values())) {
+      const session = active.runtime.session;
+      if (!cwdPathsEqual(session.sessionManager.getCwd(), cwd) || archivedIds.has(session.sessionId)) continue;
+      const row = rows.get(session.sessionId);
+      // A disk clone with the same id must not inherit another file's runtime.
+      if (row !== undefined && (session.sessionFile === undefined || !sessionPathsEqual(row.path, session.sessionFile))) continue;
+      runtimes.set(session.sessionId, session);
+      rows.set(session.sessionId, clientSessionFromActiveSession(session));
+    }
+    const entriesById = new Map(entries.map((entry) => [entry.id, entry]));
+    for (const record of archived) {
+      const row = clientSessionFromArchivedRecord(record, entriesById.get(record.sessionId));
+      if (row !== undefined) rows.set(row.id, row);
+    }
+    return [...rows.values()].sort((a, b) => Date.parse(b.modified) - Date.parse(a.modified)).map((row) => {
+      const runtime = runtimes.get(row.id);
+      return Object.freeze({
+        id: row.id,
+        cwd: row.cwd,
+        ...(row.name === undefined ? {} : { name: row.name }),
+        ...(row.metadata === undefined ? {} : { metadata: structuredClone(row.metadata) }),
+        archived: row.archived === true,
+        runtime: runtime === undefined ? "not-hosted" : this.hasActiveWork(runtime) ? "busy" : "idle",
+      } satisfies PluginSessionSnapshot);
+    });
   }
 
   async start(cwd: string, options: StartSessionOptions = {}): Promise<ClientSession> {
@@ -2785,7 +2836,7 @@ export class PiSessionService implements SessionRouteService {
     await this.activityMarker.refresh(session.sessionFile, this.hasActiveWork(session));
     if (this.hasActiveWork(session)) return this.statusFromSession(session);
     const branch = await this.readableSessionBranch(ref, session);
-    return this.statusFromSession(session, transcriptMessageCount(branch));
+    return this.statusFromSession(session, this.snapshotMessageCount(branch));
   }
 
   /**
@@ -2804,7 +2855,10 @@ export class PiSessionService implements SessionRouteService {
     const streamingMessage = session.state.streamingMessage;
     const partial = streamingMessage === undefined || streamingMessage === null
       ? null
-      : annotateAssistantThinkingLevel(projectBrowserMessage(streamingMessage), session.thinkingLevel);
+      : annotateAssistantStreamId(
+        annotateAssistantThinkingLevel(projectBrowserMessage(streamingMessage), session.thinkingLevel),
+        this.assistantStreamIds.get(session),
+      );
     return { seq, partial };
   }
 
@@ -3000,6 +3054,95 @@ export class PiSessionService implements SessionRouteService {
       commands.push({ name: `skill:${skill.name}`, ...(skill.description === undefined ? {} : { description: skill.description }), source: "skill" });
     }
     return commands.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  private async mcpAuthSession(ref: PiSessionRef): Promise<PiAgentSession> {
+    await this.assertWritable(ref);
+    const session = await this.getOrOpen(ref);
+    await this.assertWritable(ref);
+    this.assertCurrentExtensionSession(session);
+    if (session.sessionId !== ref.id || !cwdPathsEqual(ref.cwd, session.sessionManager.getCwd())) throw new Error("MCP authentication session workspace changed");
+    if (session.settingsManager.isProjectTrusted?.() !== true) throw new Error("MCP authentication requires a trusted workspace");
+    if (!session.extensionRunner.getRegisteredCommands().some((command) => command.invocationName === "mcp" && command.sourceInfo?.path === "builtin:mcp")) {
+      throw new Error("Pi's built-in MCP command is not available for this session");
+    }
+    if (this.hasActiveWork(session)) throw new Error("Wait for current session activity before authenticating MCP");
+    return session;
+  }
+
+  private assertMcpAuthIdentity(ref: PiSessionRef, session: PiAgentSession): void {
+    this.assertCurrentExtensionSession(session);
+    if (session.sessionId !== ref.id || !cwdPathsEqual(ref.cwd, session.sessionManager.getCwd())) throw new Error("MCP authentication session workspace changed");
+    if (session.settingsManager.isProjectTrusted?.() !== true) throw new Error("MCP authentication requires a trusted workspace");
+  }
+
+  private async discoverMcpAuthServers(ref: PiSessionRef, session: PiAgentSession): Promise<McpAuthServerOption[]> {
+    return this.mcpAuthFlows.discover({
+      sessionId: ref.id, identity: session,
+      isCurrent: () => this.isCurrentActiveSession(session),
+      run: async () => {
+        // The SDK has no public MCP readiness promise. In RPC mode this supported
+        // status command awaits startup without reconnecting or touching tokens.
+        await session.prompt("/mcp", { expandPromptTemplates: true });
+        await this.assertWritable(ref);
+        this.assertMcpAuthIdentity(ref, session);
+        const command = session.extensionRunner.getRegisteredCommands().find((candidate) => candidate.invocationName === "mcp" && candidate.sourceInfo?.path === "builtin:mcp");
+        if (!command) throw new Error("Pi's built-in MCP command is not available for this session");
+        const completions = await command.getArgumentCompletions?.("login ") ?? [];
+        await this.assertWritable(ref);
+        this.assertMcpAuthIdentity(ref, session);
+        if (completions.length > 200) throw new Error("Too many MCP authentication servers");
+        const servers: McpAuthServerOption[] = [];
+        for (const item of completions) {
+          const name = item.value.startsWith("login ") ? item.value.slice(6) : "";
+          // Commands split on whitespace. Never forward an arbitrary suffix or
+          // a name that could change the builtin command's argument structure.
+          if (name.length === 0 || name.length > 256 || /\s/u.test(name) || Array.from(name).some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) continue;
+          if ((item.description?.length ?? 0) > 32 * 1024) throw new Error("MCP server description is too large");
+          if (!servers.some((server) => server.name === name)) servers.push({ name, ...(item.description === undefined ? {} : { description: item.description }) });
+        }
+        return servers;
+      },
+    });
+  }
+
+  async mcpAuthServers(ref: PiSessionRef): Promise<McpAuthServersResponse> {
+    const session = await this.mcpAuthSession(ref);
+    if (this.hasActiveWork(session)) throw new Error("Wait for current session activity before listing MCP servers");
+    return this.runSessionEntryMutation(session, "list MCP authentication servers", async () => ({ servers: await this.discoverMcpAuthServers(ref, session) }));
+  }
+
+  async startMcpAuth(ref: PiSessionRef, mode: "login" | "logout", serverName?: string): Promise<OAuthFlowState> {
+    const session = await this.mcpAuthSession(ref);
+    if (this.hasActiveWork(session)) throw new Error("Wait for current session activity before authenticating MCP");
+    const servers = await this.runSessionEntryMutation(session, "discover MCP authentication servers", () => this.discoverMcpAuthServers(ref, session));
+    if (serverName !== undefined && !servers.some((server) => server.name === serverName)) throw new Error("Unknown or ineligible MCP authentication server");
+    this.assertMcpAuthIdentity(ref, session);
+    if (this.hasActiveWork(session)) throw new Error("Wait for current session activity before authenticating MCP");
+    return this.mcpAuthFlows.start({
+      sessionId: ref.id, mode,
+      identity: session,
+      isCurrent: () => this.isCurrentActiveSession(session) && session.sessionId === ref.id && cwdPathsEqual(ref.cwd, session.sessionManager.getCwd()),
+      // This is an awaited extension command, not a model prompt submission.
+      // Avoid prompt echoes/activity and the fire-and-forget command receipt.
+      run: () => this.runSessionEntryMutation(session, "authenticate MCP", async () => {
+        const operation = McpAuthFlowService.current(session);
+        if (!operation) throw new Error("MCP authentication session is no longer current");
+        if (servers.length === 0) {
+          operation.notify("No eligible MCP servers are available for this action.");
+          return;
+        }
+        const selected = serverName ?? await operation.selectServer(servers);
+        if (selected === undefined || operation.isCancelled()) return;
+        await this.assertWritable(ref);
+        this.assertMcpAuthIdentity(ref, session);
+        const fresh = await this.discoverMcpAuthServers(ref, session);
+        if (!fresh.some((server) => server.name === selected)) throw new Error("MCP authentication server is no longer eligible");
+        if (operation.isCancelled()) return;
+        operation.setServer(selected);
+        await session.prompt(`/mcp ${mode} ${selected}`, { expandPromptTemplates: true });
+      }),
+    });
   }
 
   async prompt(ref: PiSessionRef, text: unknown, streamingBehavior?: unknown, attachments?: unknown, options?: { echoUserMessage?: boolean }): Promise<void> {
@@ -3295,6 +3438,7 @@ export class PiSessionService implements SessionRouteService {
       this.treeNavigations.delete(session);
       if (this.isCurrentActiveSession(session)) {
         this.flushDeferredTreeNavigationWork(session);
+        this.reconcileRuntimeMessageCount(session);
         this.publishStatus(session);
       } else {
         this.deferredGeneratedSessionNames.delete(session);
@@ -3986,6 +4130,7 @@ export class PiSessionService implements SessionRouteService {
     // Extension dialog waiters are parked Promises inside the dying runtime:
     // settle them rather than dropping them.
     this.endSessionExtensionDialogs(sessionId);
+    this.mcpAuthFlows.cancelSession(sessionId);
     this.active.delete(sessionId);
     this.events.mediaIndex.forgetSession({ id: sessionId, cwd: active.runtime.session.sessionManager.getCwd() });
     this.activities.delete(sessionId);
@@ -4030,6 +4175,7 @@ export class PiSessionService implements SessionRouteService {
 
   private async assertWritable(ref: PiSessionRef): Promise<void> {
     if (await this.getArchived(ref) !== undefined) throw new Error("Archived sessions are read-only. Restore the session to continue.");
+    this.mcpAuthFlows.assertSessionAvailable(ref.id);
   }
 
   private async getOrOpen(ref: PiSessionRef): Promise<PiAgentSession> {
@@ -4415,6 +4561,11 @@ export class PiSessionService implements SessionRouteService {
         commandContextActions: this.extensionCommandActions(session),
         onError: (error) => {
           const message = `${error.extensionPath}: ${error.error}`;
+          const operation = McpAuthFlowService.current(session);
+          if (operation) {
+            operation.error(message);
+            return;
+          }
           this.publishActivity(session, "extension error", "error", message);
           this.events.publish(session.sessionId, { type: "session.error", message });
         },
@@ -4516,6 +4667,11 @@ export class PiSessionService implements SessionRouteService {
   ): ExtensionUIContext {
     const baseUiContext = session.extensionRunner.getUIContext();
     const notify: ExtensionUIContext["notify"] = (message, type) => {
+      const operation = McpAuthFlowService.current(session);
+      if (operation) {
+        operation.notify(message);
+        return;
+      }
       if (generation === undefined) {
         this.events.publish(session.sessionId, {
           type: "command.output",
@@ -4538,15 +4694,18 @@ export class PiSessionService implements SessionRouteService {
         if (property === "theme") return plainTextTheme;
         if (property === "confirm") {
           return (title: string, message: string, opts?: ExtensionUIDialogOptions) =>
-            this.openExtensionDialog(session, { kind: "confirm", title, message }, opts, startupDialogs?.signal);
+            McpAuthFlowService.current(session)?.confirm(title, message, opts)
+              ?? this.openExtensionDialog(session, { kind: "confirm", title, message }, opts, startupDialogs?.signal);
         }
         if (property === "select") {
           return (title: string, options: string[], opts?: ExtensionUIDialogOptions) =>
-            this.openExtensionDialog(session, { kind: "select", title, options }, opts, startupDialogs?.signal);
+            McpAuthFlowService.current(session)?.select(title, options, opts)
+              ?? this.openExtensionDialog(session, { kind: "select", title, options }, opts, startupDialogs?.signal);
         }
         if (property === "input") {
           return (title: string, placeholder: string | undefined, opts?: ExtensionUIDialogOptions) =>
-            this.openExtensionDialog(session, { kind: "input", title, placeholder }, opts, startupDialogs?.signal);
+            McpAuthFlowService.current(session)?.input(title, placeholder, opts)
+              ?? this.openExtensionDialog(session, { kind: "input", title, placeholder }, opts, startupDialogs?.signal);
         }
         const value: unknown = Reflect.get(target, property, receiver);
         return value;
@@ -4711,6 +4870,7 @@ export class PiSessionService implements SessionRouteService {
       }
     }
     this.restoreSubsessionReceipts(session);
+    this.reconcileRuntimeMessageCount(session);
     const unsubscribe = session.subscribe((event) => {
       const eventType = getString(event, "type");
       const message = getProperty(event, "message");
@@ -4724,6 +4884,16 @@ export class PiSessionService implements SessionRouteService {
         this.subsessionStoppedParents.add(session);
       }
       const entry = getProperty(event, "entry");
+      // Regular message_end precedes persistence; boundary drafts instead emit
+      // entry_appended. Only message entries contribute to the transcript count.
+      const role = getString(message, "role");
+      if ((eventType === "message_end" && (role === "user" || role === "assistant" || role === "toolResult" || role === "system"))
+        || (eventType === "entry_appended" && getString(entry, "type") === "message")) {
+        this.runtimeMessageCounts.set(session, this.runtimeMessageCount(session) + 1);
+      }
+      // Reconcile once after the run has actually settled, not per streamed
+      // update or per message. Tree changes can replace the branch entirely.
+      if (eventType === "agent_settled" || eventType === "session_tree") this.reconcileRuntimeMessageCount(session);
       if (eventType === "entry_appended" && getString(entry, "type") === "custom_message"
         && getString(entry, "customType") === SUBSESSION_NOTIFICATION_CUSTOM_TYPE) {
         inbox.receive(completionReceiptIds(getProperty(entry, "details")));
@@ -4732,24 +4902,35 @@ export class PiSessionService implements SessionRouteService {
       // boundaries can safely reconcile committed messages and failed intents.
       if (eventType === "turn_end" || eventType === "agent_settled") this.restoreSubsessionReceipts(session);
       if (eventType === "agent_settled") this.scheduleSubsessionDelivery(session);
+      if (eventType === "message_start" && getString(message, "role") === "assistant") {
+        this.assistantStreamIds.set(session, randomUUID());
+      }
+      const streamId = this.assistantStreamIds.get(session);
       if ((eventType === "message_start" || eventType === "message_update") && getString(message, "role") === "assistant") {
         // SDK state advances before async extension hooks finish. Capture only
         // published messages, detaching even blocks left intact by projection.
         this.publishedAssistantPartials.set(session, structuredClone(
-          annotateAssistantThinkingLevel(projectBrowserMessage(message), session.thinkingLevel),
+          annotateAssistantStreamId(annotateAssistantThinkingLevel(projectBrowserMessage(message), session.thinkingLevel), streamId),
         ));
-      } else if (eventType === "message_start" || eventType === "message_end" || eventType === "agent_end") {
+      } else if ((eventType === "message_end" && getString(message, "role") === "assistant") || eventType === "agent_end") {
         this.publishedAssistantPartials.delete(session);
       }
-      const clientEvent = toClientEvent(event, session.thinkingLevel);
+      const clientEvent = toClientEvent(event, session.thinkingLevel, streamId);
       if ((clientEvent.type === "message.end" || clientEvent.type === "message.append") && clientEvent.message !== undefined) {
         clientEvent.message = this.browserTranscriptMessage(session, clientEvent.message);
       }
       this.events.publish(session.sessionId, clientEvent, { id: session.sessionId, cwd: session.sessionManager.getCwd() });
+      if ((eventType === "message_end" && getString(message, "role") === "assistant") || eventType === "agent_end") {
+        this.assistantStreamIds.delete(session);
+      }
       this.publishActivityForEvent(session, event);
       if (eventType === "message_start" && getString(message, "role") === "user") this.suggestedInputs.delete(session.sessionId);
       if (eventType === "agent_end") this.abortRunScopedExtensionDialogs(session.sessionId);
-      if (eventType === "compaction_end") this.scheduleCompactionQueueDrain(session.sessionId);
+      if (eventType === "compaction_end") {
+        if (getString(event, "reason") === "manual") this.manualCompactionEnded.add(session);
+        this.publishCompactionOutcome(session, event);
+        this.scheduleCompactionQueueDrain(session.sessionId);
+      }
       if (eventType === "compaction_end" || eventType === "bash_execution_end") this.scheduleSubsessionDelivery(session);
       if (eventType === "agent_start" || eventType === "agent_end") this.scheduleCompactionQueueDrain(session.sessionId);
       // Deltas already publish text/activity. Rebuilding history-derived stats
@@ -4762,8 +4943,29 @@ export class PiSessionService implements SessionRouteService {
       this.sessionEvents.close(session);
       unsubscribe();
       this.publishedAssistantPartials.delete(session);
+      this.assistantStreamIds.delete(session);
     };
     this.active.set(session.sessionId, active);
+  }
+
+  private publishCompactionOutcome(session: PiAgentSession, event: unknown): void {
+    const aborted = getBoolean(event, "aborted") === true;
+    const errorMessage = getString(event, "errorMessage");
+    const automatic = getString(event, "reason") !== "manual";
+    const message = aborted
+      ? (automatic ? "Automatic compaction cancelled." : "Compaction cancelled.")
+      : errorMessage === undefined ? undefined : "Couldn’t compact history. Try again.";
+    if (!aborted && errorMessage !== undefined) {
+      this.events.publish(session.sessionId, { type: "session.diagnostic", message: errorMessage });
+    }
+    this.publishActivity(session, aborted ? "compaction cancelled" : errorMessage === undefined ? "compaction complete" : "compaction failed",
+      !aborted && errorMessage !== undefined ? "error" : "idle", message);
+    // Successful compaction already has a canonical summary in the transcript.
+    // Keep cancellation/failure feedback in the refresh-safe session inbox only.
+    const generation = this.notificationGenerationBySession.get(session);
+    if (message !== undefined && generation !== undefined) {
+      this.publishNotificationMutations(this.notificationStore.addNotification(generation, message, aborted ? "info" : "error").mutations);
+    }
   }
 
   private scheduleCompactionQueueDrain(sessionId: string, delayMs = 0): void {
@@ -4839,14 +5041,27 @@ export class PiSessionService implements SessionRouteService {
   private maybeGenerateSessionName(session: PiAgentSession, firstMessage: string): void {
     if (session.sessionName !== undefined || session.messages.length !== 0 || session.isStreaming || session.isCompacting) return;
 
-    const model = session.model;
-    if (model === undefined) return;
-
-    void generateShortSessionName(session.agent.streamFunction, model, firstMessage).then((name) => {
+    void this.generateSessionName(session, firstMessage).then((name) => {
+      if (name === undefined) this.logger.info({ sessionId: session.sessionId }, "Session naming returned no title; using the first-message fallback");
       this.applyGeneratedSessionName(session, name ?? fallbackSessionName(firstMessage));
-    }).catch(() => {
+    }).catch((err: unknown) => {
+      this.logger.info({ sessionId: session.sessionId, err }, "Session naming failed; using the first-message fallback");
       this.applyGeneratedSessionName(session, fallbackSessionName(firstMessage));
     });
+  }
+
+  private async generateSessionName(session: PiAgentSession, firstMessage: string): Promise<string | undefined> {
+    // Capture one config snapshot per request; later edits must not reroute an
+    // in-progress naming call or rename sessions that already have a title.
+    const naming = this.config === undefined ? {} : (await this.config.read()).effectiveConfig.sessionNaming ?? {};
+    let model = session.model;
+    if (naming.model !== undefined) {
+      const parsed = parseModelSpec(naming.model);
+      model = parsed === undefined ? undefined : session.modelRuntime.getModel(parsed.provider, parsed.modelId);
+      if (model === undefined) throw new Error(`Session naming model is unavailable: ${naming.model}`);
+    }
+    if (model === undefined) return undefined;
+    return generateShortSessionName(session.agent.streamFunction, model, firstMessage, naming);
   }
 
   private applyGeneratedSessionName(session: PiAgentSession, name: string | undefined): void {
@@ -5029,6 +5244,7 @@ export class PiSessionService implements SessionRouteService {
   }
 
   private beginSessionEntryMutation(session: PiAgentSession, action: string): void {
+    this.mcpAuthFlows.assertSessionAvailable(session.sessionId);
     this.assertTreeNavigationInactive(session, action);
     this.sessionEntryMutationCounts.set(session, (this.sessionEntryMutationCounts.get(session) ?? 0) + 1);
     this.observeUnreadActivityState(session);
@@ -5164,7 +5380,28 @@ export class PiSessionService implements SessionRouteService {
     this.events.publishGlobal({ type: "activity.update", activity });
   }
 
-  private statusFromSession(session: PiAgentSession, messageCount = session.messages.length): ClientSessionStatus {
+  private reconcileRuntimeMessageCount(session: PiAgentSession): number {
+    const count = transcriptMessageCount(session.sessionManager.getBranch());
+    this.runtimeMessageCounts.set(session, count);
+    return count;
+  }
+
+  private runtimeMessageCount(session: PiAgentSession): number {
+    return this.runtimeMessageCounts.get(session) ?? this.reconcileRuntimeMessageCount(session);
+  }
+
+  private snapshotMessageCount(branch: readonly unknown[]): number {
+    // The gateway reuses immutable disk snapshots until the file changes.
+    // Keep disk counts separate: an idle runtime may lag external appends.
+    const cached = this.snapshotMessageCounts.get(branch);
+    if (cached !== undefined) return cached;
+    const count = transcriptMessageCount(branch);
+    this.snapshotMessageCounts.set(branch, count);
+    return count;
+  }
+
+  // session.messages is the compacted model context, not the browser transcript.
+  private statusFromSession(session: PiAgentSession, messageCount = this.runtimeMessageCount(session)): ClientSessionStatus {
     const stats = session.getSessionStats();
     const model = session.model === undefined ? undefined : modelToClientModel(session.model);
     // Current SDKs include context usage in stats, even when it is undefined.
@@ -5328,7 +5565,7 @@ function clientSessionFromActiveSession(session: PiAgentSession): ClientSession 
     persisted: sessionFileExists(session.sessionFile),
     created,
     modified: created,
-    messageCount: session.messages.length,
+    messageCount: transcriptMessageCount(session.sessionManager.getBranch()),
     firstMessage: "",
     ...(metadata === undefined ? {} : { metadata }),
     ...(session.sessionName === undefined ? {} : { name: session.sessionName }),
@@ -5379,7 +5616,7 @@ function archiveInputFromActiveSession(session: PiAgentSession): ArchiveSessionI
     path: sessionFile,
     created: new Date().toISOString(),
     modified: new Date().toISOString(),
-    messageCount: session.messages.length,
+    messageCount: transcriptMessageCount(session.sessionManager.getBranch()),
     firstMessage: "",
     ...(metadata === undefined ? {} : { metadata }),
     ...(session.sessionName === undefined ? {} : { name: session.sessionName }),
@@ -5833,19 +6070,34 @@ function finalAssistantText(messages: readonly unknown[]): string {
   return "";
 }
 
-function toClientEvent(event: unknown, thinkingLevel?: string): SessionUiEvent {
+function annotateAssistantStreamId(message: unknown, streamId?: string): unknown {
+  return streamId !== undefined && getString(message, "role") === "assistant" && isRecord(message)
+    ? { ...message, streamId }
+    : message;
+}
+
+function toClientEvent(event: unknown, thinkingLevel?: string, streamId?: string): SessionUiEvent {
   const eventType = getString(event, "type");
   // Nested execution belongs to the parent tool result, not a durable message.
   // Do not create standalone transcript rows that disappear on reconnect.
   if (getString(event, "parentToolCallId") !== undefined && eventType?.startsWith("tool_execution_") === true) {
     return { type: "pi.event", eventType };
   }
+  if (eventType === "message_start" && getString(getProperty(event, "message"), "role") === "assistant") {
+    return {
+      type: "assistant.start",
+      message: annotateAssistantStreamId(
+        annotateAssistantThinkingLevel(projectBrowserMessage(getProperty(event, "message")), thinkingLevel), streamId,
+      ),
+    };
+  }
+  const streamIdentity = streamId === undefined ? {} : { streamId };
   const assistantMessageEvent = getProperty(event, "assistantMessageEvent");
   if (eventType === "message_update" && getString(assistantMessageEvent, "type") === "text_delta") {
-    return { type: "assistant.delta", text: getString(assistantMessageEvent, "delta") ?? "" };
+    return { type: "assistant.delta", text: getString(assistantMessageEvent, "delta") ?? "", ...streamIdentity };
   }
   if (eventType === "message_update" && getString(assistantMessageEvent, "type") === "thinking_delta") {
-    return { type: "assistant.thinking.delta", text: getString(assistantMessageEvent, "delta") ?? "" };
+    return { type: "assistant.thinking.delta", text: getString(assistantMessageEvent, "delta") ?? "", ...streamIdentity };
   }
   if (eventType === "tool_execution_start") {
     const args = getProperty(event, "args");
@@ -5870,7 +6122,7 @@ function toClientEvent(event: unknown, thinkingLevel?: string): SessionUiEvent {
   if (eventType === "message_end") {
     const message = getProperty(event, "message");
     if (message === undefined) return { type: "message.end" };
-    return { type: "message.end", message: annotateAssistantThinkingLevel(message, thinkingLevel) };
+    return { type: "message.end", message: annotateAssistantStreamId(annotateAssistantThinkingLevel(message, thinkingLevel), streamId) };
   }
   return { type: "pi.event", eventType: eventType ?? "unknown" };
 }

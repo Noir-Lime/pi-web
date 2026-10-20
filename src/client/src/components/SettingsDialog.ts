@@ -1,11 +1,16 @@
+import { stylesheetIntegrationCapability } from "../plugins/styles";
 import { css, html, LitElement, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { cache } from "lit/directives/cache.js";
 import { live } from "lit/directives/live.js";
 import type { AppAction } from "../actions";
-import { configApi, piPackagesApi, pluginsApi, type Machine, type MachineHealth, type MachineRuntime, type PiPackageMutationResponse, type PiPackageScope, type PiPackagesResponse, type PiWebConfigResponse, type PiWebConfigValues, type PiWebPluginsResponse } from "../api";
+import { configApi, piPackagesApi, pluginsApi, type Machine, type MachineHealth, type MachineRuntime, type SessionModel, type PiPackageMutationResponse, type PiPackageScope, type PiPackagesResponse, type PiWebConfigResponse, type PiWebConfigValues, type PiWebPluginsResponse } from "../api";
+import type { McpAuthContext, McpAuthHandler } from "./settings/SettingsMcpPanel";
+import "./settings/SettingsMcpPanel";
 import type { SettingsSection } from "../settingsRoute";
 import "./ModalSurface";
+import type { ModalSurface } from "./ModalSurface";
+import { uiDialogStyles, uiSelectionStyles } from "./ui/dialogStyles";
 import "./settings/SettingsGeneralPanel";
 import type { SettingsGeneralPanel } from "./settings/SettingsGeneralPanel";
 import "./settings/SettingsThemePanel";
@@ -24,6 +29,11 @@ import { mergeSelectedMachineSessiondConfig } from "./settings/settingsSessiondC
 
 @customElement("settings-dialog")
 export class SettingsDialog extends LitElement {
+  constructor() {
+    super();
+    stylesheetIntegrationCapability.createController(this);
+  }
+
   @property({ attribute: false }) section: SettingsSection = "general";
   @property({ attribute: false }) actions: AppAction[] = [];
   @property({ attribute: false }) themes: readonly QualifiedThemeContribution[] = [];
@@ -32,6 +42,8 @@ export class SettingsDialog extends LitElement {
   @property({ type: Boolean }) hasLocalThemeOverride = false;
   @property({ attribute: false }) onUseLocalTheme?: (preference: ThemePreference) => void;
   @property({ attribute: false }) onUseDefaultTheme?: () => void;
+  @property({ attribute: false }) mcpContext: McpAuthContext | undefined;
+  @property({ attribute: false }) onMcpAuth?: McpAuthHandler;
   @property({ attribute: false }) machine: Machine | undefined;
   @property({ attribute: false }) machineRuntime: MachineRuntime | undefined;
   @property({ attribute: false }) machines: Machine[] = [];
@@ -54,6 +66,9 @@ export class SettingsDialog extends LitElement {
   @state() private loading = true;
   @state() private accessLoading = true;
   @state() private sessiondLoading = true;
+  @state() private namingModels: SessionModel[] = [];
+  @state() private namingModelsLoading = true;
+  @state() private namingModelsError = "";
   @state() private pluginLoading = true;
   @state() private packageLoading = true;
   @state() private saving = false;
@@ -70,6 +85,7 @@ export class SettingsDialog extends LitElement {
   private loadRequestSeq = 0;
   private accessLoadRequestSeq = 0;
   private sessiondLoadRequestSeq = 0;
+  private namingModelsLoadRequestSeq = 0;
   private pluginLoadRequestSeq = 0;
   private packageLoadRequestSeq = 0;
   private packageMutationSeq = 0;
@@ -91,7 +107,11 @@ export class SettingsDialog extends LitElement {
 
   protected override updated(changed: PropertyValues<this>): void {
     if (changed.has("section")) {
-      this.renderRoot.querySelector(".settings-nav button.selected")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      // The surface must render its slot before the mobile tab row has layout.
+      const surface = this.renderRoot.querySelector<ModalSurface>("modal-surface");
+      void surface?.updateComplete.then(() => {
+        if (this.isConnected) this.renderRoot.querySelector(".settings-nav button.selected")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      });
     }
     if (this.isConnected) {
       const generalPanel = this.renderRoot.querySelector<SettingsGeneralPanel>("settings-general-panel");
@@ -124,12 +144,9 @@ export class SettingsDialog extends LitElement {
   override render(): TemplateResult {
     return html`
       <modal-surface .onClose=${() => this.onClose?.()} .label=${"PI WEB settings"}>
-        <header class="settings-header">
-          <div>
-            <span class="eyebrow">Settings</span>
-            <h1>PI WEB</h1>
-          </div>
-          <button class="close-button" title="Close settings" aria-label="Close settings" @click=${() => this.onClose?.()}>×</button>
+        <header class="settings-header ui-dialog-header">
+          <h1 class="ui-dialog-title">Settings</h1>
+          <button class="close-button ui-button ui-button--icon" title="Close settings" aria-label="Close settings" @click=${() => this.onClose?.()}>×</button>
         </header>
         <div class="settings-body">
           <nav class="settings-nav" aria-label="Settings sections">
@@ -137,6 +154,7 @@ export class SettingsDialog extends LitElement {
             ${this.renderNavButton("sessiond", "Session daemon", "Selected machine")}
             ${this.renderNavButton("packages", "Pi packages", "Selected machine")}
             ${this.renderNavButton("plugins", "PI WEB plugins", "Selected machine")}
+            ${this.renderNavButton("mcp", "MCP", "Selected session")}
             ${this.renderNavButton("shortcuts", "Keyboard shortcuts", "This gateway")}
           </nav>
           <main class="settings-main">
@@ -162,7 +180,7 @@ export class SettingsDialog extends LitElement {
     return html`
       <div class="settings-machine">
         <label for="settings-machine">Configure machine</label>
-        <select id="settings-machine" aria-describedby=${unavailable ? "settings-machine-help settings-machine-status settings-machine-error" : "settings-machine-help settings-machine-status"} .value=${live(target.id)} ?disabled=${this.saving} @change=${(event: Event) => {
+        <select class="ui-select" id="settings-machine" aria-describedby=${unavailable ? "settings-machine-help settings-machine-status settings-machine-error" : "settings-machine-help settings-machine-status"} .value=${live(target.id)} ?disabled=${this.saving} @change=${(event: Event) => {
           if (event.target instanceof HTMLSelectElement) this.requestMachineSwitch(event.target.value);
         }}>
           ${this.machines.map((candidate) => html`<option value=${candidate.id}>${candidate.name}${candidate.kind === "local" ? " (this gateway)" : ""}</option>`)}
@@ -214,8 +232,8 @@ export class SettingsDialog extends LitElement {
     return html`
       <section class="machine-switch-confirmation" role="alert" aria-label="Unsaved machine settings">
         <p>You have unsaved file access or upload settings for ${this.settingsTarget().name}. Discard them and configure ${pending.name}?</p>
-        <button ?disabled=${this.saving} @click=${() => { this.generalPanel?.discardMachineChanges(); this.switchSettingsMachine(pending.id); }}>Discard edits and switch</button>
-        <button @click=${() => { this.pendingMachineId = undefined; }}>Keep editing</button>
+        <button class="ui-button ui-button--action danger" ?disabled=${this.saving} @click=${() => { this.generalPanel?.discardMachineChanges(); this.switchSettingsMachine(pending.id); }}>Discard edits and switch</button>
+        <button class="ui-button ui-button--action" @click=${() => { this.pendingMachineId = undefined; }}>Keep editing</button>
       </section>
     `;
   }
@@ -224,10 +242,23 @@ export class SettingsDialog extends LitElement {
     // Keep the section -> panel routing in sync with the public
     // `activeSettingsPanelTag` seam below, which tests assert against instead of
     // scraping this template's markup.
+    if (this.section === "mcp") {
+      const target = this.settingsTarget();
+      return html`
+        <settings-mcp-panel
+          .context=${this.mcpContext?.machineId === target.id ? this.mcpContext : undefined}
+          .targetLabel=${settingsMachineTargetLabel(target)}
+          .onMcpAuth=${this.onMcpAuth}
+        ></settings-mcp-panel>
+      `;
+    }
     if (this.section === "sessiond") {
       return html`
         <settings-sessiond-panel
           .configResponse=${this.sessiondConfigResponse}
+          .namingModels=${this.namingModels}
+          .namingModelsLoading=${this.namingModelsLoading}
+          .namingModelsError=${this.namingModelsError}
           .loading=${this.sessiondLoading}
           .saving=${this.saving}
           .error=${this.sessiondError}
@@ -321,7 +352,7 @@ export class SettingsDialog extends LitElement {
   private renderNavButton(section: SettingsSection, label: string, detail: string): TemplateResult {
     const selected = this.section === section;
     return html`
-      <button class=${selected ? "selected" : ""} aria-current=${selected ? "page" : "false"} @click=${() => { this.navigate(section); }}>
+      <button class=${`ui-button ui-selection-option${selected ? " selected" : ""}`} aria-current=${selected ? "page" : "false"} @click=${() => { this.navigate(section); }}>
         <strong>${label}</strong>
         <small>${detail}</small>
       </button>
@@ -374,8 +405,26 @@ export class SettingsDialog extends LitElement {
   private async reloadSessiondState(target = this.settingsTarget()): Promise<void> {
     await Promise.all([
       this.loadSessiondConfigForTarget(target),
+      this.loadNamingModelsForTarget(target),
       this.onRefreshMachineRuntime?.(target.id),
     ]);
+  }
+
+  private async loadNamingModelsForTarget(target = this.settingsTarget()): Promise<void> {
+    const requestSeq = ++this.namingModelsLoadRequestSeq;
+    this.namingModelsLoading = true;
+    this.namingModelsError = "";
+    try {
+      const response = await configApi.namingModels(target.id);
+      if (!this.isCurrentNamingModelsLoad(requestSeq, target)) return;
+      this.namingModels = response.models;
+    } catch (error) {
+      if (this.isCurrentNamingModelsLoad(requestSeq, target)) {
+        this.namingModelsError = `Failed to load naming models from ${settingsMachineTargetLabel(target)}: ${friendlySelectedMachineSettingsErrorMessage(errorMessage(error), target)}`;
+      }
+    } finally {
+      if (this.isCurrentNamingModelsLoad(requestSeq, target)) this.namingModelsLoading = false;
+    }
   }
 
   private async loadSessiondConfigForTarget(target = this.settingsTarget()): Promise<void> {
@@ -561,7 +610,11 @@ export class SettingsDialog extends LitElement {
       if (!this.isCurrentSettingsTarget(target)) return;
       this.sessiondConfigResponse = response;
       if (target.kind === "local" && this.configResponse !== undefined) this.configResponse = mergeSelectedMachineSessiondConfig(this.configResponse, response);
-      this.showSavedMessage(`Agent permissions saved for ${target.name}. Restart the session daemon to apply them. Restarting interrupts active sessions.`, "sessiond");
+      const namingOnly = Object.keys(config).length === 1 && config.sessionNaming !== undefined;
+      const message = namingOnly
+        ? `Session naming settings saved for ${target.name}. They apply to the next naming request without a restart. Existing names and in-progress naming requests are unchanged.`
+        : `Session daemon settings saved for ${target.name}. Restart the session daemon to apply agent permission changes. Restarting interrupts active sessions.${config.sessionNaming === undefined ? "" : " Naming changes apply to the next naming request without a restart."}`;
+      this.showSavedMessage(message, "sessiond");
     } catch (error) {
       if (this.isCurrentSettingsTarget(target)) {
         this.sessiondError = `Failed to save session-daemon config on ${settingsMachineTargetLabel(target)}: ${friendlySelectedMachineSettingsErrorMessage(errorMessage(error), target)}`;
@@ -671,6 +724,10 @@ export class SettingsDialog extends LitElement {
     return requestSeq === this.accessLoadRequestSeq && this.isCurrentSettingsTarget(target);
   }
 
+  private isCurrentNamingModelsLoad(requestSeq: number, target: SettingsMachineTarget): boolean {
+    return requestSeq === this.namingModelsLoadRequestSeq && this.isCurrentSettingsTarget(target);
+  }
+
   private isCurrentSessiondLoad(requestSeq: number, target: SettingsMachineTarget): boolean {
     return requestSeq === this.sessiondLoadRequestSeq && this.isCurrentSettingsTarget(target);
   }
@@ -704,6 +761,10 @@ export class SettingsDialog extends LitElement {
   }
 
   private resetSessiondStateForTargetChange(): void {
+    this.namingModelsLoadRequestSeq += 1;
+    this.namingModels = [];
+    this.namingModelsLoading = false;
+    this.namingModelsError = "";
     this.sessiondLoadRequestSeq += 1;
     this.sessiondLoading = false;
     this.sessiondError = "";
@@ -742,13 +803,13 @@ export class SettingsDialog extends LitElement {
     }, 3000);
   }
 
-  static override styles = css`
-    :host { position: fixed; inset: 0; z-index: 30; color: var(--pi-text); font: 14px system-ui, sans-serif; }
+  static override styles = [uiDialogStyles, uiSelectionStyles, css`
+    @layer pi-web-base {
+    :host { position: fixed; inset: 0; z-index: 30; color: var(--pi-text); font: 14px var(--pi-font, system-ui, sans-serif); }
     modal-surface { --modal-surface-backdrop-padding: max(20px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left)); --modal-surface-width: min(980px, 100%); --modal-surface-max-height: min(760px, 100%); --modal-surface-min-height: min(620px, 100%); --modal-surface-radius: 14px; }
-    .settings-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--pi-border); }
     .settings-machine { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 18px; border-bottom: 1px solid var(--pi-border); }
     .settings-machine label { font-size: 12px; font-weight: 700; }
-    .settings-machine select { flex: 1 1 160px; max-width: 280px; min-width: 0; border: 1px solid var(--pi-border); border-radius: 8px; padding: 7px 9px; color: var(--pi-text); background: var(--pi-surface); font: inherit; }
+    .settings-machine select { flex: 1 1 160px; max-width: 280px; background: var(--pi-bg); }
     .machine-status { color: var(--pi-muted); line-height: 1.35; }
     .machine-status.unavailable { color: var(--pi-warning); }
     .machine-scope { color: var(--pi-muted); font-size: 12px; }
@@ -756,38 +817,32 @@ export class SettingsDialog extends LitElement {
     .machine-scope[open] { flex-basis: 100%; }
     .machine-scope p { margin: 8px 0 0; line-height: 1.45; }
     .machine-connection-error { flex-basis: 100%; margin: 0; font-size: 12px; line-height: 1.45; color: var(--pi-warning); overflow-wrap: anywhere; }
-    .settings-machine select:focus-visible, .machine-scope summary:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 2px; }
+    .machine-scope summary:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 2px; }
     .machine-switch-confirmation { flex: 0 0 auto; padding: 12px 16px; border-bottom: 1px solid var(--pi-warning-border); background: var(--pi-warning-surface); }
     .machine-switch-confirmation p { margin: 0 0 8px; }
-    .machine-switch-confirmation button + button { margin-left: 8px; }
-    .eyebrow { display: block; color: var(--pi-muted); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-    h1 { margin: 0; font-size: 20px; line-height: 1.2; }
-    button { border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); color: var(--pi-text); padding: 7px 9px; font: inherit; cursor: pointer; }
-    .close-button { width: 34px; height: 34px; display: grid; place-items: center; border: 0; background: transparent; color: var(--pi-muted); padding: 0; font-size: 24px; }
-    .close-button:hover, .close-button:focus { color: var(--pi-text); background: var(--pi-surface-hover); }
+    .machine-switch-confirmation button + button { margin-inline-start: 8px; }
     .settings-body { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 220px minmax(0, 1fr); }
-    .settings-nav { min-height: 0; padding: 10px; border-right: 1px solid var(--pi-border); background: var(--pi-surface); overflow: auto; }
-    .settings-nav button { display: grid; gap: 2px; width: 100%; margin: 0 0 6px; text-align: left; border-color: transparent; background: transparent; }
-    .settings-nav button:hover, .settings-nav button:focus { background: var(--pi-surface-hover); }
-    .settings-nav button.selected { border-color: var(--pi-accent); background: var(--pi-selection-bg); }
+    .settings-nav { min-height: 0; border-right: 1px solid var(--pi-border); background: var(--pi-surface); overflow: auto; }
+    .settings-nav button { display: grid; justify-content: stretch; gap: 2px; }
     .settings-nav small { color: var(--pi-muted); }
     .settings-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-    .settings-content { flex: 1 1 auto; min-width: 0; min-height: 0; overflow: auto; padding: 18px; }
+    .settings-content { flex: 1 1 auto; min-width: 0; min-height: 0; overflow: auto; padding: 0; }
 
     @media (max-width: 760px) {
       modal-surface { --modal-surface-backdrop-padding: 0; --modal-surface-place-items: stretch; --modal-surface-width: 100%; --modal-surface-max-height: none; --modal-surface-min-height: 0; --modal-surface-border: 0; --modal-surface-radius: 0; }
-      .settings-header { padding: max(12px, env(safe-area-inset-top)) 12px 12px; }
+      .settings-header { padding-top: env(safe-area-inset-top); }
       .settings-machine { padding: 10px 12px; }
       .settings-machine label { flex-basis: 100%; }
       .settings-machine select { max-width: none; }
       .machine-scope { flex-basis: 100%; }
       .settings-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
-      .settings-nav { display: flex; gap: 8px; padding: 8px; border-right: 0; border-bottom: 1px solid var(--pi-border); overflow-x: auto; overflow-y: hidden; }
-      .settings-nav button { flex: 0 0 auto; width: auto; min-width: 0; margin: 0; white-space: nowrap; }
+      .settings-nav { display: flex; gap: 0; padding: 0; border-right: 0; border-bottom: 1px solid var(--pi-border); overflow-x: auto; overflow-y: hidden; }
+      .settings-nav button { flex: 0 0 auto; width: auto; white-space: nowrap; border-inline-end: 1px solid var(--pi-border-muted); }
       .settings-nav small { display: none; }
-      .settings-content { padding: 14px 12px calc(18px + env(safe-area-inset-bottom)); }
+      .settings-content { padding-bottom: env(safe-area-inset-bottom); }
     }
-  `;
+    }
+  `];
 }
 
 function errorMessage(error: unknown): string {
@@ -799,7 +854,8 @@ export type SettingsPanelTag =
   | "settings-sessiond-panel"
   | "settings-packages-panel"
   | "settings-plugins-panel"
-  | "settings-shortcuts-panel";
+  | "settings-shortcuts-panel"
+  | "settings-mcp-panel";
 
 /**
  * The single custom-element panel the settings dialog renders for a section.
@@ -819,6 +875,8 @@ export function activeSettingsPanelTag(section: SettingsSection): SettingsPanelT
       return "settings-plugins-panel";
     case "shortcuts":
       return "settings-shortcuts-panel";
+    case "mcp":
+      return "settings-mcp-panel";
     case "general":
       return "settings-general-panel";
   }

@@ -279,9 +279,9 @@ describe("SessionController session tree navigation", () => {
     expect(state.treeDialog).toBe(tree);
     expect(Object.values(state.browserErrors).map((error) => error.message).join("\n")).toContain("prompt editor replacement failed");  });
 
-  it("explicitly clears the editor draft when navigating to a non-user entry", async () => {
+  it("preserves the editor draft when navigation returns no editor text", async () => {
     const cacheKey = machineSessionKey("local", oldSession.id);
-    saveDraft(cacheKey, "stale editor text");
+    saveDraft(cacheKey, "unsent draft");
     let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, selectedSession: oldSession, sessions: [oldSession], treeDialog: tree };
     const replacePromptEditorText = vi.fn();
     const api: typeof defaultApi = {
@@ -300,8 +300,10 @@ describe("SessionController session tree navigation", () => {
 
     await controller.navigateTree("leaf-1", { mode: "none" });
 
-    expect(loadDraft(cacheKey)).toBe("");
-    expect(replacePromptEditorText).toHaveBeenCalledWith({ machineId: "local", sessionId: oldSession.id, text: "" });
+    expect(loadDraft(cacheKey)).toBe("unsent draft");
+    expect(replacePromptEditorText).not.toHaveBeenCalled();
+    expect(state.messages).toEqual([{ role: "assistant", parts: [{ type: "text", text: "selected entry" }] }]);
+    expect(state.treeDialog).toBeUndefined();
   });
 
   it("retains the tree on cancellation and errors and exposes abort and close lifecycle methods", async () => {

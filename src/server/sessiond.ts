@@ -14,6 +14,7 @@ import { registerServerNoticeRoutes } from "./notices/serverNoticeRoutes.js";
 import { AuthService } from "./sessions/authService.js";
 import { bootstrapAndFreezeGlobalExtensionProviders } from "./sessions/globalProviderPolicy.js";
 import { registerAuthRoutes } from "./sessions/authRoutes.js";
+import { registerMcpAuthRoutes } from "./sessions/mcpAuthRoutes.js";
 import { ModelCatalogRefresher } from "./sessions/modelCatalogRefresher.js";
 import { PiSessionService } from "./sessions/piSessionService.js";
 import { createPiSessionManagerGateway } from "./sessions/piSessionManagerGateway.js";
@@ -38,7 +39,7 @@ import {
 } from "../server-plugin-api.js";
 import { getPiWebRuntimeComponent } from "./piWebStatus.js";
 import { SESSIOND_RUNTIME_CAPABILITIES } from "../shared/capabilities.js";
-import { agentSessionDirEnvOverride, effectivePiWebConfig, maxUploadBytes, offlineModeEnabled, piWebDataDir, PI_CODING_AGENT_DIR_ENV, PI_CODING_AGENT_SESSION_DIR_ENV } from "../config.js";
+import { agentSessionDirEnvOverride, effectivePiWebConfig, maxUploadBytes, offlineModeEnabled, piWebDataDir, sessionArchiveDirectory, PI_CODING_AGENT_DIR_ENV, PI_CODING_AGENT_SESSION_DIR_ENV } from "../config.js";
 import { createFilePiWebConfigService } from "./configRoutes.js";
 import { createActiveAgentProfileDescriptor } from "../sessiond/activeAgentProfile.js";
 import { loadServerPluginRecoveryConfig } from "../serverPluginRecovery.js";
@@ -60,6 +61,9 @@ import { registerWorkspaceNotificationRoutes } from "./sessiond/workspaceNotific
 import { createServerPluginPiSessionsCapabilityFactory } from "./plugins/serverPluginPiSessionsCapability.js";
 import { createServerPluginPiSessionEventsCapabilityFactory } from "./plugins/serverPluginPiSessionEventsCapability.js";
 import { createServerPluginWorkspacesCapabilityFactory } from "./plugins/serverPluginWorkspacesCapability.js";
+import { createServerPluginCatalogCapabilityFactory } from "./plugins/serverPluginCatalogCapability.js";
+import { PI_WEB_HOST_CATALOG_CAPABILITY } from "../shared/pluginCatalogTypes.js";
+import { registerPluginCatalogRoutes } from "./sessiond/pluginCatalogRoutes.js";
 import {
   REQUIRED_TERMINAL_SERVICE_CAPABILITY,
   unavailableRequiredTerminalService,
@@ -70,6 +74,8 @@ import {
 } from "./plugins/pluginBackendRegistry.js";
 import { runSessionDaemonShutdown } from "./sessiond/sessionDaemonShutdown.js";
 import { sessionServiceDependencies } from "./sessiond/sessionServiceDependencies.js";
+import { PiSessionEventConnections } from "./sessions/piSessionEventConnections.js";
+import { bindCompanionBackend } from "./sessions/companionBackend.js";
 import { registerWorkspaceCatalogRoutes } from "./sessiond/workspaceCatalogRoutes.js";
 import { registerPluginBackendChannelRoutes } from "./sessiond/pluginBackendChannelRoutes.js";
 import { installPluginBackendChannelWebSocketPayloadLimit } from "./webSocketBridge.js";
@@ -225,7 +231,7 @@ async function createSessionDaemonRuntime() {
     }),
     noticeSink: (source, input) => { serverNotices.record({ ...input, source }); },
     dataDir: piWebDataDir(daemonEnvironment),
-    lateHostCapabilities: [PI_WEB_HOST_WORKSPACES_CAPABILITY, PI_WEB_HOST_PI_SESSIONS_CAPABILITY, PI_WEB_HOST_PI_SESSION_EVENTS_CAPABILITY],
+    lateHostCapabilities: [PI_WEB_HOST_WORKSPACES_CAPABILITY, PI_WEB_HOST_PI_SESSIONS_CAPABILITY, PI_WEB_HOST_PI_SESSION_EVENTS_CAPABILITY, PI_WEB_HOST_CATALOG_CAPABILITY],
   });
   let sessionsForFailedConstruction: PiSessionService | undefined;
   let projectLifecycleForFailedConstruction: ProjectLifecycleService | undefined;
@@ -302,10 +308,22 @@ async function createSessionDaemonRuntime() {
     projectLifecycleForFailedConstruction = projectLifecycle;
     const projectWorkspaceDeps = { projects, workspaces: workspaceProviders };
     const spawnTargets = config.spawnSessions ? new ProjectScopedSpawnTargetResolver(projectWorkspaceDeps) : undefined;
+    // A plugin may open a session during activation. Install discovery before
+    // session_start, but publish backend authority only after startup health.
+    let companionOptions: {
+      backends: PluginBackendRegistry;
+      contributions: ReturnType<typeof serverPlugins.pairedBackendContributions>;
+      projects: ProjectService;
+    } | undefined = undefined;
+    const sessionEvents = new PiSessionEventConnections((bus) => bindCompanionBackend(bus, () => {
+      if (companionOptions === undefined) throw new Error("PI WEB companion backends are not ready during daemon startup");
+      return companionOptions;
+    }));
     const sessions = new PiSessionService(eventHub, sessionServiceDependencies({
       modelRuntime: auth.runtime,
+      sessionEvents,
       agentDir: activeAgentProfile.dir,
-      archiveStore: new SessionArchiveStore(defaultSessionArchiveFilePath(daemonEnvironment)),
+      archiveStore: new SessionArchiveStore(defaultSessionArchiveFilePath(daemonEnvironment), sessionArchiveDirectory(daemonEnvironment, config)),
       workspaceActivity,
       logger: app.log,
       ...(spawnTargets === undefined ? {} : { spawnTargets }),
@@ -348,6 +366,7 @@ async function createSessionDaemonRuntime() {
     // one atomic late boundary, so no dependent can start against a partial host.
     await serverPlugins.resumeWithHostCapabilityFactories([
       createServerPluginWorkspacesCapabilityFactory({ projects, workspaces: workspaceProviders }),
+      createServerPluginCatalogCapabilityFactory({ projects, workspaces: workspaceProviders, sessions }),
       createServerPluginPiSessionsCapabilityFactory({ projects, workspaces: workspaceProviders, sessions }),
       createServerPluginPiSessionEventsCapabilityFactory({ projects, workspaces: workspaceProviders, sessions }),
     ]);
@@ -358,11 +377,13 @@ async function createSessionDaemonRuntime() {
     const remainingHealth = await serverPlugins.inspectHealth(remainingActivePluginIds);
     const pluginHealth = Object.freeze([...providerHealth, ...remainingHealth]
       .sort((left, right) => left.pluginId.localeCompare(right.pluginId)));
+    const backendContributions = eligiblePluginBackendContributions(serverPlugins.pairedBackendContributions(), pluginHealth);
     const pluginBackends = new PluginBackendRegistry({
-      contributions: eligiblePluginBackendContributions(serverPlugins.pairedBackendContributions(), pluginHealth),
+      contributions: backendContributions,
       workspaces: workspaceProviders,
       logger: app.log,
     });
+    companionOptions = { backends: pluginBackends, contributions: backendContributions, projects };
     const workspaceProviderRuntime = createWorkspaceProviderRuntimeSnapshot(
       serverPlugins.healthRecords(),
       pluginHealth,
@@ -435,9 +456,11 @@ async function createSessionDaemonRuntime() {
 
 function registerSessionDaemonRoutes({ eventHub, machineStatus, statusAttribution, workspaceChanges, projectLifecycle, auth, sessions, serverNotices, runtimeComponent, projects, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals }: SessionDaemonRuntime): void {
   registerProjectMutationRoutes(app, projectLifecycle);
+  registerPluginCatalogRoutes(app, { projects, workspaces: workspaceProviders, sessions });
   registerMachineStatusRoutes(app, machineStatus);
   registerServerNoticeRoutes(app, serverNotices);
   registerAuthRoutes(app, auth);
+  registerMcpAuthRoutes(app, sessions);
   registerSessionRoutes(app, sessions, eventHub);
   registerWorkspaceCatalogRoutes(app, {
     projects,

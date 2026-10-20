@@ -1,5 +1,5 @@
-import type { TemplateResult } from "lit";
-import type { DeleteWorkspaceFileResponse, FileContentResponse, FileTreeResponse, JsonValue, MachineKind, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, PiWebStatusResponse, PluginCapability, PluginCapabilityProvision, TerminalCommandRunHandle, WorkspaceProviderMetadata, WorkspaceRemovalPresentation, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse } from "./shared/pluginApiTypes.js";
+import type { ReactiveControllerHost, TemplateResult } from "lit";
+import type { DeleteWorkspaceFileResponse, FileContentResponse, FileTreeResponse, MachineKind, PluginBackend, PluginPeer, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, PiWebStatusResponse, PluginCapability, PluginCapabilityProvision, TerminalCommandRunHandle, WorkspaceProviderMetadata, WorkspaceRemovalPresentation, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse } from "./shared/pluginApiTypes.js";
 
 export type {
   FileContentMediaType,
@@ -9,6 +9,13 @@ export type {
   JsonObject,
   JsonPrimitive,
   JsonValue,
+  PluginBackend,
+  PluginBackendScope,
+  PluginPeer,
+  PluginPeerRequestOptions,
+  PluginPeerChannelOptions,
+  PluginPeerChannelClose,
+  PluginPeerChannel,
   MachineKind,
   PiWebComponentStatus,
   PiWebDockerMode,
@@ -36,6 +43,79 @@ export type {
   MoveWorkspaceFileResponse,
 } from "./shared/pluginApiTypes.js";
 
+export type { PluginCatalogV1, PluginCatalogProject, PluginCatalogWorkspace, PluginSessionSnapshot, PluginWorkspaceSelection, PluginSessionSelection, PluginCatalogReadOptions } from "./shared/pluginCatalogTypes.js";
+import type { PluginCatalogV1 } from "./shared/pluginCatalogTypes.js";
+
+// eslint-disable-next-line @typescript-eslint/no-deprecated -- The host intentionally accepts supported legacy entries.
+export type PiWebPlugin = LegacyPiWebPlugin | PiWebPluginV5;
+
+/** Current browser entrypoint. Existing contribution kinds and lifecycle behavior are unchanged. */
+export interface PiWebPluginV5 {
+  apiVersion: 5;
+  name: string;
+  requires?: readonly PluginCapability[];
+  activate(context: PluginActivationContextV5): MaybePromise<PluginActivationResultV5>;
+}
+
+export type PluginActivationContextV5 = Omit<PluginActivationContext, "apiVersion"> & { readonly apiVersion: 5 };
+export type PluginActivationResultV5 = Omit<PluginActivationResult, "contributions"> & { contributions: PluginContributionsV5 };
+
+/** Captured machine target; changing selection never retargets this catalog. */
+export interface PluginCatalog extends PluginCatalogV1 {
+  readonly machineId: string;
+}
+
+export interface PluginDiscoveryContext {
+  readonly catalog: PluginCatalog;
+  readonly backend?: PluginBackend;
+}
+
+export type PluginRuntimeContextV5 = PluginRuntimeContext & PluginDiscoveryContext;
+export type ApplicationPanelContextV5 = ApplicationPanelContext & PluginDiscoveryContext;
+export type WorkspacePanelContextV5 = WorkspacePanelContext & PluginDiscoveryContext;
+export type WorkspaceLabelContextV5 = WorkspaceLabelContext & PluginDiscoveryContext;
+export type SessionLabelContextV5 = SessionLabelContext & PluginDiscoveryContext;
+export type MessageActionContextV5 = MessageActionContext & PluginDiscoveryContext;
+export type DisplayedMessageActionContextV5 = DisplayedMessageActionContext & PluginDiscoveryContext;
+
+export interface PluginContributionsV5 extends Omit<PluginContributions, "actions" | "applicationPanels" | "workspacePanels" | "workspaceLabels" | "sessionLabels" | "messageActions"> {
+  actions?: PluginActionV5[];
+  applicationPanels?: ApplicationPanelContributionV5[];
+  workspacePanels?: WorkspacePanelContributionV5[];
+  workspaceLabels?: WorkspaceLabelContributionV5[];
+  sessionLabels?: SessionLabelContributionV5[];
+  messageActions?: MessageActionContributionV5[];
+}
+
+export type PluginActionV5 = Omit<PluginAction, "enabled" | "disabledReason" | "run"> & {
+  enabled?: (context: PluginRuntimeContextV5) => boolean;
+  disabledReason?: (context: PluginRuntimeContextV5) => string | undefined;
+  run: (context: PluginRuntimeContextV5) => MaybePromise<void>;
+};
+export type ApplicationPanelContributionV5 = Omit<ApplicationPanelContribution, "visible" | "badge" | "render"> & {
+  visible?: (context: ApplicationPanelContextV5) => boolean;
+  badge?: (context: ApplicationPanelContextV5) => string | number | TemplateResult | undefined;
+  render: (context: ApplicationPanelContextV5) => TemplateResult;
+};
+export type WorkspacePanelContributionV5 = Omit<WorkspacePanelContribution, "visible" | "badge" | "render" | "fileOpenQuery" | "onInvalidate"> & {
+  visible?: (context: WorkspacePanelContextV5) => boolean;
+  badge?: (context: WorkspacePanelContextV5) => string | number | TemplateResult | undefined;
+  render: (context: WorkspacePanelContextV5) => TemplateResult;
+  fileOpenQuery?: (context: WorkspacePanelContextV5, path: string) => Readonly<Record<string, ContributionQueryValue>> | undefined;
+  onInvalidate?: (context: WorkspacePanelContextV5, invalidation?: WorkspaceInvalidation) => MaybePromise<void>;
+};
+export type WorkspaceLabelContributionV5 = Omit<WorkspaceLabelContribution, "visible" | "items"> & {
+  visible?: (context: WorkspaceLabelContextV5) => boolean;
+  items: (context: WorkspaceLabelContextV5) => WorkspaceLabelItem[];
+};
+export type SessionLabelContributionV5 = Omit<SessionLabelContribution, "visible" | "items"> & {
+  visible?: (context: SessionLabelContextV5) => boolean;
+  items: (context: SessionLabelContextV5) => SessionLabelItem[];
+};
+export type MessageActionContributionV5 =
+  | (Omit<EntryMessageActionContribution, "run"> & { run: (context: MessageActionContextV5) => MaybePromise<MessageActionResult> })
+  | (Omit<DisplayedMessageActionContribution, "run"> & { run: (context: DisplayedMessageActionContextV5) => MaybePromise<MessageActionResult> });
+
 export type PluginId = string;
 export type LocalContributionId = string;
 export type QualifiedContributionId = string;
@@ -44,7 +124,8 @@ export type SvgTemplateTag = (strings: TemplateStringsArray, ...values: unknown[
 
 type MaybePromise<T> = T | Promise<T>;
 
-export interface PiWebPlugin {
+/** @deprecated Browser API v4 remains supported; use PiWebPluginV5 for catalog and scoped backend access. */
+export interface LegacyPiWebPlugin {
   apiVersion: 4;
   name: string;
   /** Exact capability versions that must be active before this plugin starts. */
@@ -93,6 +174,9 @@ export interface PluginActivationResult {
 
 export interface ContentRendererInput {
   readonly text: string;
+  readonly machineId?: string;
+  readonly language?: string;
+  readonly filePath?: string;
   /** Aborted when source, renderer, mode, mounting, or plugin lifetime changes. */
   readonly signal: AbortSignal;
   /** Report asynchronous failure; calls from obsolete renders are ignored. */
@@ -101,6 +185,10 @@ export interface ContentRendererInput {
 
 export interface ContentRendererContribution {
   id: LocalContributionId;
+  /** Human-readable name used for renderer view buttons. */
+  title?: string;
+  /** Synchronous eligibility; replaces absent selectors or further restricts declared selectors. */
+  supports?(request: Readonly<ContentRenderRequest>): boolean;
   languages?: readonly string[];
   /** Extensions without a leading dot, matched case-insensitively. */
   fileExtensions?: readonly string[];
@@ -108,6 +196,39 @@ export interface ContentRendererContribution {
   renderMode?: "manual" | "automatic";
   /** Synchronous Lit template; own async work and activation efficiency in a component and honor signal. */
   render(input: ContentRendererInput): TemplateResult;
+}
+
+export type SyntaxHighlightTokenKind = "keyword" | "string" | "number" | "comment" | "type" | "function" | "variable" | "operator" | "punctuation" | "property" | "literal" | "meta";
+
+export interface SyntaxHighlightToken {
+  /** UTF-16 code-unit offsets: inclusive start, exclusive end. Sorted and nonoverlapping. */
+  readonly from: number;
+  readonly to: number;
+  readonly kind: SyntaxHighlightTokenKind;
+}
+
+export interface SyntaxHighlighterContribution {
+  id: LocalContributionId;
+  languages?: readonly string[];
+  /** Extensions without a leading dot, matched case-insensitively. */
+  fileExtensions?: readonly string[];
+  highlight(input: { readonly text: string; readonly signal: AbortSignal }): readonly SyntaxHighlightToken[] | Promise<readonly SyntaxHighlightToken[]>;
+}
+
+export interface SyntaxHighlightRequest {
+  machineId: string;
+  text: string;
+  language?: string;
+  filePath?: string;
+  signal: AbortSignal;
+}
+
+/** Host capability token: { pluginId: "pi-web", id: "syntax-highlighting", version: 1, parse }. */
+export interface SyntaxHighlightingCapability {
+  /** Whether a currently active grammar matches this machine and source metadata. */
+  supports(request: Pick<ContentRenderRequest, "machineId" | "language" | "filePath">): boolean;
+  /** Last discovered match; undefined when no match or over 100,000 UTF-16 units. Errors reject. */
+  highlight(request: SyntaxHighlightRequest): Promise<readonly SyntaxHighlightToken[] | undefined>;
 }
 
 export interface ContentRenderRequest {
@@ -121,6 +242,8 @@ export interface ContentRenderRequest {
 export interface ContentRendererOption {
   readonly id: string;
   readonly label: string;
+  /** Explicit plugin title, when supplied; label also includes the host's fallback name. */
+  readonly title?: string;
   readonly renderMode: "manual" | "automatic";
 }
 
@@ -140,25 +263,62 @@ export interface ContentMarkdownRenderRequest {
 
 /** Host capability token: { pluginId: "pi-web", id: "content-rendering", version: 1, parse }. */
 export interface ContentRenderingCapability {
-  /** Eligible choices in source plugin ID order, then local contribution ID order. */
+  /** Eligible choices in plugin discovery order, then contribution declaration order. */
   listRenderers(request: ContentRenderRequest): readonly ContentRendererOption[];
   /**
    * Undefined when no renderer claims the complete text file.
    * External controls require the caller to provide raw-source access, mode switching and a renderer chooser.
-   * Only external controls accept rendererId; absent or unavailable IDs use the first match.
+   * Only external controls accept rendererId; absent or unavailable IDs use the last automatic match, otherwise the first manual match.
    * Consumers authorize manual previews according to their own user-intent policy.
    * Listing and creating templates never call render.
    */
   renderText(request: ContentTextRenderRequest): TemplateResult | undefined;
   /**
    * The caller supplies its existing trusted HTML sanitizer; policies are not shared.
-   * Each eligible fence owns its chooser and Raw control. No remembered intent is stored.
+   * Each eligible fence owns its renderer buttons and Raw control. No remembered intent is stored.
    */
   renderMarkdown(request: ContentMarkdownRenderRequest): TemplateResult;
 }
 
+/** Styling is experimental: shared classes, tokens and presentation may change between releases. */
+export interface StylesheetRootOptions {
+  /** Inject the host's shared controls and file/tree-row styles into this root. Defaults to false. */
+  readonly sharedUi?: boolean;
+}
+
+/**
+ * Host capability token: { pluginId: "pi-web", id: "stylesheet-integration", version: 1, parse }.
+ * Direct stylesheet rules reach only explicitly registered roots; custom properties can inherit further.
+ * Opt into shared UI styles per root; the host owns injection, ordering and cleanup.
+ * Styling, including shared classes and internal host markup, is experimental rather than a stable API.
+ */
+export interface StylesheetIntegrationCapabilityV1 {
+  /** Register a retained open or closed root. Release on disconnect; register again on reconnect. */
+  readonly registerRoot: (root: ShadowRoot, options?: StylesheetRootOptions) => () => void;
+  /**
+   * Subscribe to active stylesheet changes after adoption in all registered roots.
+   * Includes removal, not initial subscription or root registration. Read initial values
+   * after registering your root. Listeners run synchronously; failures are logged in isolation.
+   * Release on disconnect. This does not observe arbitrary CSS mutations or media queries.
+   */
+  readonly subscribe: (listener: () => void) => () => void;
+  /** Installs a Lit lifecycle controller; call once when constructing the component. */
+  readonly createController: (host: ReactiveControllerHost & { readonly renderRoot?: HTMLElement | DocumentFragment }, options?: StylesheetRootOptions) => void;
+}
+
+/** A CSS file, normally new URL("./custom.css", import.meta.url).href. Inline CSS and runtime @import are unsupported. */
+export interface StylesheetContribution {
+  id: string;
+  /** Absolute HTTP(S) URL. Assets resolve relative to the CSS file, including redirects. */
+  url: string;
+  /** Lower numbers load first; default 1000. Ties use qualified contribution IDs. */
+  order?: number;
+}
+
 export interface PluginContributions {
+  stylesheets?: StylesheetContribution[];
   contentRenderers?: ContentRendererContribution[];
+  syntaxHighlighters?: SyntaxHighlighterContribution[];
   messageActions?: MessageActionContribution[];
   actions?: PluginAction[];
   applicationPanels?: ApplicationPanelContribution[];
@@ -347,6 +507,8 @@ export interface PluginRuntimeContext {
 /** A durable message displayed in the transcript; text excludes thinking and tool payloads. */
 export interface MessageActionMessage {
   readonly entryId: string;
+  /** This entry contains an ask_user question request, not an answer record. */
+  readonly isQuestion?: boolean;
   readonly role: "user" | "assistant" | "tool" | "system" | "bash" | "skill";
   readonly text: string;
 }
@@ -520,48 +682,6 @@ export interface WorkspaceFilesCapabilityV1 extends WorkspaceFiles {
 export type WorkspaceFilesContextValue = LegacyWorkspaceFiles | WorkspaceFilesCapabilityV1;
 export type WorkspacePanelFiles = WorkspaceFiles;
 
-export interface PluginPeerRequestOptions {
-  /** Cancels this bounded request through local or federated host transport. */
-  readonly signal?: AbortSignal;
-}
-
-/** Callbacks and cancellation for one bounded package-peer channel. */
-export interface PluginPeerChannelOptions {
-  /** Cancels the channel open or closes the live channel through every host hop. */
-  readonly signal?: AbortSignal;
-  /** Receives one plugin-authored JSON frame after the channel is ready. */
-  readonly onData: (data: JsonValue) => void;
-}
-
-export interface PluginPeerChannelClose {
-  readonly code: number;
-  readonly reason: string;
-  readonly wasClean: boolean;
-  /** Attributed host or server-plugin failure when one preceded the close. */
-  readonly error?: Readonly<{ code: string; message: string }>;
-}
-
-export interface PluginPeerChannel {
-  readonly closed: Promise<PluginPeerChannelClose>;
-  /** Queue one bounded JSON frame or throw. Success means queue acceptance, not remote receipt. */
-  send(data: JsonValue): void;
-  close(reason?: string): void;
-}
-
-/**
- * Exact revision-paired path to this browser package's active server entry.
- * A peer supplies a request handler, a channel handler, or both, but never neither.
- */
-export type PluginPeer =
-  | {
-      request(operation: string, input: JsonValue, options?: PluginPeerRequestOptions): Promise<JsonValue>;
-      openChannel?(operation: string, input: JsonValue, options: PluginPeerChannelOptions): Promise<PluginPeerChannel>;
-    }
-  | {
-      request?: undefined;
-      openChannel(operation: string, input: JsonValue, options: PluginPeerChannelOptions): Promise<PluginPeerChannel>;
-    };
-
 export interface WorkspaceHost {
   requestRender(): void;
 }
@@ -734,7 +854,6 @@ export interface SessionLabelContribution {
 }
 
 export type ThemeColorScheme = "dark" | "light";
-export type ThemeTokens = Record<string, string>;
 
 export interface ThemeContribution {
   id: LocalContributionId;
@@ -742,7 +861,7 @@ export interface ThemeContribution {
   description?: string;
   order?: number;
   colorScheme: ThemeColorScheme;
-  tokens: ThemeTokens;
+  stylesheets?: StylesheetContribution[];
 }
 
 export interface ThemePairContribution {

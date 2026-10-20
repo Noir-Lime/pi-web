@@ -1,7 +1,7 @@
 import { ASK_USER_ANSWERS_CUSTOM_TYPE } from "../../shared/apiTypes";
 import { parseAskUserOutcome, parseAskUserRequest } from "./api/parsers";
 import { isSessionMediaId, validImageDimensions } from "../../shared/sessionMedia";
-import type { ChatLine, ChatPart, ToolExecutionPart, ToolPreview } from "./components/shared";
+import type { ChatLine, ChatPart, ToolExecutionPart, ToolPreview } from "./chatTypes";
 
 export function normalizeMessages(messages: unknown[]): ChatLine[] {
   const lines: ChatLine[] = [];
@@ -26,9 +26,11 @@ export function textMessage(role: ChatLine["role"], text: string): ChatLine {
 export function withMessageMeta(line: ChatLine, rawMessage: unknown): ChatLine {
   const meta = normalizeMeta(rawMessage);
   const entryId = getString(rawMessage, "entryId");
-  if (meta === undefined && (entryId === undefined || entryId === "")) return line;
+  const streamId = getString(rawMessage, "streamId");
+  if (meta === undefined && entryId === undefined && streamId === undefined) return line;
   return {
     ...line,
+    ...(streamId === undefined ? {} : { streamId }),
     ...(meta === undefined ? {} : { meta }),
     ...(entryId === undefined || entryId === "" ? {} : { entryId }),
   };
@@ -304,6 +306,7 @@ function coalesceToolExecutions(lines: ChatLine[]): ChatLine[] {
   for (const line of lines) {
     let passthroughParts: ChatPart[] = [];
     const metadata = {
+      ...(line.streamId === undefined ? {} : { streamId: line.streamId }),
       ...(line.entryId === undefined ? {} : { entryId: line.entryId }),
       ...(line.source === undefined ? {} : { source: line.source }),
       ...(line.meta === undefined ? {} : { meta: line.meta }),

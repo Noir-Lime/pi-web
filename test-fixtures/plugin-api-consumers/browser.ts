@@ -15,6 +15,7 @@ import type {
   ContentRendererInput,
   JsonValue,
   PluginCapability,
+  StylesheetIntegrationCapabilityV1,
   PluginPeer,
   PiWebPlugin,
   Workspace,
@@ -136,15 +137,36 @@ const publishedCapability: PluginCapability<FixtureIdentityCapabilityV1, 1> = Ob
   parse: identityCapability.parse,
 });
 
+const stylesheetIntegration: PluginCapability<StylesheetIntegrationCapabilityV1, 1> = {
+  pluginId: "pi-web", id: "stylesheet-integration", version: 1,
+  parse(value): StylesheetIntegrationCapabilityV1 {
+    if (!isStylesheetIntegration(value)) throw new Error("Stylesheet integration unavailable");
+    return value;
+  },
+};
+
+function isStylesheetIntegration(value: unknown): value is StylesheetIntegrationCapabilityV1 {
+  return typeof value === "object" && value !== null
+    && "registerRoot" in value && typeof value.registerRoot === "function"
+    && "subscribe" in value && typeof value.subscribe === "function"
+    && "createController" in value && typeof value.createController === "function";
+}
+
+export function applySharedUi(styles: StylesheetIntegrationCapabilityV1, root: ShadowRoot): () => void {
+  return styles.registerRoot(root, { sharedUi: true });
+}
+
 const plugin: PiWebPlugin = {
   apiVersion: 4,
   name: "Browser declaration fixture",
-  requires: [identityCapability],
+  requires: [identityCapability, stylesheetIntegration],
   activate: async (context) => ({
     provides: [{ capability: publishedCapability, value: { version: 1, label: context.pluginId } }],
     start: ({ capabilities, signal }) => {
       if (signal.aborted || context.lifetimeSignal.aborted) return;
       capabilities.resolve(identityCapability);
+      const styles: StylesheetIntegrationCapabilityV1 = capabilities.resolve(stylesheetIntegration);
+      void styles.registerRoot;
     },
     dispose: (signal) => {
       if (signal.aborted) return;
@@ -237,3 +259,31 @@ export type {
   ImplementedWorkspacePanelFiles,
 };
 type BrowserWorkspace = Workspace;
+
+/** The current entry keeps contextual callback typing without manual annotations. */
+export const pluginV5: PiWebPlugin = {
+  apiVersion: 5,
+  name: "V5 consumer",
+  activate({ apiVersion, html }) {
+    const version: 5 = apiVersion;
+    return {
+      contributions: {
+        actions: [{
+          id: "discover",
+          title: "Discover",
+          async run(context) {
+            const projects = await context.catalog.projects.list();
+            const project = projects[0];
+            if (project === undefined) return;
+            const workspaces = await context.catalog.workspaces.list(project.id);
+            const workspace = workspaces[0];
+            if (workspace === undefined) return;
+            await context.catalog.sessions.list({ projectId: project.id, workspaceId: workspace.id });
+            await context.backend?.forScope({ kind: "machine" }).request?.("fixture.summary", null);
+          },
+        }],
+        applicationPanels: [{ id: "catalog", title: "Catalog", render: (context) => html`${version}: ${context.catalog.machineId}` }],
+      },
+    };
+  },
+};

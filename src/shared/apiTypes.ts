@@ -1,5 +1,6 @@
 import type { MachineStatusUiEvent } from "./machineStatus.js";
 import type { TerminalPluginMode } from "./requiredTerminalPlugin.js";
+import type { ThinkingLevel } from "./thinkingLevels.js";
 import type {
   DeleteWorkspaceFileResponse,
   FileContentMediaType,
@@ -200,6 +201,16 @@ export interface PiWebConfigValues {
   attachments?: PiWebAttachmentsConfig;
   /** Maximum accepted HTTP request body size in bytes (uploads/attachments). */
   maxUploadBytes?: number;
+  /** Destination for newly archived transcripts; the index remains in the PI WEB data directory. */
+  sessionArchive?: { directory?: string };
+  /** Machine-wide naming overrides; defaults are the session model, 24 tokens, and minimal thinking. */
+  sessionNaming?: {
+    model?: string;
+    maxTokens?: number;
+    thinkingLevel?: ThinkingLevel;
+    /** Total wall time in milliseconds; defaults to 10000 when omitted. */
+    timeoutMs?: number;
+  };
   /** When true, LLMs can start new sessions via the spawn_session tool. */
   spawnSessions?: boolean;
   /**
@@ -1101,7 +1112,21 @@ export interface AuthProvidersResponse {
   providers: AuthProviderOption[];
 }
 
+export interface McpAuthServerOption {
+  name: string;
+  description?: string;
+}
+
+export interface McpAuthServersResponse {
+  servers: McpAuthServerOption[];
+}
+
 export interface OAuthFlowState {
+  mcpMode?: "login" | "logout";
+  /** MCP completion means the Pi command finished, not that authentication succeeded. */
+  target?: "mcp";
+  /** Cancellation may race credential storage; remains true after command completion. */
+  cancelRequested?: boolean;
   flowId: string;
   providerId: string;
   providerName: string;
@@ -1383,8 +1408,9 @@ export type SessionUiEvent = SessionUiEventBody & { seq?: number };
 
 type SessionUiEventBody =
   | { type: "message.append"; message: unknown }
-  | { type: "assistant.delta"; text: string }
-  | { type: "assistant.thinking.delta"; text: string }
+  | { type: "assistant.start"; message: unknown }
+  | { type: "assistant.delta"; text: string; streamId?: string }
+  | { type: "assistant.thinking.delta"; text: string; streamId?: string }
   | { type: "tool.start"; toolName: string; toolCallId: string; summary: string; args?: unknown }
   | { type: "tool.update"; toolName: string; toolCallId: string; text: string; content?: unknown; details?: unknown }
   | { type: "tool.end"; toolName: string; toolCallId: string; text: string; isError: boolean; content?: unknown; details?: unknown }
@@ -1399,6 +1425,8 @@ type SessionUiEventBody =
   | { type: "command.output"; level: "info" | "success" | "error"; message: string }
   | SessionNotificationInboxEvent
   | { type: "session.error"; message: string }
+  /** Technical details for the browser console, never transcript or notification content. */
+  | { type: "session.diagnostic"; message: string }
   | { type: "dialog.opened"; dialog: PendingExtensionDialog }
   | { type: "dialog.closed"; dialogId: string; reason: ExtensionDialogCloseReason; answer?: ExtensionDialogAnswer }
   | { type: "session.name"; sessionId: string; name?: string }
