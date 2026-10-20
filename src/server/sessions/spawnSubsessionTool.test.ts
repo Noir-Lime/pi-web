@@ -108,7 +108,7 @@ describe("createSubsessionToolDefinitions", () => {
     const { definitions } = tools({});
     expect(definitions.map(({ name }) => name)).not.toContain("yield_to_subsessions");
     expect(JSON.stringify(definitions)).not.toContain("yield_to_subsessions");
-    expect(definitions.map(({ name }) => name)).toEqual(["spawn_subsession", "list_subsessions", "check_subsession", "send_subsession_message", "stop_subsession", "rename_subsession", "set_subsession_model"]);
+    expect(definitions.map(({ name }) => name)).toEqual(["spawn_subsession", "list_subsessions", "check_subsession", "send_subsession_message", "stop_subsession", "update_subsession"]);
   });
   it("spawn_subsession forwards parent identity and params from the live context", async () => {
     const spawn = vi.fn(() => Promise.resolve({ sessionId: "child-1", cwd: "/repos/a" }));
@@ -151,21 +151,31 @@ describe("createSubsessionToolDefinitions", () => {
     const rename = vi.fn(() => Promise.resolve());
     const setModel = vi.fn(() => Promise.resolve({ model: "test/new", thinkingLevel: "low" }));
     const { definitions } = tools({ rename, setModel });
-    const renameTool = definitions.find(({ name }) => name === "rename_subsession");
-    const modelTool = definitions.find(({ name }) => name === "set_subsession_model");
-    if (renameTool === undefined || modelTool === undefined) throw new Error("missing child controls");
-    expect(Check(renameTool.parameters, { sessionId: "child", name: "New name" })).toBe(true);
-    expect(Check(modelTool.parameters, { sessionId: "child" })).toBe(false);
+    const updateTool = definitions.find(({ name }) => name === "update_subsession");
+    if (updateTool === undefined) throw new Error("missing child controls");
+    expect(Check(updateTool.parameters, { sessionId: "child", name: "New name" })).toBe(true);
+    expect(Check(updateTool.parameters, { sessionId: "child", model: "test/new" })).toBe(true);
+    expect(Check(updateTool.parameters, { name: "x" })).toBe(false);
     const ctx = ctxFor("parent-1", "/sessions/parent.jsonl");
-    await renameTool.execute("rename", { sessionId: "child", name: "New name" }, undefined, undefined, ctx);
+    await updateTool.execute("rename", { sessionId: "child", name: "New name" }, undefined, undefined, ctx);
     expect(rename).toHaveBeenCalledWith("parent-1", "child", "New name", "/sessions/parent.jsonl");
-    const result = await modelTool.execute("model", { sessionId: "child", model: "test/new" }, undefined, undefined, ctx);
+    expect(setModel).not.toHaveBeenCalled();
+    const result = await updateTool.execute("model", { sessionId: "child", model: "test/new", name: "Both" }, undefined, undefined, ctx);
     expect(setModel).toHaveBeenCalledWith("parent-1", "child", "test/new", "/sessions/parent.jsonl");
-    expect(result.details).toMatchObject({ sessionId: "child", model: "test/new", thinkingLevel: "low" });
+    expect(rename).toHaveBeenLastCalledWith("parent-1", "child", "Both", "/sessions/parent.jsonl");
+    expect(result.details).toMatchObject({ sessionId: "child", name: "Both", model: "test/new", thinkingLevel: "low" });
+    // A rejected model change (busy child) must leave the name untouched.
+    rename.mockClear();
     setModel.mockRejectedValueOnce(new Error("busy"));
-    await expect(modelTool.execute("busy", { sessionId: "child", model: "test/new" }, undefined, undefined, ctx)).rejects.toThrow("busy");
+    await expect(updateTool.execute("busy", { sessionId: "child", model: "test/new", name: "Nope" }, undefined, undefined, ctx)).rejects.toThrow("busy");
+    expect(rename).not.toHaveBeenCalled();
+    // An invalid name must leave the model untouched.
+    setModel.mockClear();
+    await expect(updateTool.execute("badname", { sessionId: "child", model: "test/new", name: "\ninvalid" }, undefined, undefined, ctx)).rejects.toThrow();
+    expect(setModel).not.toHaveBeenCalled();
+    await expect(updateTool.execute("empty", { sessionId: "child" }, undefined, undefined, ctx)).rejects.toThrow("Provide name, model, or both");
     rename.mockRejectedValueOnce(new Error("not your child"));
-    await expect(renameTool.execute("bad", { sessionId: "child", name: "Name" }, undefined, undefined, ctx)).rejects.toThrow("not your child");
+    await expect(updateTool.execute("bad", { sessionId: "child", name: "Name" }, undefined, undefined, ctx)).rejects.toThrow("not your child");
   });
 
   it("describes tracked child work whose result remains available to the parent", async () => {

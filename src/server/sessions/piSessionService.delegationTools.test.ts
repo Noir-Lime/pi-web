@@ -75,8 +75,7 @@ describe("delegation tool capability boundary", () => {
       "check_subsession",
       "send_subsession_message",
       "stop_subsession",
-      "rename_subsession",
-      "set_subsession_model",
+      "update_subsession",
     ]);
   });
 

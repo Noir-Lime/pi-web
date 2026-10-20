@@ -1,6 +1,7 @@
 import { Type } from "pi-web-typebox";
 import { KNOWN_THINKING_LEVELS } from "../../shared/thinkingLevels.js";
 import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { requireInitialSessionName } from "./sessionNameGenerator.js";
 import type { TranscriptContentKind, TranscriptEntry, TranscriptRole, TranscriptView } from "./subsessionTranscript.js";
 import type { SubsessionCompletion } from "./subsessionCompletionInbox.js";
 import { DEFAULT_ACTIVITY_CALLS, MAX_ACTIVITY_CALLS, renderSubsessionActivity, type SubsessionActivity } from "./subsessionActivity.js";
@@ -146,13 +147,10 @@ const SpawnSubsessionParams = Type.Object({
   })),
 });
 
-const RenameSubsessionParams = Type.Object({
+const UpdateSubsessionParams = Type.Object({
   sessionId: Type.String({ description: "Your direct tracked child id." }),
-  name: Type.String({ description: "New display name, using the ordinary session-naming rules." }),
-});
-const SetSubsessionModelParams = Type.Object({
-  sessionId: Type.String({ description: "Your direct tracked child id." }),
-  model: Type.String({ description: 'Exact "provider/model-id". The child must be idle; busy changes are rejected without stopping it.' }),
+  name: Type.Optional(Type.String({ description: "New display name, using the ordinary session-naming rules. Allowed while the child is working." })),
+  model: Type.Optional(Type.String({ description: 'Exact "provider/model-id". The child must be idle; a busy child rejects the whole call without being stopped.' })),
 });
 const ListSubsessionsParams = Type.Object({
   status: Type.Optional(Type.Array(
@@ -480,33 +478,29 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
     },
   });
 
-  const renameTool = defineTool<typeof RenameSubsessionParams, { sessionId: string; name: string }>({
-    name: "rename_subsession",
-    label: "Rename subsession",
-    description: "Rename your direct tracked child. Changes its persisted display name, not its identity or model.",
-    parameters: RenameSubsessionParams,
+  const updateTool = defineTool<typeof UpdateSubsessionParams, { sessionId: string; name?: string } & Partial<SubsessionObservation>>({
+    name: "update_subsession",
+    label: "Update subsession",
+    description: "Change your direct tracked child's display name and/or model (at least one). name only changes the persisted display name and works on a working child. model needs an exact provider/model-id and an idle child, keeps the conversation, and clamps the existing thinking level. The name is validated first and the model change runs before the rename, so a rejected call (invalid name, unknown model, busy child, not your child) changes nothing; the rename cannot fail after the model changed except by an unexpected runtime error, which is reported with the model already applied.",
+    parameters: UpdateSubsessionParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      await deps.rename(ctx.sessionManager.getSessionId(), params.sessionId, params.name, ctx.sessionManager.getSessionFile() ?? undefined);
+      if (params.name === undefined && params.model === undefined) throw new Error("Provide name, model, or both");
+      const name = params.name === undefined ? undefined : requireInitialSessionName(params.name);
+      const parentId = ctx.sessionManager.getSessionId();
+      const parentFile = ctx.sessionManager.getSessionFile() ?? undefined;
+      const observation = params.model === undefined ? undefined : await deps.setModel(parentId, params.sessionId, params.model, parentFile);
+      if (name !== undefined) await deps.rename(parentId, params.sessionId, name, parentFile);
+      const parts = [
+        name === undefined ? undefined : `renamed to ${subsessionDisplay(params.sessionId, name)}`,
+        observation === undefined ? undefined : observationLine(observation),
+      ].filter((part): part is string => part !== undefined);
       return {
-        content: [{ type: "text", text: `Renamed subsession ${subsessionDisplay(params.sessionId, params.name)}.` }],
-        details: { sessionId: params.sessionId, name: params.name },
+        content: [{ type: "text", text: `Updated subsession ${params.sessionId}: ${parts.join("; ")}.` }],
+        details: { sessionId: params.sessionId, ...(name === undefined ? {} : { name }), ...(observation ?? {}) },
       };
     },
   });
-  const modelTool = defineTool<typeof SetSubsessionModelParams, SubsessionObservation & { sessionId: string }>({
-    name: "set_subsession_model",
-    label: "Set subsession model",
-    description: "Change your idle direct tracked child's model using an exact provider/model-id. Rejects busy children without stopping them. Preserves the conversation; the model clamps the existing thinking level.",
-    parameters: SetSubsessionModelParams,
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const observation = await deps.setModel(ctx.sessionManager.getSessionId(), params.sessionId, params.model, ctx.sessionManager.getSessionFile() ?? undefined);
-      return {
-        content: [{ type: "text", text: `Updated subsession ${params.sessionId}: ${observationLine(observation)}.` }],
-        details: { sessionId: params.sessionId, ...observation },
-      };
-    },
-  });
-  return [spawnTool, listTool, checkTool, sendTool, stopTool, renameTool, modelTool];
+  return [spawnTool, listTool, checkTool, sendTool, stopTool, updateTool];
 }
 
 /**
