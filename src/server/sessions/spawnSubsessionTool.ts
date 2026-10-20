@@ -119,6 +119,7 @@ export interface SubsessionReadQuery {
 export interface SubsessionToolDeps {
   rename(parentSessionId: string, sessionId: string, name: string, parentSessionFile?: string): Promise<void>;
   setModel(parentSessionId: string, sessionId: string, model: string, parentSessionFile?: string): Promise<SubsessionObservation>;
+  setThinkingLevel(parentSessionId: string, sessionId: string, level: string, parentSessionFile?: string): Promise<SubsessionObservation>;
   sendParent(childSessionId: string, message: string, childSessionFile?: string, mode?: "queue" | "steer"): Promise<void>;
   stop(parentSessionId: string, sessionId: string, parentSessionFile?: string): Promise<void>;
   send(parentSessionId: string, sessionId: string, message: string, parentSessionFile?: string, mode?: "queue" | "steer"): Promise<void>;
@@ -151,6 +152,9 @@ const UpdateSubsessionParams = Type.Object({
   sessionId: Type.String({ description: "Your direct tracked child id." }),
   name: Type.Optional(Type.String({ description: "New display name, using the ordinary session-naming rules. Allowed while the child is working." })),
   model: Type.Optional(Type.String({ description: 'Exact "provider/model-id". The child must be idle; a busy child rejects the whole call without being stopped.' })),
+  thinkingLevel: Type.Optional(Type.Enum(KNOWN_THINKING_LEVELS, {
+    description: "New thinking level. The child must be idle. Applied after any model change in the same call. Must be a level the child's model supports, otherwise the call is rejected; the result reports the level in effect.",
+  })),
 });
 const ListSubsessionsParams = Type.Object({
   status: Type.Optional(Type.Array(
@@ -481,14 +485,15 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
   const updateTool = defineTool<typeof UpdateSubsessionParams, { sessionId: string; name?: string } & Partial<SubsessionObservation>>({
     name: "update_subsession",
     label: "Update subsession",
-    description: "Change your direct tracked child's display name and/or model (at least one). name only changes the persisted display name and works on a working child. model needs an exact provider/model-id and an idle child, keeps the conversation, and clamps the existing thinking level. The name is validated first and the model change runs before the rename, so a rejected call (invalid name, unknown model, busy child, not your child) changes nothing; the rename cannot fail after the model changed except by an unexpected runtime error, which is reported with the model already applied.",
+    description: "Change your direct tracked child's display name, model and/or thinking level (at least one). name only changes the persisted display name and works on a working child. model needs an exact provider/model-id and an idle child, keeps the conversation, and clamps the existing thinking level to the new model. thinkingLevel also needs an idle child; when given together with model it is applied after the model change and must be a level the new model supports (otherwise that step is rejected after the model change applied), and the result reports the level in effect. The name is validated first, then the model, then the thinking level, then the rename, so a rejected call (invalid name, unknown model, busy child, not your child) changes nothing; a later step cannot fail after an earlier one applied except by an unexpected runtime error, which is reported with the earlier changes already applied.",
     parameters: UpdateSubsessionParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      if (params.name === undefined && params.model === undefined) throw new Error("Provide name, model, or both");
+      if (params.name === undefined && params.model === undefined && params.thinkingLevel === undefined) throw new Error("Provide name, model, thinkingLevel, or a combination");
       const name = params.name === undefined ? undefined : requireInitialSessionName(params.name);
       const parentId = ctx.sessionManager.getSessionId();
       const parentFile = ctx.sessionManager.getSessionFile() ?? undefined;
-      const observation = params.model === undefined ? undefined : await deps.setModel(parentId, params.sessionId, params.model, parentFile);
+      const modelObservation = params.model === undefined ? undefined : await deps.setModel(parentId, params.sessionId, params.model, parentFile);
+      const observation = params.thinkingLevel === undefined ? modelObservation : await deps.setThinkingLevel(parentId, params.sessionId, params.thinkingLevel, parentFile);
       if (name !== undefined) await deps.rename(parentId, params.sessionId, name, parentFile);
       const parts = [
         name === undefined ? undefined : `renamed to ${subsessionDisplay(params.sessionId, name)}`,

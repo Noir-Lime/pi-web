@@ -20,6 +20,7 @@ function delegationDeps() {
   const subsessions: SubsessionToolDeps = {
     rename: vi.fn(() => Promise.resolve()),
     setModel: vi.fn(() => Promise.resolve({})),
+    setThinkingLevel: vi.fn(() => Promise.resolve({})),
     sendParent: vi.fn(() => Promise.resolve()),
     stop: vi.fn(() => Promise.resolve()),
     send: vi.fn(() => Promise.resolve()),

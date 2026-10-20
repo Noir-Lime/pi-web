@@ -1331,6 +1331,7 @@ export class PiSessionService implements SessionRouteService {
         spawn: (input) => this.spawnSubsession(input),
         rename: (parentSessionId, sessionId, name, parentSessionFile) => this.renameSubsession(parentSessionId, sessionId, name, parentSessionFile),
         setModel: (parentSessionId, sessionId, model, parentSessionFile) => this.setSubsessionModel(parentSessionId, sessionId, model, parentSessionFile),
+        setThinkingLevel: (parentSessionId, sessionId, level, parentSessionFile) => this.setSubsessionThinkingLevel(parentSessionId, sessionId, level, parentSessionFile),
         send: (parentSessionId, sessionId, message, parentSessionFile, mode) => this.sendSubsessionMessage(parentSessionId, sessionId, message, parentSessionFile, mode),
         sendParent: (childSessionId, message, childSessionFile, mode) => this.sendParentMessage(childSessionId, message, childSessionFile, mode),
         stop: (parentSessionId, sessionId, parentSessionFile) => this.stopSubsession(parentSessionId, sessionId, parentSessionFile),
@@ -2252,6 +2253,20 @@ export class PiSessionService implements SessionRouteService {
     const parsed = parseModelSpec(modelSpec);
     if (parsed === undefined) throw unknownSpawnModelError(modelSpec);
     await this.changeSessionModel({ id: sessionId, cwd: session.sessionManager.getCwd() }, parsed.provider, parsed.modelId, true);
+    return this.subsessionObservation(session);
+  }
+
+  async setSubsessionThinkingLevel(parentSessionId: string, sessionId: string, level: string, parentSessionFile?: string): Promise<SubsessionObservation> {
+    const session = await this.openSubsession(parentSessionId, sessionId, parentSessionFile);
+    this.assertTreeNavigationInactive(session, "change the thinking level");
+    if (this.hasActiveWork(session)) throw new Error("Subsession is busy; wait until it is idle before changing its thinking level. No work was stopped.");
+    await this.assertWritable({ id: sessionId, cwd: session.sessionManager.getCwd() });
+    // Pi owns the valid set (see setThinkingLevel); it clamps the level to the model's capabilities.
+    const match = session.getAvailableThinkingLevels().find((candidate) => candidate === level);
+    if (match === undefined) throw new Error(`Invalid thinking level for this model: ${level}`);
+    session.setThinkingLevel(match);
+    this.publishActivity(session, `thinking: ${session.thinkingLevel}`, "idle");
+    this.publishStatus(session);
     return this.subsessionObservation(session);
   }
 

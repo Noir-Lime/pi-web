@@ -107,7 +107,7 @@ describe("builtin extension factories load through DefaultResourceLoader", () =>
         customTools: [createAskUserToolDefinition({ createAskId: unexpectedRunEndingCall }),
           ...createSubsessionToolDefinitions(directory, {
             send: vi.fn(() => Promise.resolve()), sendParent: vi.fn(() => Promise.resolve()), stop: vi.fn(() => Promise.resolve()),
-            rename: unexpectedRunEndingCall, setModel: unexpectedRunEndingCall,
+            rename: unexpectedRunEndingCall, setModel: unexpectedRunEndingCall, setThinkingLevel: unexpectedRunEndingCall,
             spawn: unexpectedRunEndingCall, list: unexpectedRunEndingCall, join: unexpectedRunEndingCall,
             check: unexpectedRunEndingCall, read: unexpectedRunEndingCall,
           })],

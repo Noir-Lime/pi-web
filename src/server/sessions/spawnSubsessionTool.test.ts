@@ -22,6 +22,7 @@ function tools(deps: Partial<SubsessionToolDeps>) {
   const full: SubsessionToolDeps = {
     rename: deps.rename ?? vi.fn(() => Promise.resolve()),
     setModel: deps.setModel ?? vi.fn(() => Promise.resolve({ model: "test/model" })),
+    setThinkingLevel: deps.setThinkingLevel ?? vi.fn(() => Promise.resolve({ model: "test/model", thinkingLevel: "high" })),
     send: deps.send ?? vi.fn(() => Promise.resolve()),
     sendParent: deps.sendParent ?? vi.fn(() => Promise.resolve()),
     stop: deps.stop ?? vi.fn(() => Promise.resolve()),
@@ -173,7 +174,23 @@ describe("createSubsessionToolDefinitions", () => {
     setModel.mockClear();
     await expect(updateTool.execute("badname", { sessionId: "child", model: "test/new", name: "\ninvalid" }, undefined, undefined, ctx)).rejects.toThrow();
     expect(setModel).not.toHaveBeenCalled();
-    await expect(updateTool.execute("empty", { sessionId: "child" }, undefined, undefined, ctx)).rejects.toThrow("Provide name, model, or both");
+    await expect(updateTool.execute("empty", { sessionId: "child" }, undefined, undefined, ctx)).rejects.toThrow("Provide name, model, thinkingLevel");
+    // thinkingLevel alone, and after a model change; the reported level is the one in effect.
+    const setThinkingLevel = vi.fn(() => Promise.resolve({ model: "test/new", thinkingLevel: "medium" }));
+    const withThinking = tools({ rename, setModel, setThinkingLevel }).definitions.find(({ name }) => name === "update_subsession");
+    if (withThinking === undefined) throw new Error("missing child controls");
+    expect(Check(withThinking.parameters, { sessionId: "child", thinkingLevel: "high" })).toBe(true);
+    expect(Check(withThinking.parameters, { sessionId: "child", thinkingLevel: "bogus" })).toBe(false);
+    setModel.mockClear();
+    const level = await withThinking.execute("level", { sessionId: "child", model: "test/new", thinkingLevel: "xhigh" }, undefined, undefined, ctx);
+    expect(setModel).toHaveBeenCalledTimes(1);
+    expect(setThinkingLevel).toHaveBeenCalledWith("parent-1", "child", "xhigh", "/sessions/parent.jsonl");
+    expect(level.details).toMatchObject({ thinkingLevel: "medium" });
+    // A busy child rejects the thinking change before any rename.
+    rename.mockClear();
+    setThinkingLevel.mockRejectedValueOnce(new Error("busy"));
+    await expect(withThinking.execute("busy2", { sessionId: "child", thinkingLevel: "low", name: "Nope2" }, undefined, undefined, ctx)).rejects.toThrow("busy");
+    expect(rename).not.toHaveBeenCalled();
     rename.mockRejectedValueOnce(new Error("not your child"));
     await expect(updateTool.execute("bad", { sessionId: "child", name: "Name" }, undefined, undefined, ctx)).rejects.toThrow("not your child");
   });

@@ -62,6 +62,7 @@ describe("subsession completion delivery through native Pi", () => {
         stop: (...args) => hosted.stopSubsession(...args),
         rename: (...args) => hosted.renameSubsession(...args),
         setModel: (...args) => hosted.setSubsessionModel(...args),
+        setThinkingLevel: (...args) => hosted.setSubsessionThinkingLevel(...args),
         spawn: (input) => hosted.spawnSubsession(input),
         list: (...args) => hosted.listSubsessions(...args),
         join: (...args) => hosted.joinSubsessions(...args),
