@@ -21,11 +21,23 @@ import { createMobilePromptEnterMedia, shouldUsePromptEnterShiftShortcut } from 
 import { composerSendShortcut, matchesComposerSend } from "../composerShortcuts";
 import type { ShortcutPreferenceConfig } from "../keyboardShortcuts";
 import { promptEditorStyles, type CompletionItem } from "./shared";
-import { renderAttachIcon, renderSendIcon, renderQueueIcon, renderSteerIcon, renderStopIcon, renderThinkingGauge } from "./promptEditorIcons";
+import { renderAttachIcon, renderCameraIcon, renderPhotosIcon, renderSendIcon, renderQueueIcon, renderSteerIcon, renderStopIcon, renderThinkingGauge } from "./promptEditorIcons";
+import { ActionMenuPositionController } from "./actionMenu";
 import { thinkingGauge, thinkingLevelLabel } from "../../../shared/thinkingLevels";
 import "./AutocompleteMenu";
 
 const promptPlaceholder = "Message pi... Use / for commands, @ for tracked files, @ space for all files, # for models";
+
+// Touch-first devices choose an attachment source from a menu so the native
+// image chooser can offer the photo gallery (Android only offers it for
+// inputs with an image accept hint). Pointer devices keep the direct file
+// dialog. Pointer type is the signal, not viewport width: a narrow desktop
+// window should keep the old behavior.
+const ATTACH_SOURCE_MENU_MEDIA_QUERY = "(pointer: coarse)";
+
+function createAttachSourceMenuMedia(): Pick<MediaQueryList, "matches"> | undefined {
+  return typeof window !== "undefined" && "matchMedia" in window ? window.matchMedia(ATTACH_SOURCE_MENU_MEDIA_QUERY) : undefined;
+}
 
 // Text nodes inside contenteditable can become iOS keyboard context, even in
 // non-editable placeholder widgets. Render the hint with CSS-generated content.
@@ -77,6 +89,10 @@ export class PromptEditor extends LitElement {
   @property({ attribute: false }) availableThinkingLevels: readonly string[] = [];
   @query(".markdown-editor") private editorHost?: HTMLDivElement;
   @query(".attachment-input") private attachmentInput?: HTMLInputElement;
+  @query(".attachment-image-input") private attachmentImageInput?: HTMLInputElement;
+  @query(".attachment-camera-input") private attachmentCameraInput?: HTMLInputElement;
+  @query(".attach-source-panel") private attachSourcePanel?: HTMLDivElement;
+  @query(".editor-attach") private attachButton?: HTMLButtonElement;
   // `draft` is the live document text but is intentionally NOT reactive: it
   // changes on every keystroke and the visible text is owned by CodeMirror, not
   // by Lit's render. Re-rendering the surrounding template on each keystroke is
@@ -92,6 +108,12 @@ export class PromptEditor extends LitElement {
   @state() private attachmentError: string | undefined = undefined;
   @state() private chipSendingKey: string | undefined = undefined;
   @state() private chipError: string | undefined = undefined;
+  @state() private attachSourceOpen = false;
+  // Reposition the attachment-source menu only while it is open.
+  private readonly attachMenuPosition = new ActionMenuPositionController(this, () => {
+    if (!this.attachSourceOpen) return undefined;
+    return this.attachButton;
+  });
   private attachmentSeq = 0;
   private requestVersion = 0;
   private editor: EditorView | undefined;
@@ -158,7 +180,14 @@ export class PromptEditor extends LitElement {
             <div class=${`markdown-editor${this.disabled ? " markdown-editor-disabled" : ""}`} aria-label="Message pi" aria-disabled=${this.disabled ? "true" : "false"}></div>
             ${this.chatNavigation === undefined ? null : html`<div class="editor-chat-navigation">${this.chatNavigation}</div>`}
             <input class="attachment-input" type="file" multiple hidden @change=${(event: Event) => { void this.handleFileInput(event); }} />
-            <button type="button" class="editor-attach icon-button ui-button ui-button--icon" ?disabled=${busy} title="Attach files" aria-label="Attach files" @click=${() => { this.attachmentInput?.click(); }}>${renderAttachIcon()}</button>
+            <input class="attachment-image-input" type="file" multiple accept="image/*" hidden @change=${(event: Event) => { void this.handleFileInput(event); }} />
+            <input class="attachment-camera-input" type="file" multiple accept="image/*" capture="environment" hidden @change=${(event: Event) => { void this.handleFileInput(event); }} />
+            <button type="button" class="editor-attach icon-button ui-button ui-button--icon" ?disabled=${busy} title="Attach files" aria-label="Attach files" aria-haspopup="menu" aria-controls="attach-source-panel" aria-expanded=${this.attachSourceOpen ? "true" : "false"} @click=${() => { this.handleAttachClick(); }}>${renderAttachIcon()}</button>
+            <div id="attach-source-panel" class="attach-source-panel ui-menu" popover="auto" aria-label="Attachment source" style=${this.attachMenuPosition.style} @toggle=${(event: ToggleEvent) => { this.handleAttachSourceToggle(event); }}>
+              <button type="button" class="ui-button ui-menu-item" title="Choose from your photo library" @click=${() => { this.openAttachmentPicker(this.attachmentImageInput); }}><span class="attach-source-icon" aria-hidden="true">${renderPhotosIcon()}</span><span class="attach-source-label">Photos</span></button>
+              <button type="button" class="ui-button ui-menu-item" title="Take a new photo" @click=${() => { this.openAttachmentPicker(this.attachmentCameraInput); }}><span class="attach-source-icon" aria-hidden="true">${renderCameraIcon()}</span><span class="attach-source-label">Camera</span></button>
+              <button type="button" class="ui-button ui-menu-item" title="Browse documents and other files" @click=${() => { this.openAttachmentPicker(this.attachmentInput); }}><span class="attach-source-icon" aria-hidden="true">${renderAttachIcon()}</span><span class="attach-source-label">Files</span></button>
+            </div>
             ${shellMode ? html`<div class="mode-hint">Shell command${shellInputMode.excludeFromContext ? " · excluded from context" : ""}</div>` : null}
             ${this.isCompacting && !shellMode ? html`<div class="mode-hint">Compacting history · message will be queued</div>` : null}
           </div>
@@ -306,6 +335,25 @@ export class PromptEditor extends LitElement {
     if (files.length === 0) return;
     event.preventDefault();
     await this.addAttachmentFiles(files);
+  }
+
+  private handleAttachClick(): void {
+    if (createAttachSourceMenuMedia()?.matches === true) {
+      this.attachSourcePanel?.showPopover();
+      return;
+    }
+    this.attachmentInput?.click();
+  }
+
+  private readonly handleAttachSourceToggle = (event: ToggleEvent) => {
+    const open = event.newState === "open" && this.isConnected;
+    this.attachSourceOpen = open;
+  };
+
+  private openAttachmentPicker(input: HTMLInputElement | undefined): void {
+    this.attachSourcePanel?.hidePopover();
+    this.attachButton?.focus();
+    input?.click();
   }
 
   private async handleFileInput(event: Event) {

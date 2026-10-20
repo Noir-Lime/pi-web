@@ -33,6 +33,88 @@ it("renders supplied chat navigation inside the input alongside the attachment c
   expect(jump).toHaveBeenCalledOnce();
 });
 
+function stubAttachSourceMedia(matches: boolean): void {
+  const media = window.matchMedia("(pointer: coarse)");
+  Object.defineProperty(media, "matches", { value: matches });
+  vi.spyOn(window, "matchMedia").mockReturnValue(media);
+}
+
+it("offers image and camera pickers so touch devices can reach the photo gallery", async () => {
+  const editor = new PromptEditor();
+  document.body.append(editor);
+  await editor.updateComplete;
+  const image = editor.renderRoot.querySelector<HTMLInputElement>(".attachment-image-input");
+  const camera = editor.renderRoot.querySelector<HTMLInputElement>(".attachment-camera-input");
+  // The image accept hint is the contract: Android only offers the photo
+  // gallery for inputs that accept images.
+  expect(image?.accept).toBe("image/*");
+  expect(camera?.getAttribute("capture")).toBe("environment");
+  expect(image?.multiple).toBe(true);
+  expect(camera?.multiple).toBe(true);
+});
+
+it("opens the file dialog directly on pointer devices", async () => {
+  stubAttachSourceMedia(false);
+  const editor = new PromptEditor();
+  document.body.append(editor);
+  await editor.updateComplete;
+  const attach = editor.renderRoot.querySelector<HTMLButtonElement>(".editor-attach");
+  const direct = editor.renderRoot.querySelector<HTMLInputElement>(".attachment-input");
+  const panel = editor.renderRoot.querySelector<HTMLDivElement>(".attach-source-panel");
+  if (!attach || !direct || !panel) throw new Error("Expected attachment controls");
+  const showPopover = vi.fn();
+  Object.defineProperty(panel, "showPopover", { value: showPopover, configurable: true });
+  const openDirect = vi.spyOn(direct, "click");
+  attach.click();
+  expect(openDirect).toHaveBeenCalledOnce();
+  expect(showPopover).not.toHaveBeenCalled();
+  expect(attach.getAttribute("aria-expanded")).toBe("false");
+});
+
+it("opens the source menu on touch devices and wires each item to its picker", async () => {
+  stubAttachSourceMedia(true);
+  const editor = new PromptEditor();
+  document.body.append(editor);
+  await editor.updateComplete;
+  const attach = editor.renderRoot.querySelector<HTMLButtonElement>(".editor-attach");
+  const panel = editor.renderRoot.querySelector<HTMLDivElement>(".attach-source-panel");
+  if (!attach || !panel) throw new Error("Expected attachment source menu");
+  const shown = vi.fn();
+  const hidden = vi.fn();
+  Object.defineProperty(panel, "showPopover", { value: shown, configurable: true });
+  Object.defineProperty(panel, "hidePopover", { value: hidden, configurable: true });
+  attach.click();
+  expect(shown).toHaveBeenCalledOnce();
+  // happy-dom does not implement native popover activation/dismissal. Model only
+  // its toggle notification; native light-dismiss and placement need a browser.
+  panel.dispatchEvent(Object.assign(new Event("toggle"), { newState: "open" }));
+  await editor.updateComplete;
+  expect(attach.getAttribute("aria-expanded")).toBe("true");
+  const items = [...panel.querySelectorAll<HTMLButtonElement>(".ui-menu-item")];
+  expect(items.length).toBe(3);
+  expect(items.map((item) => item.textContent.trim())).toEqual(["Photos", "Camera", "Files"]);
+  const [photosItem, cameraItem, filesItem] = items;
+  if (!photosItem || !cameraItem || !filesItem) throw new Error("Expected three attachment source items");
+  const pickImage = editor.renderRoot.querySelector<HTMLInputElement>(".attachment-image-input");
+  const pickCamera = editor.renderRoot.querySelector<HTMLInputElement>(".attachment-camera-input");
+  const pickFiles = editor.renderRoot.querySelector<HTMLInputElement>(".attachment-input");
+  if (!pickImage || !pickCamera || !pickFiles) throw new Error("Expected attachment picker inputs");
+  const pickImageClick = vi.spyOn(pickImage, "click");
+  const pickCameraClick = vi.spyOn(pickCamera, "click");
+  const pickFilesClick = vi.spyOn(pickFiles, "click");
+  photosItem.click();
+  expect(hidden).toHaveBeenCalledOnce();
+  expect(pickImageClick).toHaveBeenCalledOnce();
+  cameraItem.click();
+  expect(pickCameraClick).toHaveBeenCalledOnce();
+  filesItem.click();
+  expect(pickFilesClick).toHaveBeenCalledOnce();
+  // Simulate the native dismissal notification after a pick.
+  panel.dispatchEvent(Object.assign(new Event("toggle"), { newState: "closed" }));
+  await editor.updateComplete;
+  expect(attach.getAttribute("aria-expanded")).toBe("false");
+});
+
 it("keeps attachment delivery and removal wired through native shared controls", async () => {
   const key = "local:appearance-controls";
   saveStagedAttachments(key, [{ id: "image-1", kind: "image", name: "screenshot.png", mimeType: "image/png", data: "QUJD", size: 3 }]);
