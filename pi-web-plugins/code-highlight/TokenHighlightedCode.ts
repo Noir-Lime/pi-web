@@ -1,4 +1,4 @@
-import type { ContentRendererInput, StylesheetIntegrationCapabilityV1, SyntaxHighlightToken } from "@jmfederico/pi-web/plugin-api";
+import type { ContentRendererInputV5 as ContentRendererInput, StylesheetIntegrationCapabilityV1, SyntaxHighlightToken } from "@jmfederico/pi-web/plugin-api";
 import { html, LitElement, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { HighlightedCode } from "./HighlightedCode";

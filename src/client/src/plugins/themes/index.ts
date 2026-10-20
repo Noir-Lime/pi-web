@@ -1,7 +1,7 @@
 import type { PiWebPlugin } from "../types";
 
 export const themePackPlugin: PiWebPlugin = {
-  apiVersion: 4,
+  apiVersion: 5,
   name: "PI WEB Themes",
   activate: () => ({
     contributions: {

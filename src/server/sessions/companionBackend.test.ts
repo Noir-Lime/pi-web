@@ -5,7 +5,7 @@ import { createCompanionBackend, type ServerPluginPeerRequestContextV5, type Ser
 import { PluginBackendRegistry } from "../plugins/pluginBackendRegistry.js";
 import type { ServerPluginPairedBackendContribution } from "../plugins/serverPluginRuntime.js";
 import { bindCompanionBackend } from "./companionBackend.js";
-import { PLUGIN_BACKEND_CHANNEL_DRAIN_TIMEOUT_MS } from "../../shared/pluginBackendProtocol.js";
+import { PLUGIN_BACKEND_CHANNEL_DRAIN_TIMEOUT_MS, PLUGIN_BACKEND_CHANNEL_QUEUE_MAX_FRAMES, PLUGIN_BACKEND_CHANNEL_SERVER_TO_BROWSER_QUEUE_MAX_BYTES, serializePluginBackendChannelDataEnvelope, serializePluginBackendChannelReadyEnvelope } from "../../shared/pluginBackendProtocol.js";
 
 const project = { id: "p", name: "Host project", path: resolvePath("/host"), createdAt: "2026-01-01" };
 const workspace = { id: "w", projectId: "p", path: resolvePath("/host/work"), label: "Host workspace", isMain: false };
@@ -105,6 +105,110 @@ describe("bindCompanionBackend", () => {
     f.detach();
   });
 
+  it("buffers opening server frames until success, preserving snapshots and order", async () => {
+    let started!: () => void;
+    const openingStarted = new Promise<void>((resolve) => { started = resolve; });
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    let send!: (data: JsonValue) => void;
+    const f = fixture({ openChannel: async (context) => {
+      send = context.send;
+      const frame = { title: "original" };
+      send(frame);
+      frame.title = "changed";
+      started();
+      await blocked;
+      send("second");
+      return { receive: vi.fn() };
+    } });
+    const onData = vi.fn();
+    try {
+      const opening = f.discover().forScope({ kind: "machine" }).openChannel?.("watch", null, { onData });
+      await openingStarted;
+      expect(onData).not.toHaveBeenCalled();
+      release();
+      const channel = await opening;
+      expect(onData.mock.calls).toEqual([[{ title: "original" }], ["second"]]);
+      send("third");
+      expect(onData.mock.calls).toEqual([[{ title: "original" }], ["second"], ["third"]]);
+      channel?.close();
+      await channel?.closed;
+    } finally { release(); f.detach(); await f.registry.closeAll(); }
+  });
+
+  it("discards server frames when opening fails after sending", async () => {
+    let started!: () => void;
+    const openingStarted = new Promise<void>((resolve) => { started = resolve; });
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const f = fixture({ openChannel: async ({ send }) => {
+      send("must not escape");
+      started();
+      await blocked;
+      throw new Error("open failed after send");
+    } });
+    const onData = vi.fn();
+    try {
+      const opening = f.discover().forScope({ kind: "machine" }).openChannel?.("watch", null, { onData });
+      const rejected = expect(opening).rejects.toThrow("open failed after send");
+      await openingStarted;
+      expect(onData).not.toHaveBeenCalled();
+      release();
+      await rejected;
+      expect(onData).not.toHaveBeenCalled();
+    } finally { release(); f.detach(); await f.registry.closeAll(); }
+  });
+
+  it.each([
+    { label: "frame count", data: null },
+    { label: "serialized byte size", data: "x".repeat(60 * 1024) },
+  ])("bounds pre-ready server frames by $label like the browser transport", async ({ data }) => {
+    const bytes = Buffer.byteLength(serializePluginBackendChannelDataEnvelope(data), "utf8");
+    const readyBytes = Buffer.byteLength(serializePluginBackendChannelReadyEnvelope(), "utf8");
+    const accepted = Math.min(PLUGIN_BACKEND_CHANNEL_QUEUE_MAX_FRAMES - 1,
+      Math.floor((PLUGIN_BACKEND_CHANNEL_SERVER_TO_BROWSER_QUEUE_MAX_BYTES - readyBytes) / bytes));
+    for (const overflow of [false, true]) {
+      const close = vi.fn();
+      const f = fixture({ openChannel: ({ send }) => {
+        for (let index = 0; index < accepted; index++) send(data);
+        if (overflow) {
+          // Even a plugin swallowing the send error cannot publish a failed open.
+          try { send(data); } catch { /* Registry retains the send failure. */ }
+        }
+        return { receive: vi.fn(), close };
+      } });
+      const onData = vi.fn();
+      try {
+        const opening = f.discover().forScope({ kind: "machine" }).openChannel?.("watch", null, { onData });
+        if (overflow) {
+          await expect(opening).rejects.toThrow("queue limit was exceeded");
+          expect(onData).not.toHaveBeenCalled();
+        } else {
+          const channel = await opening;
+          expect(onData).toHaveBeenCalledTimes(accepted);
+          channel?.close();
+          await channel?.closed;
+        }
+      } finally { f.detach(); await f.registry.closeAll(); }
+      expect(close).toHaveBeenCalledOnce();
+    }
+  });
+
+  it("closes a ready channel rather than rejecting open when a buffered data consumer throws", async () => {
+    const close = vi.fn();
+    const f = fixture({ openChannel: ({ send }) => {
+      send("one"); send("two");
+      return { receive: vi.fn(), close };
+    } });
+    const onData = vi.fn(() => { throw new Error("consumer failed"); });
+    try {
+      const channel = await f.discover().forScope({ kind: "machine" }).openChannel?.("watch", null, { onData });
+      await expect(channel?.closed).resolves.toMatchObject({ wasClean: false, error: { code: "protocol-error", message: "consumer failed" } });
+      expect(onData).toHaveBeenCalledOnce();
+      expect(close).toHaveBeenCalledOnce();
+    } finally { f.detach(); await f.registry.closeAll(); }
+  });
+
   it.each([
     { label: "frame count", data: null, accepted: 128 },
     { label: "byte size", data: "x".repeat(60 * 1024), accepted: 17 },
@@ -177,20 +281,24 @@ describe("bindCompanionBackend", () => {
     let release!: () => void;
     const blocked = new Promise<void>((resolve) => { release = resolve; });
     const close = vi.fn();
-    const f = fixture({ openChannel: async () => {
+    const f = fixture({ openChannel: async ({ send }) => {
+      send("discard on cancellation");
       started();
       await blocked;
       return { receive: vi.fn(), close };
     } });
     const peer = f.discover().forScope({ kind: "machine" });
     if (peer.openChannel === undefined) throw new Error("Expected channels");
-    const pending = peer.openChannel("watch", null, { onData: vi.fn() });
+    const onData = vi.fn();
+    const pending = peer.openChannel("watch", null, { onData });
     const rejected = expect(pending).rejects.toThrow("detached");
     await ready;
+    expect(onData).not.toHaveBeenCalled();
     f.detach();
     await rejected;
     release();
     await vi.waitFor(() => { expect(close).toHaveBeenCalledOnce(); });
+    expect(onData).not.toHaveBeenCalled();
   });
 
   it("supports channel-only peers, early data, ordered frames, and runtime cancellation", async () => {

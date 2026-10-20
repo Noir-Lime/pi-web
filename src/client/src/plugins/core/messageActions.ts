@@ -1,5 +1,5 @@
 import { html } from "lit";
-import type { MessageActionAvailabilityContext, MessageActionContribution } from "../../../../plugin-api";
+import type { MessageActionAvailabilityContextV5 as MessageActionAvailabilityContext, MessageActionContribution } from "../../../../plugin-api";
 import { writeClipboardText } from "../../clipboard";
 import { renderCopyIcon, renderGoBackIcon } from "../../components/messageActionIcons";
 

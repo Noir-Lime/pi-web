@@ -18,6 +18,15 @@ import type {
   StylesheetIntegrationCapabilityV1,
   PluginPeer,
   PiWebPlugin,
+  PluginContributions,
+  PluginContributionsV5,
+  ContentRendererContribution,
+  ContentRendererContributionV5,
+  ThemeContribution,
+  ThemeContributionV5,
+  ThemeTokens,
+  MessageActionAvailabilityContext,
+  MessageActionAvailabilityContextV5,
   Workspace,
   WorkspaceFiles,
   WorkspaceFilesCapabilityV1,
@@ -53,6 +62,8 @@ export function checkContentRendering(capability: ContentRenderingCapability, in
   capability.renderMarkdown({ ...markdown, filePath: "graph.md" });
   // @ts-expect-error Renderer input does not claim provenance.
   input.source;
+  // @ts-expect-error Source metadata belongs to v5 renderer inputs.
+  input.machineId;
 }
 
 // Old destination readers must not acquire nullable route fields or query values.
@@ -259,6 +270,34 @@ export type {
   ImplementedWorkspacePanelFiles,
 };
 type BrowserWorkspace = Workspace;
+
+// Legacy source contracts stay usable, including imports of ThemeTokens.
+export const legacyPalette: ThemeTokens = { "--pi-bg": "#123456", "--pi-text": "#ffffff" };
+export const legacyTheme: ThemeContribution = { id: "legacy", name: "Legacy", colorScheme: "dark", tokens: legacyPalette };
+export const legacyContributions: PluginContributions = { themes: [legacyTheme] };
+export const modernTheme: ThemeContributionV5 = { id: "modern", name: "Modern", colorScheme: "dark", stylesheets: [] };
+export const modernContributions: PluginContributionsV5 = { themes: [modernTheme], stylesheets: [], syntaxHighlighters: [] };
+export function checkVersionBoundaries(legacy: PluginContributions, modern: PluginContributionsV5,
+  renderer: ContentRendererContribution, modernRenderer: ContentRendererContributionV5,
+  availability: MessageActionAvailabilityContext, modernAvailability: MessageActionAvailabilityContextV5): void {
+  // @ts-expect-error New contribution kinds belong to v5.
+  legacy.stylesheets;
+  // @ts-expect-error New contribution kinds belong to v5.
+  legacy.syntaxHighlighters;
+  // @ts-expect-error Stylesheet themes do not extend the v4 theme contract.
+  legacyTheme.stylesheets;
+  // @ts-expect-error Token palettes are compatibility-only, not a v5 API.
+  modernTheme.tokens;
+  // @ts-expect-error Dynamic renderer selectors belong to v5.
+  renderer.supports;
+  // @ts-expect-error Named renderer views belong to v5.
+  renderer.title;
+  // @ts-expect-error Question metadata belongs to v5 entry callbacks.
+  availability.message.isQuestion;
+  void modern.stylesheets;
+  void modernRenderer.supports;
+  void modernAvailability.message.isQuestion;
+}
 
 /** The current entry keeps contextual callback typing without manual annotations. */
 export const pluginV5: PiWebPlugin = {

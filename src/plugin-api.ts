@@ -75,10 +75,21 @@ export type ApplicationPanelContextV5 = ApplicationPanelContext & PluginDiscover
 export type WorkspacePanelContextV5 = WorkspacePanelContext & PluginDiscoveryContext;
 export type WorkspaceLabelContextV5 = WorkspaceLabelContext & PluginDiscoveryContext;
 export type SessionLabelContextV5 = SessionLabelContext & PluginDiscoveryContext;
-export type MessageActionContextV5 = MessageActionContext & PluginDiscoveryContext;
+export interface MessageActionMessageV5 extends MessageActionMessage {
+  /** This entry contains an ask_user question request, not an answer record. */
+  readonly isQuestion?: boolean;
+}
+export interface MessageActionAvailabilityContextV5 extends Omit<MessageActionAvailabilityContext, "message"> {
+  readonly message: MessageActionMessageV5;
+}
+export type MessageActionContextV5 = Omit<MessageActionContext, "message"> & MessageActionAvailabilityContextV5 & PluginDiscoveryContext;
 export type DisplayedMessageActionContextV5 = DisplayedMessageActionContext & PluginDiscoveryContext;
 
-export interface PluginContributionsV5 extends Omit<PluginContributions, "actions" | "applicationPanels" | "workspacePanels" | "workspaceLabels" | "sessionLabels" | "messageActions"> {
+export interface PluginContributionsV5 extends Omit<PluginContributions, "actions" | "applicationPanels" | "workspacePanels" | "workspaceLabels" | "sessionLabels" | "messageActions" | "contentRenderers" | "themes"> {
+  stylesheets?: StylesheetContribution[];
+  syntaxHighlighters?: SyntaxHighlighterContribution[];
+  contentRenderers?: ContentRendererContributionV5[];
+  themes?: ThemeContributionV5[];
   actions?: PluginActionV5[];
   applicationPanels?: ApplicationPanelContributionV5[];
   workspacePanels?: WorkspacePanelContributionV5[];
@@ -113,7 +124,12 @@ export type SessionLabelContributionV5 = Omit<SessionLabelContribution, "visible
   items: (context: SessionLabelContextV5) => SessionLabelItem[];
 };
 export type MessageActionContributionV5 =
-  | (Omit<EntryMessageActionContribution, "run"> & { run: (context: MessageActionContextV5) => MaybePromise<MessageActionResult> })
+  | (Omit<EntryMessageActionContribution, "run" | "ariaLabel" | "visible" | "enabled"> & {
+      ariaLabel?: (context: MessageActionAvailabilityContextV5) => string;
+      visible?: (context: MessageActionAvailabilityContextV5) => boolean;
+      enabled?: (context: MessageActionAvailabilityContextV5) => boolean;
+      run: (context: MessageActionContextV5) => MaybePromise<MessageActionResult>;
+    })
   | (Omit<DisplayedMessageActionContribution, "run"> & { run: (context: DisplayedMessageActionContextV5) => MaybePromise<MessageActionResult> });
 
 export type PluginId = string;
@@ -174,9 +190,6 @@ export interface PluginActivationResult {
 
 export interface ContentRendererInput {
   readonly text: string;
-  readonly machineId?: string;
-  readonly language?: string;
-  readonly filePath?: string;
   /** Aborted when source, renderer, mode, mounting, or plugin lifetime changes. */
   readonly signal: AbortSignal;
   /** Report asynchronous failure; calls from obsolete renders are ignored. */
@@ -185,10 +198,6 @@ export interface ContentRendererInput {
 
 export interface ContentRendererContribution {
   id: LocalContributionId;
-  /** Human-readable name used for renderer view buttons. */
-  title?: string;
-  /** Synchronous eligibility; replaces absent selectors or further restricts declared selectors. */
-  supports?(request: Readonly<ContentRenderRequest>): boolean;
   languages?: readonly string[];
   /** Extensions without a leading dot, matched case-insensitively. */
   fileExtensions?: readonly string[];
@@ -196,6 +205,20 @@ export interface ContentRendererContribution {
   renderMode?: "manual" | "automatic";
   /** Synchronous Lit template; own async work and activation efficiency in a component and honor signal. */
   render(input: ContentRendererInput): TemplateResult;
+}
+
+export interface ContentRendererInputV5 extends ContentRendererInput {
+  readonly machineId?: string;
+  readonly language?: string;
+  readonly filePath?: string;
+}
+
+export interface ContentRendererContributionV5 extends Omit<ContentRendererContribution, "render"> {
+  /** Human-readable name used for renderer view buttons. */
+  title?: string;
+  /** Synchronous eligibility; replaces absent selectors or further restricts declared selectors. */
+  supports?(request: Readonly<ContentRenderRequest>): boolean;
+  render(input: ContentRendererInputV5): TemplateResult;
 }
 
 export type SyntaxHighlightTokenKind = "keyword" | "string" | "number" | "comment" | "type" | "function" | "variable" | "operator" | "punctuation" | "property" | "literal" | "meta";
@@ -316,9 +339,7 @@ export interface StylesheetContribution {
 }
 
 export interface PluginContributions {
-  stylesheets?: StylesheetContribution[];
   contentRenderers?: ContentRendererContribution[];
-  syntaxHighlighters?: SyntaxHighlighterContribution[];
   messageActions?: MessageActionContribution[];
   actions?: PluginAction[];
   applicationPanels?: ApplicationPanelContribution[];
@@ -507,8 +528,6 @@ export interface PluginRuntimeContext {
 /** A durable message displayed in the transcript; text excludes thinking and tool payloads. */
 export interface MessageActionMessage {
   readonly entryId: string;
-  /** This entry contains an ask_user question request, not an answer record. */
-  readonly isQuestion?: boolean;
   readonly role: "user" | "assistant" | "tool" | "system" | "bash" | "skill";
   readonly text: string;
 }
@@ -855,12 +874,19 @@ export interface SessionLabelContribution {
 
 export type ThemeColorScheme = "dark" | "light";
 
+export type ThemeTokens = Record<string, string>;
+
+/** Legacy v4 palette contract. V5 themes contribute CSS files instead. */
 export interface ThemeContribution {
   id: LocalContributionId;
   name: string;
   description?: string;
   order?: number;
   colorScheme: ThemeColorScheme;
+  tokens: ThemeTokens;
+}
+
+export interface ThemeContributionV5 extends Omit<ThemeContribution, "tokens"> {
   stylesheets?: StylesheetContribution[];
 }
 

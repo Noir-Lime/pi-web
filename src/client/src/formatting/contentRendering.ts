@@ -47,17 +47,19 @@ export interface ChatContentRendering {
   renderMarkdown(request: ContentMarkdownRenderRequest, intentKey?: string, sourcePolicy?: CodeBlockSourcePolicy): TemplateResult;
 }
 
-export function createContentRenderingCapability(select: SelectRenderer): ContentRenderingCapability {
-  return createContentRenderingService(select).capability;
+type RenderingRevision = (request: ContentRenderRequest) => unknown;
+
+export function createContentRenderingCapability(select: SelectRenderer, revision?: RenderingRevision): ContentRenderingCapability {
+  return createContentRenderingService(select, revision).capability;
 }
 
-export function createContentRenderingService(select: SelectRenderer): ChatContentRendering & { capability: ContentRenderingCapability } {
+export function createContentRenderingService(select: SelectRenderer, revision?: RenderingRevision): ChatContentRendering & { capability: ContentRenderingCapability } {
   const selection = (request: ContentRenderRequest): readonly ContentRendererChoice[] => {
     if (request.truncated === true || request.text.length > MAX_CONTENT_RENDERER_LENGTH) return [];
     return select(request);
   };
   const host = (request: ContentRenderRequest, choices: readonly ContentRendererChoice[], externalControls = false, rendererId?: string, allowManualPreview = false, intentKey?: string, sourcePolicy?: CodeBlockSourcePolicy): TemplateResult => html`<pi-web-content-renderer
-    .codeBlocks=${sourcePolicy} .intentKey=${intentKey} .externalControls=${externalControls} .text=${request.text} .machineId=${request.machineId} .language=${request.language} .filePath=${request.filePath} .choices=${choices} .rendererId=${rendererId} .allowManualPreview=${allowManualPreview}
+    .renderingRevision=${revision?.(request)} .codeBlocks=${sourcePolicy} .intentKey=${intentKey} .externalControls=${externalControls} .text=${request.text} .machineId=${request.machineId} .language=${request.language} .filePath=${request.filePath} .choices=${choices} .rendererId=${rendererId} .allowManualPreview=${allowManualPreview}
   ></pi-web-content-renderer>`;
 
   const renderMarkdown = (request: ContentMarkdownRenderRequest, identity?: string, sourcePolicy?: CodeBlockSourcePolicy): TemplateResult => {
