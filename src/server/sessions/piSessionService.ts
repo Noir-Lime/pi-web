@@ -584,6 +584,12 @@ interface CreateSessionRuntimeOptions extends Pick<InternalStartSessionOptions, 
  */
 export interface CatalogRefreshStatus {
   isRefreshInFlight(): boolean;
+  /**
+   * Ask for a forced, bounded, background network catalog refresh. A session
+   * reload calls this so models added at a provider show up without waiting
+   * for the hourly schedule. Never awaited, so a reload cannot block on it.
+   */
+  requestRefresh?(): void;
 }
 
 /**
@@ -3395,6 +3401,7 @@ export class PiSessionService implements SessionRouteService {
         const priorGeneration = this.notificationGenerationBySession.get(session);
         let candidateGeneration: SessionNotificationGeneration | undefined;
         const reloadBoundary = { beforeSessionStart: false };
+        this.catalogRefreshStatus?.requestRefresh?.();
         try {
           await session.reload({
             beforeSessionStart: () => {
@@ -3631,6 +3638,9 @@ export class PiSessionService implements SessionRouteService {
     await this.assertWritable(ref);
     const session = await this.getOrOpen(ref);
     if (this.hasActiveWork(session)) throw new Error("Stop current session activity before reloading");
+    // The reload below only re-reads models.json offline; this is what picks up
+    // models a provider added since the last scheduled network refresh.
+    this.catalogRefreshStatus?.requestRefresh?.();
 
     const reopenedSession = await this.runTreeExclusiveOperation(
       [{ sessionId: session.sessionId, session }],

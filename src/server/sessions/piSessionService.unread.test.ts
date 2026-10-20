@@ -308,6 +308,33 @@ describe("PiSessionService daemon-owned unread state", () => {
     }
   });
 
+  it("asks the catalog refresher for a forced network refresh on reload without waiting for it", async () => {
+    const requestRefresh = vi.fn();
+    const runtimes = [fakeRuntime("session-1"), fakeRuntime("session-1")];
+    let runtimeIndex = 0;
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: TEST_AGENT_DIR,
+      modelRuntime: testModelRuntime,
+      createAgentRuntime: () => {
+        const next = runtimes[runtimeIndex++];
+        if (next === undefined) throw new Error("Unexpected extra runtime creation");
+        return Promise.resolve(next.runtime);
+      },
+      sessionManager: sessionGateway([sessionRecord("session-1")]),
+      archiveStore: emptyArchiveStore(),
+      heartbeatIntervalMs: 60_000,
+      catalogRefreshStatus: { isRefreshInFlight: () => false, requestRefresh },
+    });
+    try {
+      await service.status(sessionRef("session-1"));
+      expect(requestRefresh).not.toHaveBeenCalled();
+      await service.reload(sessionRef("session-1"));
+      expect(requestRefresh).toHaveBeenCalledTimes(1);
+    } finally {
+      await service.dispose();
+    }
+  });
+
   it("clears stale unread when a runtime rebind changes logical session identity", async () => {
     const unreadStore = new SessionUnreadStore({ createCatalogId: () => "catalog-test" });
     completeStoreWork(unreadStore, "session-old", WORKSPACE_CWD);
