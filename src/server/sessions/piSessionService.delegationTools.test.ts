@@ -18,6 +18,8 @@ function delegationDeps() {
   const spawn = vi.fn(() => Promise.resolve({ sessionId: "independent-1", cwd: "/workspace" }));
   const subsessionSpawn = vi.fn(() => Promise.resolve({ sessionId: "child-1", cwd: "/workspace" }));
   const subsessions: SubsessionToolDeps = {
+    rename: vi.fn(() => Promise.resolve()),
+    setModel: vi.fn(() => Promise.resolve({})),
     sendParent: vi.fn(() => Promise.resolve()),
     stop: vi.fn(() => Promise.resolve()),
     send: vi.fn(() => Promise.resolve()),
@@ -74,6 +76,8 @@ describe("delegation tool capability boundary", () => {
       "read_subsession",
       "send_subsession_message",
       "stop_subsession",
+      "rename_subsession",
+      "set_subsession_model",
     ]);
   });
 

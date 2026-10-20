@@ -20,6 +20,8 @@ function ctxFor(sessionId: string, sessionFile: string | undefined, model?: unkn
 function tools(deps: Partial<SubsessionToolDeps>) {
   const list = deps.list ?? vi.fn(() => Promise.resolve([]));
   const full: SubsessionToolDeps = {
+    rename: deps.rename ?? vi.fn(() => Promise.resolve()),
+    setModel: deps.setModel ?? vi.fn(() => Promise.resolve({ model: "test/model" })),
     send: deps.send ?? vi.fn(() => Promise.resolve()),
     sendParent: deps.sendParent ?? vi.fn(() => Promise.resolve()),
     stop: deps.stop ?? vi.fn(() => Promise.resolve()),
@@ -106,7 +108,7 @@ describe("createSubsessionToolDefinitions", () => {
     const { definitions } = tools({});
     expect(definitions.map(({ name }) => name)).not.toContain("yield_to_subsessions");
     expect(JSON.stringify(definitions)).not.toContain("yield_to_subsessions");
-    expect(definitions.map(({ name }) => name)).toEqual(["spawn_subsession", "list_subsessions", "check_subsession", "read_subsession", "send_subsession_message", "stop_subsession"]);
+    expect(definitions.map(({ name }) => name)).toEqual(["spawn_subsession", "list_subsessions", "check_subsession", "read_subsession", "send_subsession_message", "stop_subsession", "rename_subsession", "set_subsession_model"]);
   });
   it("spawn_subsession forwards parent identity and params from the live context", async () => {
     const spawn = vi.fn(() => Promise.resolve({ sessionId: "child-1", cwd: "/repos/a" }));
@@ -136,12 +138,34 @@ describe("createSubsessionToolDefinitions", () => {
     expect(firstText(result.content)).toContain('Started tracked subsession "Worker Bee" (child-1) in /repos/a using model "openai/gpt-5" at thinking level "high".');
   });
 
-  it("spawn_subsession offers no way to target another workspace", () => {
-    const { spawn: spawnTool } = tools({});
+  it("spawn_subsession accepts and forwards an optional same-project workspace", async () => {
+    const spawn = vi.fn(() => Promise.resolve({ sessionId: "child-1", cwd: "/repos/a-feature" }));
+    const { spawn: spawnTool } = tools({ spawn });
+    expect(Check(spawnTool.parameters, { prompt: "go", cwd: "/repos/a-feature" })).toBe(true);
+    expect(Check(spawnTool.parameters, { prompt: "go", cwd: 1 })).toBe(false);
+    await spawnTool.execute("cwd", { prompt: "go", cwd: "/repos/a-feature" }, undefined, undefined, ctxFor("parent-1", "/sessions/parent.jsonl"));
+    expect(spawn).toHaveBeenCalledWith(expect.objectContaining({ spawningCwd: "/repos/a", cwd: "/repos/a-feature" }));
+  });
 
-    expect(spawnTool.parameters).toMatchObject({ type: "object", properties: { prompt: {}, model: {} } });
-    expect(spawnTool.parameters).not.toHaveProperty(["properties", "cwd"]);
-    expect(spawnTool.description).toContain("in this session's working directory");
+  it("forwards child controls with live parent ownership and renders the actual model", async () => {
+    const rename = vi.fn(() => Promise.resolve());
+    const setModel = vi.fn(() => Promise.resolve({ model: "test/new", thinkingLevel: "low" }));
+    const { definitions } = tools({ rename, setModel });
+    const renameTool = definitions.find(({ name }) => name === "rename_subsession");
+    const modelTool = definitions.find(({ name }) => name === "set_subsession_model");
+    if (renameTool === undefined || modelTool === undefined) throw new Error("missing child controls");
+    expect(Check(renameTool.parameters, { sessionId: "child", name: "New name" })).toBe(true);
+    expect(Check(modelTool.parameters, { sessionId: "child" })).toBe(false);
+    const ctx = ctxFor("parent-1", "/sessions/parent.jsonl");
+    await renameTool.execute("rename", { sessionId: "child", name: "New name" }, undefined, undefined, ctx);
+    expect(rename).toHaveBeenCalledWith("parent-1", "child", "New name", "/sessions/parent.jsonl");
+    const result = await modelTool.execute("model", { sessionId: "child", model: "test/new" }, undefined, undefined, ctx);
+    expect(setModel).toHaveBeenCalledWith("parent-1", "child", "test/new", "/sessions/parent.jsonl");
+    expect(result.details).toMatchObject({ sessionId: "child", model: "test/new", thinkingLevel: "low" });
+    setModel.mockRejectedValueOnce(new Error("busy"));
+    await expect(modelTool.execute("busy", { sessionId: "child", model: "test/new" }, undefined, undefined, ctx)).rejects.toThrow("busy");
+    rename.mockRejectedValueOnce(new Error("not your child"));
+    await expect(renameTool.execute("bad", { sessionId: "child", name: "Name" }, undefined, undefined, ctx)).rejects.toThrow("not your child");
   });
 
   it("describes tracked child work whose result remains available to the parent", async () => {
@@ -149,8 +173,8 @@ describe("createSubsessionToolDefinitions", () => {
       spawn: vi.fn(() => Promise.resolve({ sessionId: "child-1", cwd: "/repos/a" })),
     });
 
-    expect(spawnTool.description).toBe("Start a tracked child session in this session's working directory to carry out part of the current task and return immediately. Its transcript and result are available here after it finishes.");
-    expect(spawnTool.promptSnippet).toBe("spawn_subsession: tracked child work in this workspace; result available after completion");
+    expect(spawnTool.description).toBe("Start a tracked child session in this session's workspace or another workspace of the same project to carry out part of the current task and return immediately. Its transcript and result are available here after it finishes.");
+    expect(spawnTool.promptSnippet).toBe("spawn_subsession: tracked child work in a same-project workspace; result available after completion");
     expect(spawnTool.description).not.toMatch(/spawn_session|fully independent/i);
 
     const result = await spawnTool.execute("call-contract", { prompt: "do it" }, undefined, undefined, ctxFor("parent-1", undefined));

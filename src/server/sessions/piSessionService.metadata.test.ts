@@ -5,7 +5,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createPiSessionManagerGateway } from "./piSessionManagerGateway.js";
 import { PiSessionService } from "./piSessionService.js";
-import { CapturingSessionEventHub, fakeRuntime, testModelRuntime, type RuntimeCreator } from "./piSessionService.testSupport.js";
+import { CapturingSessionEventHub, fakeRuntime, testModel, testModelRuntime, type RuntimeCreator } from "./piSessionService.testSupport.js";
 import { SessionArchiveStore } from "./sessionArchiveStore.js";
 import { readSessionUiMetadata, SESSION_UI_METADATA_CUSTOM_TYPE } from "./sessionMetadata.js";
 
@@ -44,6 +44,8 @@ function fixture() {
         return Promise.resolve();
       },
     });
+    fake.session.setSessionName = (name) => { manager.appendSessionInfo(name); fake.session.sessionName = name; };
+    fake.session.setModel = (model) => { manager.appendModelChange(model.provider, model.id); fake.session.model = model; return Promise.resolve(); };
     const bind = fake.session.bindExtensions.bind(fake.session);
     fake.session.bindExtensions = (bindings) => {
       startupMetadata.push(readSessionUiMetadata(manager.getEntries()));
@@ -54,7 +56,7 @@ function fixture() {
   };
   const service = new PiSessionService(hub, {
     agentDir, modelRuntime: testModelRuntime, sessionManager, archiveStore, createAgentRuntime,
-    spawnTargets: { resolveSpawnTarget: () => Promise.resolve({ allowed: true, cwd }) },
+    spawnTargets: { resolveSpawnTarget: (_parentCwd, requestedCwd) => Promise.resolve({ allowed: true, cwd: requestedCwd ?? cwd }) },
     heartbeatIntervalMs: 60_000,
   });
   services.push(service);
@@ -87,6 +89,35 @@ it("initializes metadata before extensions, publication and the first prompt; pr
   await expect(reopened.service.list(first.cwd)).resolves.toMatchObject([{ id: ref.id, archived: true, metadata, name: "Example workflow leg 2" }]);
   await reopened.service.restore(ref);
   await expect(reopened.service.list(first.cwd)).resolves.toMatchObject([{ id: ref.id, metadata, name: "Example workflow leg 2" }]);
+});
+
+it("persists cross-workspace child rename and model changes, then reopens the verified link", async () => {
+  const first = fixture();
+  await mkdir(first.cwd);
+  const childCwd = join(root, "feature");
+  await mkdir(childCwd);
+  const parent = await first.service.start(first.cwd);
+  await first.service.prompt(parent, "Parent prompt");
+  const child = await first.service.spawnSubsession({ spawningCwd: first.cwd, parentSessionId: parent.id, parentSessionFile: parent.path, prompt: "Child prompt", cwd: childCwd });
+  await first.service.renameSubsession(parent.id, child.sessionId, "Renamed child", parent.path);
+  const model = testModel();
+  await first.service.setSubsessionModel(parent.id, child.sessionId, `${model.provider}/${model.id}`, parent.path);
+  const records = await first.sessionManager.list(childCwd);
+  const record = records.find(({ id }) => id === child.sessionId);
+  if (record === undefined) throw new Error("child not persisted");
+  const manager = SessionManager.open(record.path);
+  expect(manager.getSessionName()).toBe("Renamed child");
+  expect(manager.buildSessionContext().model).toEqual({ provider: model.provider, modelId: model.id });
+  await first.service.dispose();
+
+  const reopened = fixture();
+  await expect(reopened.service.listSubsessions(parent.id, parent.path)).resolves.toMatchObject([{ sessionId: child.sessionId, cwd: childCwd, name: "Renamed child" }]);
+  expect(reopened.service.activeCount()).toBe(0);
+  await expect(reopened.service.readSubsession(parent.id, child.sessionId, {}, parent.path)).resolves.toMatchObject({ cwd: childCwd, name: "Renamed child" });
+  await reopened.service.renameSubsession(parent.id, child.sessionId, "Renamed again", parent.path);
+  expect(SessionManager.open(record.path).getSessionName()).toBe("Renamed again");
+  await reopened.service.sendSubsessionMessage(parent.id, child.sessionId, "Continue", parent.path);
+  await reopened.service.stopSubsession(parent.id, child.sessionId, parent.path);
 });
 
 it("publishes metadata on a transient session before Pi flushes its conversation file", async () => {

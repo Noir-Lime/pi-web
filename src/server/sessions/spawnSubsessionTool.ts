@@ -45,8 +45,7 @@ export type SpawnSubsessionThinkingLevel = NonNullable<ExtensionContext["thinkin
 
 export interface SpawnSubsessionInvocation {
   /**
-   * cwd of the session that invoked the tool. A tracked child always runs in
-   * this workspace, so it is both the project-scope check input and the target.
+   * cwd of the session that invoked the tool, used for project-scope validation.
    */
   spawningCwd: string;
   /** Session id of the parent; the spawned session is tracked against it. */
@@ -56,10 +55,7 @@ export interface SpawnSubsessionInvocation {
   prompt: string;
   /** Optional explicit session name; validated with the ordinary session-naming rules. */
   name?: string;
-  /**
-   * Requested target workspace. The tool never sets it; other callers may, and
-   * anything other than {@link spawningCwd} is refused rather than retargeted.
-   */
+  /** Optional target workspace in the parent's registered project. Defaults to spawningCwd. */
   cwd?: string;
   /** Current model from the dispatching session, used as the spawned session's default. */
   model?: SpawnSubsessionModel;
@@ -113,6 +109,8 @@ export interface SubsessionReadQuery {
 }
 
 export interface SubsessionToolDeps {
+  rename(parentSessionId: string, sessionId: string, name: string, parentSessionFile?: string): Promise<void>;
+  setModel(parentSessionId: string, sessionId: string, model: string, parentSessionFile?: string): Promise<SubsessionObservation>;
   sendParent(childSessionId: string, message: string, childSessionFile?: string, mode?: "queue" | "steer"): Promise<void>;
   stop(parentSessionId: string, sessionId: string, parentSessionFile?: string): Promise<void>;
   send(parentSessionId: string, sessionId: string, message: string, parentSessionFile?: string, mode?: "queue" | "steer"): Promise<void>;
@@ -124,6 +122,9 @@ export interface SubsessionToolDeps {
 }
 
 const SpawnSubsessionParams = Type.Object({
+  cwd: Type.Optional(Type.String({
+    description: "Working directory for the child. Must be a workspace (worktree, or root) of the same registered project. Defaults to this session's working directory.",
+  })),
   name: Type.Optional(Type.String({
     description: "Optional name for the child session, shown as a quoted name followed by (id) in spawn/list/check/read results and completion notices. Must be trimmed, non-empty, at most 60 characters, and contain no control characters (the ordinary session-naming rules). Duplicate names are allowed; the id remains the identity.",
   })),
@@ -138,6 +139,14 @@ const SpawnSubsessionParams = Type.Object({
   })),
 });
 
+const RenameSubsessionParams = Type.Object({
+  sessionId: Type.String({ description: "Your direct tracked child id." }),
+  name: Type.String({ description: "New display name, using the ordinary session-naming rules." }),
+});
+const SetSubsessionModelParams = Type.Object({
+  sessionId: Type.String({ description: "Your direct tracked child id." }),
+  model: Type.String({ description: 'Exact "provider/model-id". The child must be idle; busy changes are rejected without stopping it.' }),
+});
 const ListSubsessionsParams = Type.Object({});
 const SendParentMessageParams = Type.Object({
   message: Type.String({ minLength: 1, description: "Progress update, question, or finding for your parent session." }),
@@ -316,16 +325,16 @@ function renderTranscript(result: SubsessionReadResult): string {
  *
  * A subsession records its parent in its session header, the parent is notified
  * when it stops working, and the parent may read its transcript/result. The
- * tools are constructed per-session, carrying the spawning cwd, which is both
- * the project-scope validation input and the child's workspace; the parent's
+ * tools are constructed per-session, carrying the spawning cwd for
+ * project-scope validation; the parent's
  * identity is taken from the live extension context at call time.
  */
 export function createSubsessionToolDefinitions(spawningCwd: string, deps: SubsessionToolDeps) {
   const spawnTool = defineTool<typeof SpawnSubsessionParams, SpawnSubsessionResult>({
     name: "spawn_subsession",
     label: "Spawn subsession",
-    description: "Start a tracked child session in this session's working directory to carry out part of the current task and return immediately. Its transcript and result are available here after it finishes.",
-    promptSnippet: "spawn_subsession: tracked child work in this workspace; result available after completion",
+    description: "Start a tracked child session in this session's workspace or another workspace of the same project to carry out part of the current task and return immediately. Its transcript and result are available here after it finishes.",
+    promptSnippet: "spawn_subsession: tracked child work in a same-project workspace; result available after completion",
     parameters: SpawnSubsessionParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const parentSessionId = ctx.sessionManager.getSessionId();
@@ -336,6 +345,7 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
         parentSessionId,
         parentSessionFile,
         prompt: params.prompt,
+        ...(params.cwd === undefined ? {} : { cwd: params.cwd }),
         ...(params.name === undefined ? {} : { name: params.name }),
         ...(ctx.model === undefined ? {} : { model: ctx.model }),
         ...(params.model === undefined ? {} : { modelSpec: params.model }),
@@ -440,7 +450,33 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
     },
   });
 
-  return [spawnTool, listTool, checkTool, readTool, sendTool, stopTool];
+  const renameTool = defineTool<typeof RenameSubsessionParams, { sessionId: string; name: string }>({
+    name: "rename_subsession",
+    label: "Rename subsession",
+    description: "Rename your direct tracked child. Changes its persisted display name, not its identity or model.",
+    parameters: RenameSubsessionParams,
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      await deps.rename(ctx.sessionManager.getSessionId(), params.sessionId, params.name, ctx.sessionManager.getSessionFile() ?? undefined);
+      return {
+        content: [{ type: "text", text: `Renamed subsession ${subsessionDisplay(params.sessionId, params.name)}.` }],
+        details: { sessionId: params.sessionId, name: params.name },
+      };
+    },
+  });
+  const modelTool = defineTool<typeof SetSubsessionModelParams, SubsessionObservation & { sessionId: string }>({
+    name: "set_subsession_model",
+    label: "Set subsession model",
+    description: "Change your idle direct tracked child's model using an exact provider/model-id. Rejects busy children without stopping them. Preserves the conversation; the model clamps the existing thinking level.",
+    parameters: SetSubsessionModelParams,
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const observation = await deps.setModel(ctx.sessionManager.getSessionId(), params.sessionId, params.model, ctx.sessionManager.getSessionFile() ?? undefined);
+      return {
+        content: [{ type: "text", text: `Updated subsession ${params.sessionId}: ${observationLine(observation)}.` }],
+        details: { sessionId: params.sessionId, ...observation },
+      };
+    },
+  });
+  return [spawnTool, listTool, checkTool, readTool, sendTool, stopTool, renameTool, modelTool];
 }
 
 /**

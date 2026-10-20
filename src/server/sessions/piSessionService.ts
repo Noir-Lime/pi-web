@@ -171,15 +171,6 @@ function spawnTargetError(decision: Extract<SpawnTargetDecision, { allowed: fals
   return new Error(`cwd must be a workspace of this project. Allowed: ${decision.allowedCwds.join(", ")}`);
 }
 
-/**
- * Tracked subsessions are worktree-scoped, so a requested target other than the
- * parent's own cwd fails closed instead of being silently retargeted. The
- * message names the rule and both supported ways to get work done elsewhere.
- */
-function subsessionCwdError(spawningCwd: string, requestedCwd: string): Error {
-  return new Error(`A tracked subsession runs in this session's working directory (${spawningCwd}); ${requestedCwd} was requested. Instruct the child to work elsewhere from this workspace, or use spawn_session for an independent session in another workspace.`);
-}
-
 function modelSpecOf(model: { provider: string; id: string }): string {
   return `${model.provider}/${model.id}`;
 }
@@ -1337,6 +1328,8 @@ export class PiSessionService implements SessionRouteService {
       this.spawnTargets === undefined ? undefined : (input) => this.spawnSession(input),
       !subsessionsActive ? undefined : {
         spawn: (input) => this.spawnSubsession(input),
+        rename: (parentSessionId, sessionId, name, parentSessionFile) => this.renameSubsession(parentSessionId, sessionId, name, parentSessionFile),
+        setModel: (parentSessionId, sessionId, model, parentSessionFile) => this.setSubsessionModel(parentSessionId, sessionId, model, parentSessionFile),
         send: (parentSessionId, sessionId, message, parentSessionFile, mode) => this.sendSubsessionMessage(parentSessionId, sessionId, message, parentSessionFile, mode),
         sendParent: (childSessionId, message, childSessionFile, mode) => this.sendParentMessage(childSessionId, message, childSessionFile, mode),
         stop: (parentSessionId, sessionId, parentSessionFile) => this.stopSubsession(parentSessionId, sessionId, parentSessionFile),
@@ -1710,20 +1703,14 @@ export class PiSessionService implements SessionRouteService {
 
   /**
    * Start a *tracked* child session on behalf of a LLM. Unlike
-   * {@link spawnSession}, a tracked child always runs in the parent's own
-   * workspace: parent/child trees are worktree-scoped, so a child elsewhere
-   * would be invisible to the parent's listing. The child records its parent
+   * {@link spawnSession}, a tracked child retains a verified parent link across
+   * workspaces in the same project. The child records its parent
    * (so it shows in the session tree) and is registered so the parent is
    * notified when it stops working and can inspect it later.
    */
   async spawnSubsession(input: SpawnSubsessionInvocation): Promise<SpawnSubsessionResult> {
     if (this.spawnTargets === undefined) throw new Error("Spawning sessions is disabled");
-    if (input.cwd !== undefined && input.cwd !== "" && !cwdPathsEqual(input.cwd, input.spawningCwd)) {
-      throw subsessionCwdError(input.spawningCwd, input.cwd);
-    }
-    // Resolved against the parent's own cwd only: this still refuses spawning
-    // from an unregistered directory, which keeps the child visible in the UI.
-    const decision = await this.spawnTargets.resolveSpawnTarget(input.spawningCwd, undefined);
+    const decision = await this.spawnTargets.resolveSpawnTarget(input.spawningCwd, input.cwd);
     if (!decision.allowed) throw spawnTargetError(decision);
     // A model spec overrides the inherited model and is resolved against the
     // parent's model runtime; only a spec resolves against the parent.
@@ -2249,6 +2236,21 @@ export class PiSessionService implements SessionRouteService {
       this.events.publish(childSessionId, { type: "session.error", message: `Parent message delivery failed: ${error instanceof Error ? error.message : String(error)}` });
     });
     this.publishStatus(parent);
+  }
+
+  async renameSubsession(parentSessionId: string, sessionId: string, name: string, parentSessionFile?: string): Promise<void> {
+    const session = await this.openSubsession(parentSessionId, sessionId, parentSessionFile);
+    const validated = requireInitialSessionName(name);
+    const result = await this.runCommand({ id: sessionId, cwd: session.sessionManager.getCwd() }, `/name ${validated}`);
+    if (result.type !== "done") throw new Error(result.type === "unsupported" ? result.message : "Could not rename subsession");
+  }
+
+  async setSubsessionModel(parentSessionId: string, sessionId: string, modelSpec: string, parentSessionFile?: string): Promise<SubsessionObservation> {
+    const session = await this.openSubsession(parentSessionId, sessionId, parentSessionFile);
+    const parsed = parseModelSpec(modelSpec);
+    if (parsed === undefined) throw unknownSpawnModelError(modelSpec);
+    await this.changeSessionModel({ id: sessionId, cwd: session.sessionManager.getCwd() }, parsed.provider, parsed.modelId, true);
+    return this.subsessionObservation(session);
   }
 
   async stopSubsession(parentSessionId: string, sessionId: string, parentSessionFile?: string): Promise<void> {
@@ -2889,10 +2891,16 @@ export class PiSessionService implements SessionRouteService {
   }
 
   async setModel(ref: PiSessionRef, provider: string, modelId: string): Promise<ClientSessionStatus> {
+    return this.changeSessionModel(ref, provider, modelId, false);
+  }
+
+  private async changeSessionModel(ref: PiSessionRef, provider: string, modelId: string, idleOnly: boolean): Promise<ClientSessionStatus> {
     await this.assertWritable(ref);
     const session = await this.getOrOpen(ref);
     this.assertTreeNavigationInactive(session, "change models");
+    if (idleOnly && this.hasActiveWork(session)) throw new Error("Subsession is busy; wait until it is idle before changing its model. No work was stopped.");
     const candidates = await this.sessionModelCandidates(session);
+    if (idleOnly && this.hasActiveWork(session)) throw new Error("Subsession is busy; wait until it is idle before changing its model. No work was stopped.");
     this.assertTreeNavigationInactive(session, "change models");
     const model = candidates.find((candidate) => candidate.provider === provider && candidate.id === modelId)
       ?? session.modelRuntime.getModel(provider, modelId);

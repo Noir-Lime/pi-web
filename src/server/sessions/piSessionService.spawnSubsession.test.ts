@@ -16,7 +16,7 @@ describe("PiSessionService", () => {
       const parent = fakeRuntime("parent-1", { sessionFile: "/tmp/parent-1.jsonl" });
       const children = childIds.map((childId) => fakeRuntime(childId, {
         sessionFile: `/tmp/${childId}.jsonl`,
-        sessionManager: fakeSessionManager("/workspace"),
+        sessionManager: fakeSessionManager(decision.allowed ? decision.cwd : "/workspace"),
       }));
       const child = children[0];
       if (child === undefined) throw new Error("At least one child fixture is required");
@@ -41,16 +41,17 @@ describe("PiSessionService", () => {
         isArchived: (sessionId: string) => Promise.resolve(archived.has(sessionId)),
       };
       const events = new CapturingSessionEventHub();
+      const resolveSpawnTarget = vi.fn(() => Promise.resolve(decision));
       const service = new PiSessionService(events, {
         agentDir: TEST_AGENT_DIR,
       modelRuntime: testModelRuntime,
         createAgentRuntime,
         sessionManager: sessionGateway([]),
         archiveStore,
-        spawnTargets: { resolveSpawnTarget: () => Promise.resolve(decision) },
+        spawnTargets: { resolveSpawnTarget },
         heartbeatIntervalMs,
       });
-      return { parent, child, children, service, events };
+      return { parent, child, children, service, events, resolveSpawnTarget };
     }
 
     it("records the parent, delivers the prompt, and lists the tracked child", async () => {
@@ -158,7 +159,7 @@ describe("PiSessionService", () => {
       await service.dispose();
     });
 
-    it("resolves the tracked child against the parent's own cwd, ignoring any requested target", async () => {
+    it("defaults the tracked child to the parent's cwd through the shared resolver", async () => {
       const requestedTargets: (string | undefined)[] = [];
       const parent = fakeRuntime("parent-1", { sessionFile: "/tmp/parent-1.jsonl" });
       const child = fakeRuntime("child-1", { sessionFile: "/tmp/child-1.jsonl", sessionManager: fakeSessionManager("/workspace") });
@@ -191,14 +192,82 @@ describe("PiSessionService", () => {
       await service.dispose();
     });
 
-    it("refuses a target workspace other than the parent's own and names both alternatives", async () => {
-      const { service } = subsessionService({ allowed: true, cwd: "/workspace" });
+    it("refuses a target outside the parent's project through the shared resolver", async () => {
+      const { service } = subsessionService({ allowed: false, reason: "out-of-project", allowedCwds: ["/workspace"] });
       await service.start("/workspace");
 
       await expect(service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "do the slice", cwd: "/workspace-feature" }))
-        .rejects.toThrow("A tracked subsession runs in this session's working directory (/workspace); /workspace-feature was requested. Instruct the child to work elsewhere from this workspace, or use spawn_session for an independent session in another workspace.");
+        .rejects.toThrow("workspace");
       await expect(service.listSubsessions("parent-1")).resolves.toEqual([]);
       await service.dispose();
+    });
+
+    it("keeps cross-workspace tracking, read, messaging, stop, rename and model controls", async () => {
+      const { service, parent, child, events, resolveSpawnTarget } = subsessionService({ allowed: true, cwd: "/workspace-feature" });
+      await service.start("/workspace");
+      const result = await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "go", cwd: "/workspace-feature" });
+      expect(resolveSpawnTarget).toHaveBeenCalledWith("/workspace", "/workspace-feature");
+      expect(result.cwd).toBe("/workspace-feature");
+      await expect(service.listSubsessions("parent-1")).resolves.toMatchObject([{ sessionId: "child-1", cwd: "/workspace-feature" }]);
+      await expect(service.readSubsession("parent-1", "child-1", {})).resolves.toMatchObject({ cwd: "/workspace-feature" });
+      await service.sendSubsessionMessage("parent-1", "child-1", "continue");
+      expect(child.calls.prompt.at(-1)?.text).toBe("continue");
+      await service.sendParentMessage("child-1", "Child update", "/tmp/child-1.jsonl");
+      expect(parent.calls.sendCustomMessage.at(-1)?.message.content).toContain("Child update");
+      await service.stopSubsession("parent-1", "child-1");
+      expect(child.calls.abort).toBe(1);
+      await service.renameSubsession("parent-1", "child-1", "New name");
+      expect(child.session.sessionName).toBe("New name");
+      expect(events.globalEvents).toContainEqual({ type: "session.name", sessionId: "child-1", name: "New name" });
+      await expect(service.listSubsessions("parent-1")).resolves.toMatchObject([{ name: "New name" }]);
+      const model = testModel();
+      const setModel = vi.spyOn(child.session, "setModel").mockImplementation((next) => { child.session.model = next; return Promise.resolve(); });
+      await expect(service.setSubsessionModel("parent-1", "child-1", `${model.provider}/${model.id}`)).resolves.toMatchObject({ model: `${model.provider}/${model.id}` });
+      expect(setModel).toHaveBeenCalledWith(model);
+      await expect(service.setSubsessionModel("parent-1", "child-1", "bad")).rejects.toThrow("Unknown model");
+      await expect(service.setSubsessionModel("parent-1", "child-1", "missing/no-model")).rejects.toThrow("Model not found");
+      await expect(service.renameSubsession("parent-1", "child-1", "\ninvalid")).rejects.toThrow("Initial session name");
+      for (const parentId of ["someone-else", "child-1"]) {
+        await expect(service.renameSubsession(parentId, "child-1", "forged")).rejects.toThrow("not one of your subsessions");
+        await expect(service.setSubsessionModel(parentId, "child-1", `${model.provider}/${model.id}`)).rejects.toThrow("not one of your subsessions");
+      }
+      await expect(service.renameSubsession("parent-1", "child-1", "forged", "/tmp/copied-parent.jsonl")).rejects.toThrow("not one of your subsessions");
+      await expect(service.setSubsessionModel("parent-1", "child-1", `${model.provider}/${model.id}`, "/tmp/copied-parent.jsonl")).rejects.toThrow("not one of your subsessions");
+      await service.dispose();
+    });
+
+    it.each(["isStreaming", "isCompacting", "isBashRunning"] as const)("rejects a model change while %s without stopping work", async (flag) => {
+      const { service, child } = subsessionService({ allowed: true, cwd: "/workspace" });
+      await service.start("/workspace");
+      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "go" });
+      child.session[flag] = true;
+      const model = testModel();
+      await expect(service.setSubsessionModel("parent-1", "child-1", `${model.provider}/${model.id}`)).rejects.toThrow("Subsession is busy");
+      expect(child.calls.abort).toBe(0);
+      child.session[flag] = false;
+      await service.dispose();
+    });
+
+    it("rechecks idle state after asynchronous model discovery", async () => {
+      const { service, child } = subsessionService({ allowed: true, cwd: "/workspace" });
+      await service.start("/workspace");
+      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "go" });
+      const originalRefresh = child.session.modelRuntime.refresh.bind(child.session.modelRuntime);
+      const refresh = vi.spyOn(child.session.modelRuntime, "refresh").mockImplementationOnce((options) => {
+        child.session.pendingMessageCount = 1;
+        return originalRefresh(options);
+      });
+      const setModel = vi.spyOn(child.session, "setModel");
+      const model = testModel();
+      try {
+        await expect(service.setSubsessionModel("parent-1", "child-1", `${model.provider}/${model.id}`)).rejects.toThrow("Subsession is busy");
+        expect(setModel).not.toHaveBeenCalled();
+        expect(child.calls.abort).toBe(0);
+      } finally {
+        refresh.mockRestore();
+        child.session.pendingMessageCount = 0;
+        await service.dispose();
+      }
     });
 
     it("accepts a target that names the parent's own cwd in a non-canonical form", async () => {
