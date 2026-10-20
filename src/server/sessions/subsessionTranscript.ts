@@ -1,5 +1,5 @@
 /**
- * Pure helpers for the `read_subsession` tool: turn a subsession's normalized
+ * Pure helpers for the transcript mode of `check_subsession`: turn a subsession's normalized
  * history (as produced by `historyMessages`) into a filtered, projected,
  * paginated view the parent agent can explore.
  *

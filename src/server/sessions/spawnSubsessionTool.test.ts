@@ -41,7 +41,7 @@ function tools(deps: Partial<SubsessionToolDeps>) {
     spawn: find("spawn_subsession"),
     list: find("list_subsessions"),
     check: find("check_subsession"),
-    read: find("read_subsession"),
+    read: find("check_subsession"),
     definitions,
   };
 }
@@ -108,7 +108,7 @@ describe("createSubsessionToolDefinitions", () => {
     const { definitions } = tools({});
     expect(definitions.map(({ name }) => name)).not.toContain("yield_to_subsessions");
     expect(JSON.stringify(definitions)).not.toContain("yield_to_subsessions");
-    expect(definitions.map(({ name }) => name)).toEqual(["spawn_subsession", "list_subsessions", "check_subsession", "read_subsession", "send_subsession_message", "stop_subsession", "rename_subsession", "set_subsession_model"]);
+    expect(definitions.map(({ name }) => name)).toEqual(["spawn_subsession", "list_subsessions", "check_subsession", "send_subsession_message", "stop_subsession", "rename_subsession", "set_subsession_model"]);
   });
   it("spawn_subsession forwards parent identity and params from the live context", async () => {
     const spawn = vi.fn(() => Promise.resolve({ sessionId: "child-1", cwd: "/repos/a" }));
@@ -186,10 +186,9 @@ describe("createSubsessionToolDefinitions", () => {
 
     expect(definitions.list.description).toContain("List tracked child statuses");
     expect(definitions.list.promptSnippet).toBe("list_subsessions: inspect child statuses; never yields");
-    expect(definitions.check.description).toContain("Receiving a completed result marks it read, so it will not arrive again automatically.");
-    expect(definitions.check.promptSnippet).toBe("check_subsession: inspect child status and available output; never yields");
-    expect(definitions.read.description).toContain("Returning its complete latest final output marks that completion read; filtered or historical-only reads do not.");
-    expect(definitions.read.promptSnippet).toBe("read_subsession: inspect an available child transcript; never yields");
+    expect(definitions.check.description).toContain("returning the child's complete latest final output marks that completion read");
+    expect(definitions.check.description).toContain("transcript mode");
+    expect(definitions.check.promptSnippet).toContain("never yields");
   });
 
   it("spawn_subsession omits the inherited model when the dispatching session has no current model", async () => {
@@ -358,7 +357,7 @@ describe("createSubsessionToolDefinitions", () => {
       .rejects.toThrow("not one of your subsessions");
   });
 
-  it("read_subsession forwards filter params and renders the transcript", async () => {
+  it("check_subsession transcript mode forwards filter params and renders the transcript", async () => {
     const read = vi.fn(() => Promise.resolve({
       sessionId: "child-1", cwd: "/repos/a", status: "idle" as const, name: "Worker Bee",
       entries: [{ index: 2, role: "assistant" as const, parts: [{ kind: "text" as const, text: "the answer" }] }],
@@ -374,7 +373,7 @@ describe("createSubsessionToolDefinitions", () => {
     expect(result.terminate).toBeUndefined();
   });
 
-  it("read_subsession withholds partial working transcripts without yielding", async () => {
+  it("check_subsession transcript mode withholds partial working transcripts without yielding", async () => {
     const partial = {
       sessionId: "child-1", cwd: "/repos/a", status: "working" as const, name: "Parser review",
       entries: [{ index: 2, role: "assistant" as const, parts: [{ kind: "text" as const, text: "SECRET TRANSCRIPT ENTRY" }] }],
@@ -383,16 +382,16 @@ describe("createSubsessionToolDefinitions", () => {
     const read = vi.fn(() => Promise.resolve(partial));
     const { read: readTool } = tools({ read });
 
-    const result = await readTool.execute("call-working-read", { sessionId: "child-1" }, undefined, undefined, ctxFor("parent-1", "/sessions/parent-1.jsonl"));
+    const result = await readTool.execute("call-working-read", { sessionId: "child-1", limit: 50 }, undefined, undefined, ctxFor("parent-1", "/sessions/parent-1.jsonl"));
 
-    expect(read).toHaveBeenCalledWith("parent-1", "child-1", {}, "/sessions/parent-1.jsonl", "call-working-read");
+    expect(read).toHaveBeenCalledWith("parent-1", "child-1", { limit: 50, maxChars: 4000 }, "/sessions/parent-1.jsonl", "call-working-read");
     expect(firstText(result.content)).toBe(workingGuidance('"Parser review" (child-1)'));
     expect(firstText(result.content)).not.toContain("SECRET TRANSCRIPT ENTRY");
     expect(result.details).toEqual(partial);
     expect(result.terminate).toBeUndefined();
   });
 
-  it("read_subsession renders raw tool-call args and the truncation marker in the model-facing text", async () => {
+  it("check_subsession transcript mode renders raw tool-call args and the truncation marker in the model-facing text", async () => {
     const read = vi.fn(() => Promise.resolve({
       sessionId: "child-1", cwd: "/repos/a", status: "idle" as const,
       entries: [{
@@ -413,7 +412,7 @@ describe("createSubsessionToolDefinitions", () => {
     expect(result.terminate).toBeUndefined();
   });
 
-  it("read_subsession distinguishes an empty page-window from a zero-match result", async () => {
+  it("check_subsession transcript mode distinguishes an empty page-window from a zero-match result", async () => {
     const read = vi.fn(() => Promise.resolve({
       sessionId: "child-1", cwd: "/repos/a", status: "idle" as const,
       entries: [], total: 5, matched: 4, start: 0, hasMore: false,
@@ -427,11 +426,11 @@ describe("createSubsessionToolDefinitions", () => {
     expect(result.terminate).toBeUndefined();
   });
 
-  it("read_subsession propagates scope errors so the agent loop reports them", async () => {
+  it("check_subsession transcript mode propagates scope errors so the agent loop reports them", async () => {
     const read = vi.fn(() => Promise.reject(new Error("Session child-9 is not one of your subsessions")));
     const { read: readTool } = tools({ read });
 
-    await expect(readTool.execute("call-9", { sessionId: "child-9" }, undefined, undefined, ctxFor("parent-1", undefined)))
+    await expect(readTool.execute("call-9", { sessionId: "child-9", limit: 5 }, undefined, undefined, ctxFor("parent-1", undefined)))
       .rejects.toThrow("not one of your subsessions");
   });
 });

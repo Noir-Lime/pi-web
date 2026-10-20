@@ -125,7 +125,7 @@ function summarize(args: unknown): string {
   if (path !== undefined) return clipTo(path);
   if (Array.isArray(args["edits"])) return `${String(args["edits"].length)} edits`;
   const entries = Object.entries(args).filter(([, value]) => value != null).slice(0, 3);
-  return clipTo(entries.map(([key, value]) => `${key}: ${typeof value === "string" ? value : typeof value === "object" ? "object" : String(value)}`).join(" · "));
+  return clipTo(entries.map(([key, value]) => `${key}: ${typeof value === "string" ? value : typeof value === "number" || typeof value === "boolean" ? String(value) : "object"}`).join(" · "));
 }
 
 function clipTo(text: string): string {

@@ -336,7 +336,7 @@ This mirrors the Pi CLI: with `defaultProjectTrust: "never"`, an opened workspac
 
 `spawnSessions` controls whether agents receive the `spawn_session` tool. It defaults to `true`; set it to `false` if you do not want an agent to start independent PI WEB sessions.
 
-`subsessions` controls whether agents receive the tracked-subsession tools: `spawn_subsession`, `list_subsessions`, `check_subsession`, `read_subsession`, `send_subsession_message`, and `stop_subsession` (tracked children separately receive `send_parent_message`). It defaults to `true` and also requires `spawnSessions` to be enabled.
+`subsessions` controls whether agents receive the tracked-subsession tools: `spawn_subsession`, `list_subsessions`, `check_subsession`, `send_subsession_message`, and `stop_subsession` (tracked children separately receive `send_parent_message`). It defaults to `true` and also requires `spawnSessions` to be enabled.
 
 Use `send_subsession_message({ sessionId, message })` to steer a tracked child's existing conversation. There is no delivery-mode option. Steering does not forcibly cancel a running tool. An idle child resumes; messages during compaction wait until it finishes. The child retains its history and model. Completion notices wake the parent again. Only the child's verified parent can send messages through this tool.
 

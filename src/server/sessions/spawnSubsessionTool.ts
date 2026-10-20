@@ -171,6 +171,9 @@ const SendSubsessionMessageParams = Type.Object({
   message: Type.String({ minLength: 1, description: "Follow-up instruction or question for the existing child conversation." }),
 });
 
+/** Default per-value clip in transcript mode, so a careless call cannot pull an unbounded transcript. */
+const TRANSCRIPT_DEFAULT_MAX_CHARS = 4000;
+
 const CheckSubsessionParams = Type.Object({
   sessionId: Type.String({
     description: "Tracked child id from spawn_subsession or list_subsessions.",
@@ -178,39 +181,34 @@ const CheckSubsessionParams = Type.Object({
   calls: Type.Optional(Type.Integer({
     minimum: 1,
     maximum: MAX_ACTIVITY_CALLS,
-    description: `For a working child: how many recent tool calls to show (default ${String(DEFAULT_ACTIVITY_CALLS)}, max ${String(MAX_ACTIVITY_CALLS)}).`,
+    description: `Summary mode, working child: how many recent tool calls to show (default ${String(DEFAULT_ACTIVITY_CALLS)}, max ${String(MAX_ACTIVITY_CALLS)}).`,
   })),
-});
-
-const ReadSubsessionParams = Type.Object({
-  sessionId: Type.String({
-    description: "Tracked child id from spawn_subsession or list_subsessions.",
-  }),
   roles: Type.Optional(Type.Array(
     Type.Union([Type.Literal("assistant"), Type.Literal("user"), Type.Literal("tool"), Type.Literal("system"), Type.Literal("custom")]),
-    { description: "Roles to include; omit for all." },
+    { description: "Transcript mode: roles to include; omit for all." },
   )),
   include: Type.Optional(Type.Array(
     Type.Union([Type.Literal("text"), Type.Literal("thinking"), Type.Literal("tool_call"), Type.Literal("tool_result"), Type.Literal("image")]),
-    { description: "Content kinds to include; omit for all." },
+    { description: "Transcript mode: content kinds to include; omit for all." },
   )),
   search: Type.Optional(Type.String({
-    description: "Case-insensitive text or tool-name substring; searches full content before maxChars truncation.",
+    description: "Transcript mode: case-insensitive text or tool-name substring; searches full content before maxChars truncation.",
   })),
   maxChars: Type.Optional(Type.Integer({
     minimum: 0,
-    description: "Maximum characters per text, thinking, or tool-result value; omit for no truncation.",
+    description: `Transcript mode: maximum characters per text, thinking, or tool-result value (default ${String(TRANSCRIPT_DEFAULT_MAX_CHARS)}). A clipped final answer is not marked read.`,
   })),
   includeToolArgs: Type.Optional(Type.Boolean({
-    description: "Include raw tool-call arguments; summaries are always included.",
+    description: "Transcript mode: include raw tool-call arguments; summaries are always included.",
   })),
   before: Type.Optional(Type.Integer({
     minimum: 0,
-    description: "Return messages before this index; use the previous start to page backward.",
+    description: "Transcript mode: return messages before this index; use the previous start to page backward.",
   })),
   limit: Type.Optional(Type.Integer({
     minimum: 1,
-    description: "Maximum recent matches, in chronological order. Defaults to 50.",
+    maximum: 50,
+    description: "Transcript mode: maximum recent matches, in chronological order. Defaults to 50.",
   })),
 });
 
@@ -424,47 +422,32 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
     },
   });
 
-  const checkTool = defineTool<typeof CheckSubsessionParams, SubsessionCheckResult>({
+  const checkTool = defineTool<typeof CheckSubsessionParams, SubsessionCheckResult | SubsessionReadResult>({
     name: "check_subsession",
     label: "Check subsession",
-    description: "Get a tracked child's status and latest output. Receiving a completed result marks it read, so it will not arrive again automatically. For a working child, prose and output are withheld, but you get its recent tool calls (name, one-line summary, running/done/error), time since last activity, and a REPEAT warning when the last 3+ calls are identical. Never yields; do not poll.",
-    promptSnippet: "check_subsession: inspect child status and available output; never yields",
+    description: "Inspect one tracked child. Default (summary) mode returns status and its latest final output. For a working child, prose and output are withheld, but you get its recent tool calls (name, one-line summary, running/done/error), time since last activity, and a REPEAT warning when the last 3+ calls are identical. Passing any of roles, include, search, maxChars, includeToolArgs, before or limit switches to transcript mode: a filtered, paginated, chronological transcript (limit max 50, default 50; each value clipped to maxChars, default 4000). Read rule for both modes: returning the child's complete latest final output marks that completion read so it will not arrive again; nothing else does, and a clipped, filtered or historical-only view does not. Never yields; do not poll.",
+    promptSnippet: "check_subsession: inspect a child (status/final output/live tool activity; filter args give its transcript); never yields",
     parameters: CheckSubsessionParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const parentSessionId = ctx.sessionManager.getSessionId();
       const parentSessionFile = ctx.sessionManager.getSessionFile() ?? undefined;
-      const result = await deps.check(parentSessionId, params.sessionId, parentSessionFile, _toolCallId, params.calls);
+      const { sessionId, calls, ...query } = params;
+      const transcriptMode = Object.values<unknown>(query).some((value) => value !== undefined);
+      if (transcriptMode) {
+        const result = await deps.read(parentSessionId, sessionId, { ...query, maxChars: query.maxChars ?? TRANSCRIPT_DEFAULT_MAX_CHARS }, parentSessionFile, _toolCallId);
+        const text = result.status === "working"
+          ? workingInspectionGuidance(result.sessionId, result.name, result.activity)
+          : renderTranscript(result);
+        return { content: [{ type: "text", text }], details: result };
+      }
+      const result = await deps.check(parentSessionId, sessionId, parentSessionFile, _toolCallId, calls);
       const body = result.finalText === "" ? "(no output yet)" : result.finalText;
       const observed = observationLine(result);
       const observedText = observed === "" ? "" : `${observed}\n\n`;
       const text = result.status === "working"
         ? `${workingInspectionGuidance(result.sessionId, result.name, result.activity)}\n\n${observedText}`.trimEnd()
         : `Subsession ${subsessionDisplay(result.sessionId, result.name)} [${result.status}].\n\n${observedText}${result.errorDetail === undefined ? "" : `Error: ${result.errorDetail}\n\n`}--- SUBSESSION OUTPUT: ${result.sessionId} ---\n${body}`;
-      return {
-        content: [{ type: "text", text }],
-        details: result,
-      };
-    },
-  });
-
-  const readTool = defineTool<typeof ReadSubsessionParams, SubsessionReadResult>({
-    name: "read_subsession",
-    label: "Read subsession",
-    description: "Read a tracked child's filtered transcript. Returning its complete latest final output marks that completion read; filtered or historical-only reads do not. Working transcripts are withheld; a working child shows the same live tool-activity view as check_subsession. Never yields; do not poll.",
-    promptSnippet: "read_subsession: inspect an available child transcript; never yields",
-    parameters: ReadSubsessionParams,
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const parentSessionId = ctx.sessionManager.getSessionId();
-      const parentSessionFile = ctx.sessionManager.getSessionFile() ?? undefined;
-      const { sessionId, ...query } = params;
-      const result = await deps.read(parentSessionId, sessionId, query, parentSessionFile, _toolCallId);
-      const text = result.status === "working"
-        ? workingInspectionGuidance(result.sessionId, result.name, result.activity)
-        : renderTranscript(result);
-      return {
-        content: [{ type: "text", text }],
-        details: result,
-      };
+      return { content: [{ type: "text", text }], details: result };
     },
   });
 
@@ -523,7 +506,7 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
       };
     },
   });
-  return [spawnTool, listTool, checkTool, readTool, sendTool, stopTool, renameTool, modelTool];
+  return [spawnTool, listTool, checkTool, sendTool, stopTool, renameTool, modelTool];
 }
 
 /**
