@@ -83,7 +83,8 @@ export const appStyles = css`
     main.navigation-view .mobile-navigation-panel app-navigation-panel { flex: 1 1 auto; min-height: 0; }
   }
   status-bar { flex: 0 0 auto; }
-  chat-view { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+  /* Let the non-interactive activity badge straddle the composer border. */
+  chat-view { flex: 1 1 auto; min-height: 0; overflow: visible; z-index: 6; }
   .composer-area { position: relative; z-index: 5; flex: 0 0 auto; display: grid; min-width: 0; background: var(--pi-bg); }
   /* Share a grid cell instead of adding banner height; allow long notices to grow the area rather than clip their controls. */
   .composer-area > prompt-editor, .composer-activity-notice { grid-area: 1 / 1; min-width: 0; }
