@@ -11,6 +11,33 @@ afterEach(() => {
 });
 
 describe("theme settings controls", () => {
+  it("selects the saved theme when first opened and when options arrive later", async () => {
+    const registry = new PluginRegistry();
+    await registry.registerBatch([{ id: "themes", plugin: themePackPlugin }]);
+    const themes = registry.getThemes();
+    for (const delayed of [false, true]) {
+      const panel = new SettingsThemePanel();
+      panel.preference = { themeId: "themes:graphite", auto: false };
+      panel.themes = delayed ? [] : themes;
+      document.body.append(panel);
+      await panel.updateComplete;
+      if (delayed) {
+        panel.themes = themes;
+        await panel.updateComplete;
+      }
+      const select = required(panel.shadowRoot?.querySelector<HTMLSelectElement>("select"));
+      expect(select.value).toBe("themes:graphite");
+      panel.preference = { themeId: "themes:paper", auto: false };
+      await panel.updateComplete;
+      expect(select.value).toBe("themes:paper");
+      selectTheme(panel, "themes:classic");
+      await panel.updateComplete;
+      expect(select.value).toBe("themes:classic");
+      panel.remove();
+    }
+    await registry.dispose();
+  });
+
   it("stages theme and Auto choices, then offers distinct browser/default actions", async () => {
     const panel = await mountPanel();
     const useLocal = vi.fn();
