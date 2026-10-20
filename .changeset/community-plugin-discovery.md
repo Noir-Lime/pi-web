@@ -2,4 +2,4 @@
 "@jmfederico/pi-web": patch
 ---
 
-Add a link from Pi package settings to the community plugin discovery page, with a compact directory of combined npm search results, popularity and publication-date sorting, local pagination, copyable install sources, and publishing instructions.
+Link Pi package settings and the plugin guide to the community plugin directory so you can find packages to install.

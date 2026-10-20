@@ -2,4 +2,4 @@
 "@jmfederico/pi-web": patch
 ---
 
-Make chat notification, attachment, and question controls consistent with shared UI styles, including larger touch targets. Keep queued-message copy feedback scoped to its session.
+Use consistent, touch-friendly controls for chat notifications, attachments, and questions. Keep queued-message copy feedback temporary and scoped to its session instead of adding persistent “Copied” messages to the transcript.

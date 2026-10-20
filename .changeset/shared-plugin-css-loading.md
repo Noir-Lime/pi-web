@@ -2,4 +2,6 @@
 "@jmfederico/pi-web": patch
 ---
 
-Add file-based plugin and selected-theme stylesheets with shared loading, file-relative asset URLs, bounded requests, and observable failures. Integrate host and bundled-plugin shadow roots, and provide helpers for other Lit and non-Lit components to participate. Declare theme palettes in CSS instead of TypeScript tokens; Dark, Light, and Classic now use the same file contribution mechanism as plugins. Document file contributions, lifecycle integration, and CSS-first themes with Lit and plain-DOM examples.
+Add file-based plugin and selected-theme stylesheets with relative asset URLs, bounded loading, visible failure diagnostics, and preserved local SVG references. Apply ready files without waiting for unrelated loads or failures, and allow failed files to retry. Built-in Dark, Light, and Classic themes now use CSS palettes through the same contribution API.
+
+Let plugins opt shadow roots into host-managed shared buttons, selects, toolbars, tabs, and file trees without bundling a UI library or copying CSS. Provide Lit and plain-DOM integration helpers and stylesheet-change subscriptions; keep open terminal palettes in sync with theme changes. Shared styling, theme properties, and layout remain experimental.

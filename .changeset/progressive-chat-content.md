@@ -2,4 +2,4 @@
 "@jmfederico/pi-web": patch
 ---
 
-Show chat content before formatting and plugin previews finish. Defer offscreen enhancements and collapsed details until visible, while preserving disclosure choices and source controls.
+Restore the session list and selection before loading chat, and defer hidden chats until they become visible. Show chat content before formatting and plugin previews finish, deferring offscreen enhancements and collapsed details while preserving disclosure choices and source controls.

@@ -2,4 +2,4 @@
 "@jmfederico/pi-web": patch
 ---
 
-Flatten chat messages, event groups, tool output, and question cards using spacing and subtle background tones instead of nested outlines. Use clearer header tones and bounded action strips while keeping code and input boundaries, clear error states, and full hover/focus targets for chat controls. Keep the message information toggle in place while its details expand separately.
+Make chat more compact with fewer repeated headings, nested outlines, and gaps. Distinguish user messages and replies with subtle theme-aware backgrounds and leading borders, while keeping errors clear. Align thinking, tool output, and question cards as full-width activity sections; keep ordinary text inset and skill loading in collapsible activity. Expand thinking panels by default while remembering individual collapse choices.
