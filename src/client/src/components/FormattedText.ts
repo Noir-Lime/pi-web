@@ -61,8 +61,11 @@ export class FormattedText extends LitElement {
   override render() {
     const className = this.codeBlocks.overflow === "scroll" ? "formatted code-blocks-scroll" : "formatted";
     // Source is ordinary escaped Lit text. Neither Markdown nor plugin code is
-    // called by this render or by the session-loading flow.
-    return html`<div class=${className} dir="auto" @load=${this.onImageLoad} @click=${this.onFormattedClick}><div class="enhanced-content" ?hidden=${this.replacing}>${this.content}</div><span class="pending-source">${this.text.slice(this.replacing ? 0 : this.displayedText.length)}</span></div>`;
+    // called by this render or by the session-loading flow. Once formatted, keep
+    // that view until its update is ready: a raw tail after a Markdown block adds
+    // a temporary line on every streaming chunk.
+    const showSource = this.replacing || this.content === undefined;
+    return html`<div class=${className} dir="auto" @load=${this.onImageLoad} @click=${this.onFormattedClick}><div class="enhanced-content" ?hidden=${this.replacing}>${this.content}</div><span class="pending-source" ?hidden=${!showSource}>${showSource ? this.text : ""}</span></div>`;
   }
 
   override updated(): void {
@@ -96,6 +99,7 @@ export class FormattedText extends LitElement {
       }
     } catch (error) {
       console.warn("Chat Markdown formatting failed; source remains available", error);
+      this.replacing = true;
       this.phase = "done";
     }
   }

@@ -62,6 +62,58 @@ it("paints escaped source before Markdown, renderer inspection, and plugin execu
   expect(host?.renderRoot.querySelector("b")?.textContent).toBe("Enhanced");
 });
 
+it.each([false, true])("keeps formatted content without a raw tail between streaming updates (previews: %s)", async (previews) => {
+  const view = new FormattedText();
+  if (previews) view.contentRendering = createContentRenderingService(() => []);
+  view.text = "A **streaming** paragraph";
+  document.body.append(view);
+  await settleDeferredContent(view);
+  const paragraph = view.renderRoot.querySelector("p");
+  expect(paragraph?.textContent).toBe("A streaming paragraph");
+
+  for (const chunk of [" with", " more", " words"]) {
+    const previousText = view.renderRoot.querySelector("p")?.textContent;
+    view.text += chunk;
+    await view.updateComplete;
+    expect(view.renderRoot.querySelector("p")?.textContent).toBe(previousText);
+    expect(view.renderRoot.querySelector<HTMLElement>(".pending-source")?.hidden).toBe(true);
+    await settleDeferredContent(view);
+  }
+  expect(view.renderRoot.querySelector("p")?.textContent).toBe("A streaming paragraph with more words");
+  expect(view.renderRoot.querySelector<HTMLElement>(".pending-source")?.hidden).toBe(true);
+});
+
+it("shows replacement source immediately instead of stale formatted content", async () => {
+  const view = new FormattedText();
+  view.text = "**Original**";
+  document.body.append(view);
+  await settleDeferredContent(view);
+  view.text = "**Replacement**";
+  await view.updateComplete;
+  expect(view.renderRoot.querySelector<HTMLElement>(".enhanced-content")?.hidden).toBe(true);
+  const source = view.renderRoot.querySelector<HTMLElement>(".pending-source");
+  expect(source?.hidden).toBe(false);
+  expect(source?.textContent).toBe("**Replacement**");
+  await settleDeferredContent(view);
+  expect(view.renderRoot.querySelector("strong")?.textContent).toBe("Replacement");
+});
+
+it("falls back to the latest source if formatting a streaming update fails", async () => {
+  const view = new FormattedText();
+  view.text = "**Original**";
+  document.body.append(view);
+  await settleDeferredContent(view);
+  vi.spyOn(markdown, "toSafeMarkdownHtml").mockImplementation(() => { throw new Error("Formatting failed"); });
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  view.text += " latest words";
+  await settleDeferredContent(view);
+  expect(view.renderRoot.querySelector<HTMLElement>(".enhanced-content")?.hidden).toBe(true);
+  const source = view.renderRoot.querySelector<HTMLElement>(".pending-source");
+  expect(source?.hidden).toBe(false);
+  expect(source?.textContent).toBe(view.text);
+  expect(warn).toHaveBeenCalledWith("Chat Markdown formatting failed; source remains available", expect.any(Error));
+});
+
 it("formats only intersecting content and coalesces invisible updates to the latest source", async () => {
   const intersect = viewport();
   const format = vi.spyOn(markdown, "toSafeMarkdownHtml");
