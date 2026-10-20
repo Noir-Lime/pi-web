@@ -184,7 +184,7 @@ describe("createSubsessionToolDefinitions", () => {
   it("distinguishes status inspection from yielding in tool metadata", () => {
     const definitions = tools({});
 
-    expect(definitions.list.description).toBe("List tracked child statuses. Never yields or changes control flow; do not poll.");
+    expect(definitions.list.description).toContain("List tracked child statuses");
     expect(definitions.list.promptSnippet).toBe("list_subsessions: inspect child statuses; never yields");
     expect(definitions.check.description).toContain("Receiving a completed result marks it read, so it will not arrive again automatically.");
     expect(definitions.check.promptSnippet).toBe("check_subsession: inspect child status and available output; never yields");
@@ -307,7 +307,7 @@ describe("createSubsessionToolDefinitions", () => {
 
     const result = await checkTool.execute("call-4", { sessionId: "child-1" }, undefined, undefined, ctxFor("parent-1", "/sessions/parent-1.jsonl"));
 
-    expect(check).toHaveBeenCalledWith("parent-1", "child-1", "/sessions/parent-1.jsonl", "call-4");
+    expect(check).toHaveBeenCalledWith("parent-1", "child-1", "/sessions/parent-1.jsonl", "call-4", undefined);
     expect(result.details).toMatchObject({ sessionId: "child-1", status: "idle", finalText: "all done" });
     expect(firstText(result.content)).toBe("Subsession child-1 [idle].\n\n--- SUBSESSION OUTPUT: child-1 ---\nall done");
     expect(result.terminate).toBeUndefined();
@@ -332,7 +332,7 @@ describe("createSubsessionToolDefinitions", () => {
 
     const result = await checkTool.execute("call-working-check", { sessionId: "child-1" }, undefined, undefined, ctxFor("parent-1", "/sessions/parent-1.jsonl"));
 
-    expect(check).toHaveBeenCalledWith("parent-1", "child-1", "/sessions/parent-1.jsonl", "call-working-check");
+    expect(check).toHaveBeenCalledWith("parent-1", "child-1", "/sessions/parent-1.jsonl", "call-working-check", undefined);
     expect(firstText(result.content)).toBe(workingGuidance('"Parser review" (child-1)'));
     expect(firstText(result.content)).not.toContain("SECRET PARTIAL OUTPUT");
     expect(result.details).toEqual(partial);

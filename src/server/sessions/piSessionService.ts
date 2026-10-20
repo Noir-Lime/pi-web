@@ -102,6 +102,7 @@ import { DEFAULT_EXTENSION_DIALOGS_TIMEOUT_MS } from "../../config.js";
 import { createSpawnSessionToolDefinition, type SpawnSessionInvocation, type SpawnSessionResult } from "./spawnSessionTool.js";
 import type { SessionUiMetadata } from "../../shared/pluginApiTypes.js";
 import { readSessionUiMetadata, requireSessionUiMetadata, SESSION_UI_METADATA_CUSTOM_TYPE } from "./sessionMetadata.js";
+import { buildSubsessionActivity } from "./subsessionActivity.js";
 import { createSendParentMessageToolDefinition, createSubsessionToolDefinitions, type SpawnSubsessionInvocation, type SpawnSubsessionResult, type SubsessionCheckResult, type SubsessionJoinResult, type SubsessionObservation, type SubsessionReadQuery, type SubsessionReadResult, type SubsessionStatus, type SubsessionSummary, type SubsessionToolDeps } from "./spawnSubsessionTool.js";
 import { buildTranscriptView, type TranscriptView } from "./subsessionTranscript.js";
 import { createSubsessionCompletionDelivery, type SubsessionCompletionDeliveryDeps } from "./subsessionCompletionDelivery.js";
@@ -2091,7 +2092,7 @@ export class PiSessionService implements SessionRouteService {
   }
 
   /** Status and final result of a subsession, scoped to the caller's children. */
-  async checkSubsession(parentSessionId: string, sessionId: string, parentSessionFile?: string, toolCallId?: string): Promise<SubsessionCheckResult> {
+  async checkSubsession(parentSessionId: string, sessionId: string, parentSessionFile?: string, toolCallId?: string, activityCalls?: number): Promise<SubsessionCheckResult> {
     const session = await this.openSubsession(parentSessionId, sessionId, parentSessionFile);
     // Finalize the same completion even if its event/heartbeat notification has
     // not run yet. Inspection must not leave a future notice armed for this run.
@@ -2108,6 +2109,7 @@ export class PiSessionService implements SessionRouteService {
       ...this.subsessionObservation(session),
       finalText: finalAssistantText(messages),
       messageCount: messages.length,
+      ...(status === "working" ? { activity: buildSubsessionActivity(messages, activityCalls) } : {}),
       ...(status === "working" || completion?.errorDetail === undefined ? {} : { errorDetail: completion.errorDetail }),
     };
   }
@@ -2125,7 +2127,7 @@ export class PiSessionService implements SessionRouteService {
       && (transcriptReturnsFinalOutput(messages, view, completion.finalText) || (completion.finalText === "" && errorDetail !== undefined))) {
       this.receiveSubsessionCompletions(parentSessionId, parentSessionFile, [completion], toolCallId);
     }
-    return { sessionId, cwd: session.sessionManager.getCwd(), status, ...(session.sessionName === undefined ? {} : { name: session.sessionName }), ...view, ...(errorDetail === undefined ? {} : { errorDetail }) };
+    return { sessionId, cwd: session.sessionManager.getCwd(), status, ...(session.sessionName === undefined ? {} : { name: session.sessionName }), ...view, ...(status === "working" ? { activity: buildSubsessionActivity(messages) } : {}), ...(errorDetail === undefined ? {} : { errorDetail }) };
   }
 
   private subsessionInbox(parentSessionId: string, parentSessionFile?: string): SubsessionCompletionInbox {
@@ -2518,10 +2520,13 @@ export class PiSessionService implements SessionRouteService {
     const active = link === undefined ? undefined : this.activeChildForSubsessionLink(link);
     if (active !== undefined) {
       const session = active.runtime.session;
+      const status = this.subsessionStatus(session);
+      const lastActivityAt = status === "working" ? buildSubsessionActivity(historyMessages(session), 1).lastActivityAt : undefined;
       return {
-        cwd: active.runtime.cwd, status: this.subsessionStatus(session),
+        cwd: active.runtime.cwd, status,
         ...(session.sessionName === undefined ? {} : { name: session.sessionName }),
         ...this.subsessionObservation(session),
+        ...(lastActivityAt === undefined ? {} : { lastActivityAt: new Date(lastActivityAt).toISOString() }),
       };
     }
     if (link?.childSessionFile !== undefined && (await sessionFileHeaderMatches(link.childSessionFile, { sessionId: childSessionId, parentSessionFile: link.parentSessionFile }))) {

@@ -3,6 +3,7 @@ import { KNOWN_THINKING_LEVELS } from "../../shared/thinkingLevels.js";
 import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { TranscriptContentKind, TranscriptEntry, TranscriptRole, TranscriptView } from "./subsessionTranscript.js";
 import type { SubsessionCompletion } from "./subsessionCompletionInbox.js";
+import { DEFAULT_ACTIVITY_CALLS, MAX_ACTIVITY_CALLS, renderSubsessionActivity, type SubsessionActivity } from "./subsessionActivity.js";
 
 /** Lifecycle phase of a tracked subsession as seen by its parent. */
 export type SubsessionStatus = "working" | "idle" | "error" | "unknown";
@@ -27,6 +28,8 @@ export interface SubsessionObservation {
   /** Context occupancy at observation time. */
   contextUsage?: SubsessionContextUsage;
   observedAt?: string;
+  /** ISO time of the newest recorded history message; present only for a working child. */
+  lastActivityAt?: string;
 }
 
 export interface SpawnSubsessionResult {
@@ -81,6 +84,8 @@ export interface SubsessionCheckResult extends SubsessionObservation {
   finalText: string;
   messageCount: number;
   errorDetail?: string;
+  /** Live tool-call activity; present only while the child is working. */
+  activity?: SubsessionActivity;
 }
 
 export interface SubsessionJoinResult {
@@ -95,6 +100,8 @@ export interface SubsessionReadResult extends TranscriptView {
   status: SubsessionStatus;
   name?: string;
   errorDetail?: string;
+  /** Live tool-call activity; present only while the child is working. */
+  activity?: SubsessionActivity;
 }
 
 /** Filters the parent passes to narrow a transcript read; mirrors {@link TranscriptQuery}. */
@@ -117,7 +124,7 @@ export interface SubsessionToolDeps {
   spawn(input: SpawnSubsessionInvocation): Promise<SpawnSubsessionResult>;
   list(parentSessionId: string, parentSessionFile?: string): Promise<SubsessionSummary[]>;
   join(parentSessionId: string, parentSessionFile?: string, toolCallId?: string): Promise<SubsessionJoinResult>;
-  check(parentSessionId: string, sessionId: string, parentSessionFile?: string, toolCallId?: string): Promise<SubsessionCheckResult>;
+  check(parentSessionId: string, sessionId: string, parentSessionFile?: string, toolCallId?: string, activityCalls?: number): Promise<SubsessionCheckResult>;
   read(parentSessionId: string, sessionId: string, query: SubsessionReadQuery, parentSessionFile?: string, toolCallId?: string): Promise<SubsessionReadResult>;
 }
 
@@ -147,7 +154,15 @@ const SetSubsessionModelParams = Type.Object({
   sessionId: Type.String({ description: "Your direct tracked child id." }),
   model: Type.String({ description: 'Exact "provider/model-id". The child must be idle; busy changes are rejected without stopping it.' }),
 });
-const ListSubsessionsParams = Type.Object({});
+const ListSubsessionsParams = Type.Object({
+  status: Type.Optional(Type.Array(
+    Type.Union([Type.Literal("working"), Type.Literal("idle"), Type.Literal("error"), Type.Literal("unknown")]),
+    { description: "Only these statuses; omit for all." },
+  )),
+  name: Type.Optional(Type.String({ description: "Case-insensitive substring of the child's name. Unnamed children never match." })),
+  compact: Type.Optional(Type.Boolean({ description: "One short line per child (name, status, context percent, last activity, id) after a count-by-status header. Omits cwd, model and token detail." })),
+  limit: Type.Optional(Type.Integer({ minimum: 1, description: "Show at most this many matches, working first. The header always reports the full match count." })),
+});
 const SendParentMessageParams = Type.Object({
   message: Type.String({ minLength: 1, description: "Progress update, question, or finding for your parent session." }),
 });
@@ -160,6 +175,11 @@ const CheckSubsessionParams = Type.Object({
   sessionId: Type.String({
     description: "Tracked child id from spawn_subsession or list_subsessions.",
   }),
+  calls: Type.Optional(Type.Integer({
+    minimum: 1,
+    maximum: MAX_ACTIVITY_CALLS,
+    description: `For a working child: how many recent tool calls to show (default ${String(DEFAULT_ACTIVITY_CALLS)}, max ${String(MAX_ACTIVITY_CALLS)}).`,
+  })),
 });
 
 const ReadSubsessionParams = Type.Object({
@@ -267,8 +287,37 @@ function statusLine(summary: SubsessionSummary): string {
   return `- ${subsessionDisplay(summary.sessionId, summary.name)} [${summary.status}] in ${summary.cwd}${observed === "" ? "" : ` — ${observed}`}`;
 }
 
-function workingInspectionGuidance(sessionId: string, name?: string): string {
-  return `Subsession ${subsessionDisplay(sessionId, name)} is working; partial output is withheld. Continue other work, or end your turn with a brief close-out message. Completion notices wake you; do not poll.`;
+function workingInspectionGuidance(sessionId: string, name?: string, activity?: SubsessionActivity): string {
+  const tail = "Continue other work, or end your turn with a brief close-out message. Completion notices wake you; do not poll.";
+  if (activity === undefined) return `Subsession ${subsessionDisplay(sessionId, name)} is working; partial output is withheld. ${tail}`;
+  return `Subsession ${subsessionDisplay(sessionId, name)} is working; its output and transcript text are withheld, but its tool activity is shown below.\n\n${renderSubsessionActivity(activity, Date.now(), formatMetadataText)}\n\n${tail}`;
+}
+
+function agoText(iso: string | undefined, now: number): string {
+  const t = iso === undefined ? Number.NaN : Date.parse(iso);
+  if (!Number.isFinite(t)) return "";
+  const s = Math.max(0, Math.round((now - t) / 1000));
+  return s < 90 ? `${String(s)}s ago` : s < 5400 ? `${String(Math.round(s / 60))}m ago` : `${String(Math.round(s / 3600))}h ago`;
+}
+
+function compactLine(summary: SubsessionSummary, now: number): string {
+  const percent = summary.contextUsage?.percent;
+  const parts = [`[${summary.status}]`, ...(percent === null || percent === undefined ? [] : [`ctx ${String(Math.round(percent))}%`]), ...(summary.lastActivityAt === undefined ? [] : [`active ${agoText(summary.lastActivityAt, now)}`])];
+  return `- ${subsessionDisplay(summary.sessionId, summary.name)} ${parts.join(" ")}`;
+}
+
+/** Filter, order (working first) and render a child listing. Pure; `now` is injected for tests. */
+export function renderSubsessionList(all: readonly SubsessionSummary[], filter: { status?: readonly SubsessionStatus[]; name?: string; compact?: boolean; limit?: number }, now: number): string {
+  const needle = filter.name?.toLowerCase();
+  const matches = all.filter((s) => (filter.status === undefined || filter.status.length === 0 || filter.status.includes(s.status))
+    && (needle === undefined || needle === "" || (s.name?.toLowerCase().includes(needle) ?? false)));
+  const rank = (s: SubsessionSummary) => (s.status === "working" ? 0 : s.status === "error" ? 1 : s.status === "idle" ? 2 : 3);
+  const ordered = [...matches].sort((a, b) => rank(a) - rank(b));
+  const shown = filter.limit === undefined ? ordered : ordered.slice(0, filter.limit);
+  const counts = (["working", "idle", "error", "unknown"] as const).map((k) => `${k} ${String(matches.filter((s) => s.status === k).length)}`).join(", ");
+  const header = `${String(matches.length)} of ${String(all.length)} tracked subsessions match (${counts})${shown.length < matches.length ? `; showing ${String(shown.length)}` : ""}.`;
+  if (matches.length === 0) return all.length === 0 ? "No tracked subsessions." : header;
+  return `${header}\n${shown.map((s) => (filter.compact === true ? compactLine(s, now) : statusLine(s))).join("\n")}`;
 }
 
 function renderEntry(entry: TranscriptEntry): string {
@@ -363,16 +412,14 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
   const listTool = defineTool<typeof ListSubsessionsParams, { subsessions: SubsessionSummary[] }>({
     name: "list_subsessions",
     label: "List subsessions",
-    description: "List tracked child statuses. Never yields or changes control flow; do not poll.",
+    description: "List tracked child statuses, working first. Optional filters: status, name substring, limit; compact gives one short line per child. The header always reports the full match count and counts by status. Never yields or changes control flow; do not poll.",
     promptSnippet: "list_subsessions: inspect child statuses; never yields",
     parameters: ListSubsessionsParams,
-    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const parentSessionId = ctx.sessionManager.getSessionId();
       const parentSessionFile = ctx.sessionManager.getSessionFile() ?? undefined;
       const subsessions = await deps.list(parentSessionId, parentSessionFile);
-      const text = subsessions.length === 0
-        ? "No tracked subsessions."
-        : `Tracked subsessions:\n${subsessions.map(statusLine).join("\n")}`;
+      const text = renderSubsessionList(subsessions, params, Date.now());
       return { content: [{ type: "text", text }], details: { subsessions } };
     },
   });
@@ -380,18 +427,18 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
   const checkTool = defineTool<typeof CheckSubsessionParams, SubsessionCheckResult>({
     name: "check_subsession",
     label: "Check subsession",
-    description: "Get a tracked child's status and latest output. Receiving a completed result marks it read, so it will not arrive again automatically. Working output is withheld. Never yields; do not poll.",
+    description: "Get a tracked child's status and latest output. Receiving a completed result marks it read, so it will not arrive again automatically. For a working child, prose and output are withheld, but you get its recent tool calls (name, one-line summary, running/done/error), time since last activity, and a REPEAT warning when the last 3+ calls are identical. Never yields; do not poll.",
     promptSnippet: "check_subsession: inspect child status and available output; never yields",
     parameters: CheckSubsessionParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const parentSessionId = ctx.sessionManager.getSessionId();
       const parentSessionFile = ctx.sessionManager.getSessionFile() ?? undefined;
-      const result = await deps.check(parentSessionId, params.sessionId, parentSessionFile, _toolCallId);
+      const result = await deps.check(parentSessionId, params.sessionId, parentSessionFile, _toolCallId, params.calls);
       const body = result.finalText === "" ? "(no output yet)" : result.finalText;
       const observed = observationLine(result);
       const observedText = observed === "" ? "" : `${observed}\n\n`;
       const text = result.status === "working"
-        ? `${workingInspectionGuidance(result.sessionId, result.name)}\n\n${observedText}`.trimEnd()
+        ? `${workingInspectionGuidance(result.sessionId, result.name, result.activity)}\n\n${observedText}`.trimEnd()
         : `Subsession ${subsessionDisplay(result.sessionId, result.name)} [${result.status}].\n\n${observedText}${result.errorDetail === undefined ? "" : `Error: ${result.errorDetail}\n\n`}--- SUBSESSION OUTPUT: ${result.sessionId} ---\n${body}`;
       return {
         content: [{ type: "text", text }],
@@ -403,7 +450,7 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
   const readTool = defineTool<typeof ReadSubsessionParams, SubsessionReadResult>({
     name: "read_subsession",
     label: "Read subsession",
-    description: "Read a tracked child's filtered transcript. Returning its complete latest final output marks that completion read; filtered or historical-only reads do not. Working transcripts are withheld. Never yields; do not poll.",
+    description: "Read a tracked child's filtered transcript. Returning its complete latest final output marks that completion read; filtered or historical-only reads do not. Working transcripts are withheld; a working child shows the same live tool-activity view as check_subsession. Never yields; do not poll.",
     promptSnippet: "read_subsession: inspect an available child transcript; never yields",
     parameters: ReadSubsessionParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -412,7 +459,7 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
       const { sessionId, ...query } = params;
       const result = await deps.read(parentSessionId, sessionId, query, parentSessionFile, _toolCallId);
       const text = result.status === "working"
-        ? workingInspectionGuidance(result.sessionId, result.name)
+        ? workingInspectionGuidance(result.sessionId, result.name, result.activity)
         : renderTranscript(result);
       return {
         content: [{ type: "text", text }],
