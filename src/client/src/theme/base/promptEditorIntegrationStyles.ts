@@ -12,7 +12,10 @@ export const promptEditorIntegrationStyles = css`
   .markdown-editor .cm-content { min-height: 2.8em; padding: 0 52px 0 16px; caret-color: var(--pi-text); text-align: start; unicode-bidi: plaintext; }
   .markdown-editor .cm-line { padding: 0; unicode-bidi: plaintext; }
   .markdown-editor .cm-placeholder { color: var(--pi-dim); }
-  .markdown-editor .prompt-placeholder::before { content: attr(data-placeholder); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  /* CodeMirror measures this element for the empty-document caret. Keep the
+     layout box here, not on its pseudo-element, so the caret has a height. */
+  .markdown-editor .prompt-placeholder { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  .markdown-editor .prompt-placeholder::before { content: attr(data-placeholder); }
   .markdown-editor .cm-argument-hint { color: var(--pi-dim); pointer-events: none; }
   .markdown-editor .cm-focused { outline: none; }
   /* drawSelection() supplies its own caret/selection; match the selected palette
