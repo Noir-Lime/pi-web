@@ -76,6 +76,35 @@ describe("shared content rendering", () => {
     await settleDeferredContent(fence);
     expect(draw.mock.calls.at(-1)?.[0]).toMatchObject({ machineId: "other", text: "code", language: "js extra" });
   });
+  it.each(["text", "markdown"] as const)("refreshes mounted %s previews only when the host dependency token changes", async (kind) => {
+    let revision: unknown = {};
+    const draw = vi.fn<ContentRendererContribution["render"]>(() => html`<b>Preview</b>`);
+    const contribution = renderer(draw);
+    const dependency = vi.fn(() => revision);
+    const capability = createContentRenderingCapability(() => [{ id: "test", label: "Test", renderer: contribution }], dependency);
+    const root = document.createElement("div");
+    document.body.append(root);
+    const refresh = async () => {
+      if (kind === "text") render(capability.renderText({ machineId: "remote", text: "source", language: "diagram" }), root);
+      else await renderPublicMarkdown(capability.renderMarkdown({ machineId: "remote", text: "```diagram\nsource\n```", toSafeHtml: renderWorkspaceMarkdownHtml }), root);
+      const host = root.querySelector<ContentRendererHost>("pi-web-content-renderer");
+      if (host === null) throw new Error("Expected host");
+      await settleDeferredContent(host);
+      return host;
+    };
+    const host = await refresh();
+    const preview = host.renderRoot.querySelector("b");
+    expect(await refresh()).toBe(host);
+    expect(draw).toHaveBeenCalledOnce();
+    expect(host.renderRoot.querySelector("b")).toBe(preview);
+    revision = {};
+    expect(await refresh()).toBe(host);
+    expect(draw).toHaveBeenCalledTimes(2);
+    expect(draw.mock.calls[0]?.[0].signal.aborted).toBe(true);
+    expect(dependency).toHaveBeenLastCalledWith({ machineId: "remote", text: "source", language: "diagram" });
+    expect(Object.keys(draw.mock.calls[1]?.[0] ?? {})).not.toContain("renderingRevision");
+  });
+
   it("renders machine-scoped snapshots and refreshes unavailable renderers through the same input", async () => {
     let enabled = true;
     const registry = new PluginRegistry({ isContributionEnabled: () => enabled });

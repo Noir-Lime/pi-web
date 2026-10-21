@@ -154,29 +154,48 @@ export class PluginRegistry {
 
   private readonly contentRenderers: RegisteredContentRenderer[] = [];
   private readonly syntaxHighlighters: RegisteredSyntaxHighlighter[] = [];
-  readonly syntaxHighlighting = createSyntaxHighlightingCapability((request) => this.syntaxHighlighters
-    .filter((highlighter) => this.isContributionActive(highlighter.pluginId, highlighter.machineId, request.machineId, highlighter.sourcePluginId)
-      && contentRendererMatches(highlighter, { ...request, text: "" }))
-    .sort((a, b) => this.compareDiscoveryOrder(a, b)).at(-1));
+  readonly syntaxHighlighting = createSyntaxHighlightingCapability((request) => this.syntaxHighlightingRevision(request.machineId)
+    .filter((highlighter) => contentRendererMatches(highlighter, { ...request, text: "" })).at(-1));
 
   private compareDiscoveryOrder(a: { pluginId: string }, b: { pluginId: string }): number {
     const ids = [...this.declarationsById.keys()];
     return ids.indexOf(a.pluginId) - ids.indexOf(b.pluginId);
   }
-  private readonly chatContentRenderingViews = new Map<string, { choices: readonly ContentRendererChoice[]; rendering: ChatContentRendering }>();
+  private readonly syntaxHighlightingViews = new Map<string, readonly RegisteredSyntaxHighlighter[]>();
+  private readonly chatContentRenderingViews = new Map<string, {
+    choices: readonly ContentRendererChoice[];
+    grammars: readonly RegisteredSyntaxHighlighter[];
+    rendering: ChatContentRendering;
+  }>();
+
+  private syntaxHighlightingRevision(machineId: string): readonly RegisteredSyntaxHighlighter[] {
+    const active = this.syntaxHighlighters
+      .filter((highlighter) => this.isContributionActive(highlighter.pluginId, highlighter.machineId, machineId, highlighter.sourcePluginId))
+      .sort((a, b) => this.compareDiscoveryOrder(a, b));
+    const previous = this.syntaxHighlightingViews.get(machineId);
+    if (previous?.length === active.length && active.every((highlighter, index) => highlighter === previous[index])) return previous;
+    this.syntaxHighlightingViews.set(machineId, active);
+    return active;
+  }
+
   // Plugins retain one live capability; chat receives a reactive rendering snapshot.
-  readonly contentRendering = createContentRenderingCapability((request) => this.matchContentRenderers(request));
+  readonly contentRendering = createContentRenderingCapability(
+    (request) => this.matchContentRenderers(request),
+    (request) => this.syntaxHighlightingRevision(request.machineId),
+  );
 
   /** Stable input while this machine's eligible renderers are unchanged. */
   getChatContentRendering(machineId: string): ChatContentRendering {
     const choices = this.activeContentRendererChoices(machineId);
+    const grammars = this.syntaxHighlightingRevision(machineId);
     const previous = this.chatContentRenderingViews.get(machineId);
-    if (previous?.choices.length === choices.length
+    if (previous?.grammars === grammars && previous.choices.length === choices.length
       && choices.every((choice, index) => choice.renderer === previous.choices[index]?.renderer)) return previous.rendering;
-    const rendering = createContentRenderingService((request) => request.machineId === machineId
-      ? choices.filter(({ renderer }) => contentRendererMatches(renderer, request))
-      : []);
-    this.chatContentRenderingViews.set(machineId, { choices, rendering });
+    const rendering = createContentRenderingService(
+      (request) => request.machineId === machineId ? choices.filter(({ renderer }) => contentRendererMatches(renderer, request)) : [],
+      () => grammars,
+    );
+    this.chatContentRenderingViews.set(machineId, { choices, grammars, rendering });
     return rendering;
   }
 
@@ -328,6 +347,7 @@ export class PluginRegistry {
     this.contentRenderers.splice(0);
     this.syntaxHighlighters.splice(0);
     this.chatContentRenderingViews.clear();
+    this.syntaxHighlightingViews.clear();
     this.workspacePanels.splice(0);
     this.applicationPanels.splice(0);
     this.workspaceLabels.splice(0);
@@ -490,11 +510,12 @@ export class PluginRegistry {
       phase = "validate";
       const activation = parseBrowserActivation(activationValue, registration.id, declaration.sourcePluginId);
       const provisions = (activation.provides ?? []).map(internalCapabilityProvision);
+      const versionedContributions = contributionsForVersion(activation.contributions, plugin.apiVersion);
       const contributions = this.prepareContributions(
         registration,
         plugin.apiVersion === 5
-          ? withV5Services(activation.contributions, registration, workspacePluginBinding(registration.id, declaration.sourcePluginId, backendRevision, pairedRequestVersion, pairedChannelVersion), lifetimeController.signal)
-          : activation.contributions,
+          ? withV5Services(versionedContributions, registration, workspacePluginBinding(registration.id, declaration.sourcePluginId, backendRevision, pairedRequestVersion, pairedChannelVersion), lifetimeController.signal)
+          : versionedContributions,
         backendRevision,
         pairedRequestVersion,
         pairedChannelVersion,
@@ -1113,7 +1134,9 @@ export class PluginRegistry {
     const id = this.qualify(pluginId, theme.id, contributionIds);
     const stylesheetIds = new Set<QualifiedContributionId>();
     const stylesheets = theme.stylesheets?.map((style) => this.qualifyStylesheet(`${pluginId}:${theme.id}`, style, stylesheetIds));
-    return { ...theme, id, pluginId, localId: theme.id, ...(stylesheets === undefined ? {} : { stylesheets }) };
+    return { ...theme, id, pluginId, localId: theme.id,
+      ...(theme.tokens === undefined ? {} : { tokens: Object.freeze({ ...theme.tokens }) }),
+      ...(stylesheets === undefined ? {} : { stylesheets }) };
   }
 
   private qualifyThemePair(pluginId: string, pair: ThemePairContribution, contributionIds: Set<QualifiedContributionId>): QualifiedThemePairContribution {
@@ -1371,6 +1394,46 @@ function sameDeclaration(left: NormalizedPluginDeclaration, right: NormalizedPlu
     && left.manifestSource === right.manifestSource
     && left.manifestScope === right.manifestScope
     && left.machineSpecific === right.machineSpecific;
+}
+
+/** Freeze legacy entrypoint shapes; independently versioned capabilities remain available to both versions. */
+function contributionsForVersion(contributions: PluginContributions, apiVersion: 4 | 5): PluginContributions {
+  if (apiVersion === 5) {
+    if (contributions.themes?.some((theme) => theme.tokens !== undefined) === true) {
+      throw new BrowserPluginIncompatibleError("Browser API v5 themes use stylesheets, not tokens");
+    }
+    return contributions;
+  }
+  if (contributions.stylesheets !== undefined || contributions.syntaxHighlighters !== undefined
+    || contributions.contentRenderers?.some((renderer) => renderer.title !== undefined || renderer.supports !== undefined) === true
+    || contributions.themes?.some((theme) => theme.stylesheets !== undefined) === true) {
+    throw new BrowserPluginIncompatibleError("Stylesheet, syntax-highlighter and extended renderer contributions require browser API v5");
+  }
+  if (contributions.themes?.some((theme) => !isRecord(theme.tokens) || Object.values(theme.tokens).some((value) => typeof value !== "string")) === true) {
+    throw new BrowserPluginIncompatibleError("Browser API v4 themes require string palette tokens");
+  }
+  const legacyContext = <Context extends MessageActionAvailabilityContext>(context: Context): Context => {
+    const { entryId, role, text } = context.message;
+    return { ...context, message: { entryId, role, text } };
+  };
+  return {
+    ...contributions,
+    ...(contributions.contentRenderers === undefined ? {} : { contentRenderers: contributions.contentRenderers.map((renderer) => ({
+      ...renderer,
+      render: ({ text, signal, fail }) => renderer.render({ text, signal, fail }),
+    })) }),
+    ...(contributions.messageActions === undefined ? {} : { messageActions: contributions.messageActions.map((action) => {
+      if (action.target === "display") return action;
+      const { visible, enabled, ariaLabel, run } = action;
+      return {
+        ...action,
+        ...(visible === undefined ? {} : { visible: (context: MessageActionAvailabilityContext) => visible(legacyContext(context)) }),
+        ...(enabled === undefined ? {} : { enabled: (context: MessageActionAvailabilityContext) => enabled(legacyContext(context)) }),
+        ...(ariaLabel === undefined ? {} : { ariaLabel: (context: MessageActionAvailabilityContext) => ariaLabel(legacyContext(context)) }),
+        run: (context: MessageActionContext) => run(legacyContext(context)),
+      };
+    }) }),
+  };
 }
 
 /** Wrap invocation callbacks, not availability probes or activation: portable plugins may change machines. */

@@ -30,6 +30,12 @@ export class SettingsThemePanel extends LitElement {
     if (changed.has("preference")) this.draft = { ...this.preference };
   }
 
+  protected override updated(): void {
+    // Select values must be applied after their options have been rendered.
+    const select = this.renderRoot.querySelector("select");
+    if (select !== null) select.value = this.draft.themeId;
+  }
+
   override render(): TemplateResult {
     const selectedAvailable = this.themes.some((theme) => theme.id === this.draft.themeId);
     const busy = this.loading || this.saving;
@@ -46,7 +52,7 @@ export class SettingsThemePanel extends LitElement {
         </div>
         <label class="field ui-form-field">
           <span>Theme</span>
-          <select class="ui-input" aria-label="Theme" aria-describedby=${selectedAvailable ? "theme-scope-help" : "theme-unavailable-help theme-scope-help"} .value=${this.draft.themeId} ?disabled=${busy} @change=${(event: Event) => {
+          <select class="ui-input" aria-label="Theme" aria-describedby=${selectedAvailable ? "theme-scope-help" : "theme-unavailable-help theme-scope-help"} ?disabled=${busy} @change=${(event: Event) => {
             if (event.target instanceof HTMLSelectElement) this.draft = { ...this.draft, themeId: event.target.value };
           }}>
             ${!selectedAvailable ? html`<option value=${this.draft.themeId}>${this.draft.themeId} (unavailable)</option>` : null}

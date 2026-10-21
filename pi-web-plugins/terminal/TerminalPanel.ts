@@ -1097,24 +1097,15 @@ export class TerminalPanel extends LitElement {
     :host { flex: 1 1 auto; min-height: 0; display: flex; }
     .terminal-shell { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--pi-terminal-bg); }
     .terminal-tabs { flex: 0 0 auto; display: flex; align-items: stretch; border-bottom: 1px solid var(--pi-border-muted); background: var(--pi-bg); overflow: auto; }
-    .terminal-tabs > button { box-sizing: border-box; flex: 0 0 auto; min-width: 32px; height: 32px; gap: 0; padding: 0 10px; border: 0; border-inline-end: 1px solid var(--pi-border-muted); border-radius: 0; background: transparent; color: var(--pi-muted); font: 12px/16px var(--pi-font, system-ui, sans-serif); }
+    .terminal-tabs > button { box-sizing: border-box; flex: 0 0 auto; min-width: 44px; height: 44px; gap: 0; padding: 0 10px; border: 0; border-inline-end: 1px solid var(--pi-border-muted); border-radius: 0; background: transparent; color: var(--pi-muted); font: 12px/16px var(--pi-font, system-ui, sans-serif); }
     .terminal-tabs > button:has(small) { padding: 0; }
     .terminal-tabs > button > span { padding: 0 10px; }
-    .terminal-tabs > button > small { display: inline-flex; align-items: center; justify-content: center; align-self: stretch; min-width: 32px; }
+    .terminal-tabs > button > small { display: inline-flex; align-items: center; justify-content: center; align-self: stretch; min-width: 44px; }
     .terminal-tabs > button:hover:not(:disabled) { background: var(--pi-surface); color: var(--pi-text); }
     .terminal-tabs > button.selected { border-color: var(--pi-border-muted); background: var(--pi-surface); color: var(--pi-text); box-shadow: inset 0 -2px var(--pi-text-secondary); }
     .terminal-tabs > button:focus-visible { outline: 2px solid var(--pi-text-secondary); outline-offset: -3px; }
-    @media (pointer: coarse) {
-      .terminal-tabs > button { min-width: 44px; height: 44px; }
-      .terminal-tabs > button > small { min-width: 44px; }
-    }
-    /* Desktop xterm already has mouse selection and hardware keys; keep touch controls to touch/narrow layouts. */
-    .copy-mode-toggle, .soft-keys-toggle, .terminal-soft-keys { display: none; }
-    .copy-mode-toggle.selected { display: inline-flex; }
-    @media (pointer: coarse), (max-width: 760px) {
-      .copy-mode-toggle, .soft-keys-toggle { display: inline-flex; }
-      .terminal-soft-keys { display: block; }
-    }
+    /* Rendering owns accessory visibility so saved choices work at every screen size. */
+    .terminal-soft-keys { display: block; }
     button { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 180px; border: 1px solid var(--pi-border); border-radius: 7px; background: var(--pi-surface); color: var(--pi-text); padding: 5px 7px; cursor: pointer; }
     button.selected { border-color: var(--pi-accent); background: var(--pi-selection-bg); }
     button.new { flex: 0 0 auto; color: var(--pi-muted); }
@@ -1143,9 +1134,6 @@ export class TerminalPanel extends LitElement {
     .terminal-copy-toolbar button { box-sizing: border-box; align-self: stretch; flex: 0 0 auto; width: auto; min-height: 32px; border: 0; border-inline-end: 1px solid var(--pi-border-muted); border-radius: 0; background: transparent; color: var(--pi-muted); padding: 6px 9px; font: 12px/20px var(--pi-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); }
     .terminal-copy-toolbar button:hover { background: var(--pi-surface); color: var(--pi-text); }
     .terminal-copy-toolbar button:focus-visible { outline: 2px solid var(--pi-text-secondary); outline-offset: -3px; }
-    @media (pointer: coarse) {
-      .terminal-copy-toolbar button { min-width: 44px; min-height: 44px; }
-    }
     .terminal-copy-layers { flex: 1 1 auto; min-height: 0; display: grid; overflow: hidden; background: var(--pi-terminal-bg); }
     /* Match xterm's configured font, not theme code fonts, to keep copy selection aligned with its cells. */
     .terminal-copy-content, .terminal-copy-selector { grid-area: 1 / 1; box-sizing: border-box; min-width: 0; min-height: 0; width: 100%; height: 100%; margin: 0; padding: 6px; border: 0; border-radius: 0; font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; line-height: 17px; letter-spacing: normal; font-variant-ligatures: none; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-all; }

@@ -42,7 +42,3 @@
     outline-offset: -2px;
   }
   .ui-button:disabled, .ui-select:disabled, .ui-menu-item:disabled, .ui-menu-item:has(input:disabled) { opacity: .5; cursor: not-allowed; }
-  @media (pointer: coarse) {
-    .ui-button, .ui-menu-item, .ui-select { min-height: max(44px, var(--ui-control-size, 44px)); min-width: 44px; }
-    .ui-button--icon { min-width: max(44px, var(--ui-control-size, 44px)); }
-  }

@@ -54,11 +54,27 @@ export function effectiveThemePreference(local: ThemePreference | undefined, con
   return local ?? configuredDefault ?? DEFAULT_THEME_PREFERENCE;
 }
 
-// Palette declarations are owned by the selected theme's contributed stylesheets.
+// Preserve the released v4 palette allowlist without turning tokens into a v5 API.
+const legacyThemeTokens = [
+  "--pi-bg", "--pi-surface", "--pi-surface-hover", "--pi-terminal-bg", "--pi-terminal-text",
+  "--pi-border", "--pi-border-muted", "--pi-text", "--pi-text-secondary", "--pi-text-bright",
+  "--pi-muted", "--pi-dim", "--pi-accent", "--pi-accent-border", "--pi-selection-bg",
+  "--pi-success", "--pi-success-border", "--pi-success-bg", "--pi-success-surface", "--pi-success-ring",
+  "--pi-warning", "--pi-warning-border", "--pi-warning-surface", "--pi-danger",
+  "--pi-purple", "--pi-purple-border", "--pi-purple-surface", "--pi-overlay",
+  "--pi-shadow-soft", "--pi-shadow", "--pi-shadow-strong", "--pi-bg-overlay-soft", "--pi-bg-overlay",
+  "--pi-success-bg-overlay", "--pi-terminal-selection",
+] as const;
+
 export function applyPiWebTheme(theme: QualifiedThemeContribution): void {
   const root = document.documentElement;
   root.dataset["piWebTheme"] = theme.id;
   root.style.colorScheme = theme.colorScheme;
+  for (const token of legacyThemeTokens) {
+    const value = theme.tokens?.[token];
+    if (value === undefined) root.style.removeProperty(token);
+    else root.style.setProperty(token, value);
+  }
 }
 
 export function resolveThemePreference(options: ResolveThemePreferenceOptions): ThemePreferenceResolution {

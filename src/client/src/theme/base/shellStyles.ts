@@ -68,7 +68,7 @@ export const appStyles = css`
   .shell.two-column-layout.workspace-view main { grid-row: 1; min-height: auto; }
   .shell.two-column-layout.workspace-view > workspace-panel { grid-column: 3; grid-row: 2; display: flex; border-left: 0; }
   .shell.two-column-layout:not(.workspace-view) > workspace-panel { display: none; }
-  .two-column-layout main.workspace-view chat-view, .two-column-layout main.workspace-view .composer-area, .two-column-layout main.workspace-view status-bar,
+  .two-column-layout main.workspace-view conversation-layout,
   .two-column-layout main.workspace-view .empty { display: none; }
   .two-column-layout main.workspace-view { overflow: hidden; }
   @media (max-width: 760px) {
@@ -77,14 +77,14 @@ export const appStyles = css`
     .two-column-layout main, .shell.two-column-layout.workspace-view > workspace-panel { grid-column: 1; }
     .context-bar { display: flex; }
     .mobile-navigation-tab { display: block; }
-    main.navigation-view chat-view, main.navigation-view .composer-area, main.navigation-view status-bar,
+    main.navigation-view conversation-layout,
     main.navigation-view .empty { display: none; }
     main.navigation-view .mobile-navigation-panel { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
     main.navigation-view .mobile-navigation-panel app-navigation-panel { flex: 1 1 auto; min-height: 0; }
   }
   status-bar { flex: 0 0 auto; }
-  chat-view { flex: 1 1 auto; min-height: 0; overflow: hidden; }
-  .composer-area { position: relative; z-index: 5; flex: 0 0 auto; display: grid; min-width: 0; background: var(--pi-bg); }
+  conversation-layout { flex: 1 1 auto; min-width: 0; min-height: 0; }
+  .composer-area { display: grid; min-width: 0; background: var(--pi-bg); }
   /* Share a grid cell instead of adding banner height; allow long notices to grow the area rather than clip their controls. */
   .composer-area > prompt-editor, .composer-activity-notice { grid-area: 1 / 1; min-width: 0; }
   .composer-area > prompt-editor[inert] { visibility: hidden; }
@@ -197,7 +197,7 @@ export const listStyles = css`
   .action-activity .unread-ring { margin: 0; vertical-align: 0; }
   .action-menu { position: relative; align-self: stretch; }
   .action-menu-toggle { height: 100%; }
-  .action-menu-panel { position: fixed; z-index: 50; min-width: min(120px, calc(100vw - 16px)); overflow-wrap: anywhere; }
+  .action-menu-panel { min-width: min(120px, calc(100vw - 16px)); overflow-wrap: anywhere; }
   .action-menu-description { display: block; padding: 0 9px 7px; color: var(--pi-muted); font-size: 12px; line-height: 1.4; white-space: normal; overflow-wrap: anywhere; }
   .action-menu-description a { color: var(--pi-accent); text-decoration: none; }
   .action-menu-description a:hover, .action-menu-description a:focus-visible { text-decoration: underline; }
@@ -234,7 +234,7 @@ export const statusBarStyles = css`
 export const autocompleteStyles = css`
   @layer pi-web-base {
   :host { display: block; }
-  .menu { position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: 10; max-height: 260px; overflow: auto; border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); box-shadow: 0 10px 30px var(--pi-shadow); }
+  .menu { overflow: auto; padding: 0; color: var(--pi-text); border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); box-shadow: 0 10px 30px var(--pi-shadow); }
   button { display: grid; grid-template-columns: minmax(120px, 1fr) auto; gap: 4px 10px; width: 100%; border: 0; border-bottom: 1px solid var(--pi-border); border-radius: 0; background: transparent; color: var(--pi-text); padding: 8px 10px; text-align: left; cursor: pointer; }
   button:last-child { border-bottom: 0; }
   button.selected, button:hover { background: var(--pi-selection-bg); }
@@ -251,7 +251,7 @@ export const promptEditorLayoutStyles = css`
   ${uiToolbarStyles}
   ${chatNavigationStyles}
   @layer pi-web-base {
-  :host { position: relative; z-index: 5; display: block; color: var(--pi-text); font: 14px var(--pi-font, system-ui, sans-serif); }
+  :host { position: relative; display: block; color: var(--pi-text); font: 14px var(--pi-font, system-ui, sans-serif); }
   footer { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; padding: 0; border-top: 1px solid var(--pi-border); }
   footer.shell-mode { border-top-color: var(--pi-success); background: var(--pi-success-bg); }
   .editor-wrap, .editor-input { position: relative; min-width: 0; }
@@ -291,9 +291,6 @@ export const promptEditorLayoutStyles = css`
   .attachment-file-preview { display: grid; place-items: center; width: 34px; height: 26px; border: 1px solid var(--pi-border-muted); border-radius: 4px; background: var(--pi-surface); color: var(--pi-muted); font: 700 10px/1 var(--pi-font, system-ui, sans-serif); letter-spacing: .03em; }
   .attachment-file-name { position: absolute; inset-inline-end: calc(var(--attachment-remove-width) + 4px); bottom: 3px; inset-inline-start: 4px; overflow: hidden; color: var(--pi-muted); font-size: 10px; line-height: 1.2; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
   .attachment-remove { position: absolute; top: 0; inset-inline-end: 0; width: var(--attachment-remove-width); height: 100%; border-inline-start: 1px solid var(--pi-border-muted); background: var(--pi-surface); }
-  @media (pointer: coarse) {
-    .attachment-chip { --attachment-remove-width: 44px; }
-  }
   .attachment-delivery { min-width: 0; max-width: 100%; }
   .attachment-delivery .ui-select { width: 100%; }
   .attachment-error { flex-basis: 100%; color: var(--pi-danger); font-size: 12px; }

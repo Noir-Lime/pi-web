@@ -2,7 +2,7 @@
 import { useDeferredContent, settleDeferredContent } from "../formatting/deferredContent.testSupport";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { html } from "lit";
-import type { ContentRendererContribution } from "../../../plugin-api";
+import type { ContentRendererContributionV5 as ContentRendererContribution } from "../../../plugin-api";
 import type { ContentRendererChoice } from "../plugins/contentRenderers";
 import { ContentRendererHost } from "./ContentRendererHost";
 import { writeClipboardText } from "../clipboard";
@@ -133,8 +133,45 @@ it("uses last automatic defaults, ignores manual-last, and preserves explicit re
   expect(button(host, "First").getAttribute("aria-pressed")).toBe("false");
 });
 
+it("refreshes failed manual previews on dependency changes without losing activation or Raw intent", async () => {
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const draw = vi.fn<ContentRendererContribution["render"]>(() => html`<b>Preview</b>`);
+  const host = hostWith([{ id: "manual", label: "Manual", renderer: { id: "manual", render: draw } }]);
+  document.body.append(host);
+  await settleDeferredContent(host);
+  host.renderingRevision = {};
+  await settleDeferredContent(host);
+  expect(draw).not.toHaveBeenCalled();
+
+  button(host, "Manual").click();
+  await settleDeferredContent(host);
+  draw.mock.calls[0]?.[0].fail(new Error("grammar unavailable"));
+  await settleDeferredContent(host);
+  expect(host.renderRoot.textContent).toContain("Preview failed");
+  host.renderingRevision = {};
+  await settleDeferredContent(host);
+  expect(draw).toHaveBeenCalledTimes(2);
+  expect(host.renderRoot.querySelector("b")?.textContent).toBe("Preview");
+  expect(host.renderRoot.textContent).not.toContain("Preview failed");
+  draw.mock.calls[0]?.[0].fail(new Error("stale failure"));
+  await settleDeferredContent(host);
+  expect(host.renderRoot.querySelector("b")?.textContent).toBe("Preview");
+
+  host.renderingRevision = {};
+  await settleDeferredContent(host);
+  expect(draw.mock.calls[1]?.[0].signal.aborted).toBe(true);
+  expect(draw).toHaveBeenCalledTimes(3);
+  button(host, "Raw").click();
+  await settleDeferredContent(host);
+  host.renderingRevision = {};
+  await settleDeferredContent(host);
+  expect(draw).toHaveBeenCalledTimes(3);
+  expect(host.renderRoot.querySelector("pre")?.textContent).toBe("source");
+  expect(button(host, "Raw").getAttribute("aria-pressed")).toBe("true");
+});
+
 it("propagates metadata and cancels obsolete rendering for each metadata change", async () => {
-  const inputs: import("../../../plugin-api").ContentRendererInput[] = [];
+  const inputs: import("../../../plugin-api").ContentRendererInputV5[] = [];
   const host = automaticHost((input) => { inputs.push(input); return html`preview`; });
   host.machineId = "local";
   host.language = "test";

@@ -193,7 +193,7 @@ export class PromptEditor extends LitElement {
           </div>
           ${this.renderPromptChips()}
           ${this.renderAttachments()}
-          <autocomplete-menu .items=${this.completions} .selectedIndex=${this.selectedIndex} .onPick=${(item: CompletionItem) => { this.pick(item); }}></autocomplete-menu>
+          <autocomplete-menu .onClose=${() => { this.closeCompletions(); }} .items=${this.completions} .selectedIndex=${this.selectedIndex} .onPick=${(item: CompletionItem) => { this.pick(item); }}></autocomplete-menu>
         </div>
         <div class="actions ui-toolbar ui-toolbar--primary">
           ${this.renderCompactStatus()}
@@ -513,6 +513,9 @@ export class PromptEditor extends LitElement {
   }
 
   private closeCompletions(): boolean {
+    // Dismissal also invalidates loads started while the previous menu was
+    // visible, so a late response cannot reopen it after focus moved away.
+    this.requestVersion += 1;
     if (!this.completions.length) return false;
     this.completions = [];
     return true;

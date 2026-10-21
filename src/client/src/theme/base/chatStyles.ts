@@ -9,8 +9,8 @@ export const chatStyles = css`
   ${uiTranscriptStyles}
   ${chatNavigationStyles}
   @layer pi-web-base {
-  :host { position: relative; z-index: 0; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; color: var(--pi-text); font: 14px var(--pi-font, system-ui, sans-serif); }
-  .chat-wrap { --pi-chat-jump-size: 28px; position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+  :host { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: visible; color: var(--pi-text); font: 14px var(--pi-font, system-ui, sans-serif); }
+  .chat-wrap { --pi-chat-jump-size: 28px; position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; overflow: visible; display: flex; flex-direction: column; }
   .top-notices { box-sizing: border-box; flex: 0 0 auto; max-height: 40%; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border-bottom: 1px solid var(--pi-border); background: var(--pi-bg-overlay); }
   /* Empty notification hosts retain live regions without leaving a visible stack boundary. */
   .top-notices:not(:has(> .session-warnings)):has(> session-notification-tray[empty]) { border-bottom: 0; }
@@ -29,9 +29,6 @@ export const chatStyles = css`
   .session-warning-path { margin: 0; color: var(--pi-muted); font-size: 12px; font-family: var(--pi-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); overflow-wrap: anywhere; }
   .session-warning-source { color: var(--pi-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
   .session-warning-dismiss { position: absolute; top: 6px; right: 6px; font-size: 18px; }
-  @media (pointer: coarse) {
-    .session-warning { min-height: 56px; padding-right: 56px; }
-  }
   .visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0 0 0 0) !important; clip-path: inset(50%) !important; white-space: nowrap !important; border: 0 !important; }
   /* Contain sticky headers in the scroller's paint context, below its overlay scrollbar. */
   .chat { isolation: isolate; --pi-chat-sticky-top: 0px; flex: 1 1 auto; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 0; box-sizing: border-box; }
@@ -39,12 +36,6 @@ export const chatStyles = css`
   .chat-wrap.plain .msg-header, .chat-wrap.plain .event-group > summary { position: static; top: auto; }
   .chat-wrap.plain *, .chat-wrap.plain *::before, .chat-wrap.plain *::after { transition: none !important; animation: none !important; box-shadow: none !important; text-shadow: none !important; filter: none !important; backdrop-filter: none !important; transform: none !important; border-radius: 0 !important; }
   .chat-wrap.plain .chat-image { --pi-image-radius: 0; }
-  .activity-dock { position: absolute; bottom: 0; left: 50%; transform: translateX(-50%); z-index: 20; display: flex; align-items: center; gap: 4px; max-width: calc(100% - 16px); height: var(--pi-chat-jump-size); min-width: 0; box-sizing: border-box; background: var(--pi-success-surface); color: var(--pi-text); padding: 3px 6px; font-size: 11px; line-height: 16px; pointer-events: none; }
-  .chat-wrap.plain .activity-dock { left: 8px; right: 8px; width: max-content; margin-inline: auto; }
-  .activity-dock.active .dot { color: var(--pi-success); }
-  .activity-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; opacity: .45; flex: 0 0 auto; }
-  .activity-dock.active .dot { width: 5px; height: 5px; animation: pulse 1s ease-in-out infinite; opacity: 1; }
   .msg { --ui-transcript-bg: var(--pi-bg); display: flow-root; max-width: 100%; min-width: 0; margin: 0; padding: 12px 16px 16px; overflow: visible; }
   .chat > .msg:last-child, .chat > .session-activity:last-child { margin-bottom: 0; }
   .msg.conversation-message { padding: 12px; --ui-transcript-bg: var(--pi-chat-conversation-bg, color-mix(in srgb, var(--pi-muted) 6%, var(--pi-bg))); --formatted-link-color: color-mix(in srgb, var(--pi-accent) 45%, var(--pi-text) 55%); --formatted-muted-color: color-mix(in srgb, var(--pi-text-secondary) 80%, var(--pi-text) 20%); border-inline-start: 3px solid var(--pi-chat-conversation-border, color-mix(in srgb, var(--pi-muted) 55%, var(--pi-border) 45%)); padding-inline-start: 12px; }
@@ -106,16 +97,9 @@ export const chatStyles = css`
   .msg-actions [role="alert"] { max-width: 240px; padding: 4px 10px; color: var(--pi-danger); }
   .msg-fork-icon { font-size: 14px; }
   .msg-info-icon { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
-  pi-message-actions-menu { flex: 0 0 auto; opacity: 0; pointer-events: none; }
+  pi-message-actions-menu { flex: 0 0 auto; }
   .label { display: block; color: var(--pi-muted); font-size: 12px; font-weight: 400; }
   .msg-header .label { min-width: 0; margin: 0; overflow-wrap: anywhere; }
-  .msg:hover > .msg-header pi-message-actions-menu, .msg:focus-within > .msg-header pi-message-actions-menu,
-  .msg:hover > .conversation-content > .msg-header pi-message-actions-menu, .msg:focus-within > .conversation-content > .msg-header pi-message-actions-menu,
-  .group-msg:hover > .transcript-content > .msg-header pi-message-actions-menu, .group-msg:focus-within > .transcript-content > .msg-header pi-message-actions-menu,
-  pi-message-actions-menu:focus-within, pi-message-actions-menu[open] { opacity: 1; pointer-events: auto; }
-  @media (hover: none), (pointer: coarse) {
-    pi-message-actions-menu { opacity: 1; pointer-events: auto; }
-  }
   .msg-actions-strip .ui-button:hover:not(:disabled), .msg-meta[aria-expanded="true"] { background: color-mix(in srgb, var(--pi-text) 8%, transparent); color: var(--pi-text); }
   .msg-meta-details { clear: both; min-width: 0; padding: 6px 0; color: var(--pi-muted); font: 12px/18px var(--pi-font, system-ui, sans-serif); overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
   formatted-text.part { display: block; }
@@ -139,6 +123,5 @@ export const chatStyles = css`
   summary { cursor: pointer; color: var(--pi-muted); }
   pre { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; direction: ltr; text-align: left; unicode-bidi: isolate; }
   .shell-output { color: var(--pi-text); font: 13px var(--pi-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); line-height: 1.45; direction: ltr; text-align: left; unicode-bidi: isolate; }
-  @keyframes pulse { 0%, 100% { transform: scale(.75); opacity: .55; } 50% { transform: scale(1.2); opacity: 1; } }
   }
 `;

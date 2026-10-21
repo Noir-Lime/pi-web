@@ -39,6 +39,7 @@ const plugin: PiWebServerPlugin = {
   name: "Server declaration fixture",
   requires: [
     fixtureDependency,
+    PI_WEB_HOST_CATALOG_CAPABILITY,
     PI_WEB_HOST_WORKSPACES_CAPABILITY,
     PI_WEB_HOST_PI_SESSIONS_CAPABILITY,
   ],
@@ -54,6 +55,9 @@ const plugin: PiWebServerPlugin = {
         signal.throwIfAborted();
         context.logger.info(capabilities.resolve(fixtureDependency).status());
         context.logger.info(context.dataDirectory);
+        // Capability versions are independent of the legacy v3 entrypoint.
+        const catalog = capabilities.resolve(PI_WEB_HOST_CATALOG_CAPABILITY);
+        await catalog.projects.list({ signal });
         const workspaces: PiWebHostWorkspacesV1 = capabilities.resolve(PI_WEB_HOST_WORKSPACES_CAPABILITY);
         const authority = await workspaces.resolve({
           projectId: "fixture-project",

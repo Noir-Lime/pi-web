@@ -1,4 +1,4 @@
-import type { ContentRendererContribution, ContentRenderRequest } from "../../../plugin-api";
+import type { ContentRendererContributionV5 as ContentRendererContribution, ContentRenderRequest } from "../../../plugin-api";
 
 export interface RegisteredContentRenderer extends ContentRendererContribution {
   pluginId: string;

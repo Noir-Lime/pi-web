@@ -11,7 +11,7 @@ import { isArchivableSessionInfo, isTransientNewSessionInfo } from "../sessionPe
 import { normalizeSessionPath } from "../sessionPaths";
 import { isSessionActive } from "../../../shared/activity";
 import { CORE_STATUS_FLAGS, type StatusFlags } from "../../../shared/machineStatus";
-import { ActionMenuPositionController } from "./actionMenu";
+import { createActionMenuController } from "./actionMenu";
 import { renderActionActivityIndicator, type ActivityIndicatorKind } from "./activityBadge";
 import type { KeyboardNavigableSection } from "./navigationFocus";
 import { activateSelectableRow, focusSelectedOrFirstSelectableRow, handleSelectableRowKeyboard } from "./selectableRow";
@@ -88,11 +88,11 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
   @property({ attribute: false }) onCleanup?: () => void;
 
   @state() private openMenuSessionId: string | undefined;
-  private readonly menuPosition = new ActionMenuPositionController(this, () => {
+  readonly actionMenu = createActionMenuController(this, () => {
     if (this.openMenuSessionId === undefined) return undefined;
     const row = [...this.renderRoot.querySelectorAll<HTMLElement>("[data-session-id]")].find((item) => item.dataset["sessionId"] === this.openMenuSessionId);
     return row?.querySelector<HTMLElement>(".action-menu-toggle") ?? undefined;
-  });
+  }, () => { this.openMenuSessionId = undefined; });
   @state() private archivedExpanded = false;
   @state() private selectionScopes: ReadonlySet<SessionSelectionScope> = new Set();
   @state() private selectedSessionIds: ReadonlySet<string> = new Set();
@@ -235,20 +235,6 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     this.openMenuSessionId = undefined;
   }
 
-  private readonly onDocumentClick = (event: MouseEvent) => {
-    if (event.composedPath().includes(this)) return;
-    this.openMenuSessionId = undefined;
-  };
-
-  override connectedCallback(): void {
-    super.connectedCallback();
-    document.addEventListener("click", this.onDocumentClick);
-  }
-
-  override disconnectedCallback(): void {
-    document.removeEventListener("click", this.onDocumentClick);
-    super.disconnectedCallback();
-  }
 
   private focusedSessionId: string | undefined;
   private focusedPinRowId: string | undefined;
@@ -531,9 +517,9 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     const isWorking = sessionRowActivityKind(session, status, this.activities[session.id], false, this.sessionFlags) === "session";
     const canDeleteTransient = isTransientNewSessionInfo(session, status);
     const descendantCount = descendantCounts?.get(session.id) ?? 0;
-    // Fixed overlays are siblings of the isolated scroller, not trapped in its paint context.
+    // Keep the panel beside the row scroller; the shared popup uses the top layer.
     return html`
-      <div class="action-menu-panel ui-menu" style=${this.menuPosition.style}
+      <div popover="auto" class="action-menu-panel ui-menu"
         @focusin=${(event: FocusEvent) => { this.focusedMenuControl = event.target instanceof HTMLElement ? event.target : undefined; }}
         @focusout=${() => { this.focusedMenuControl = undefined; }}
       >
@@ -805,18 +791,14 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     .action-main.selecting, .action-row.linked-agent-child .action-main.selecting { padding-left: calc(48px + var(--depth, 0) * 16px + var(--agent-offset, 0px)); }
     .action-row.has-agent-subsessions { margin-bottom: 0; border-bottom: 0; }
     .action-row.has-agent-subsessions .action-main { padding-bottom: 6px; }
-    /* Secondary desktop disclosures stay compact; indentation remains inside the click target. */
-    .agent-subsession-toggle { position: relative; display: flex; align-items: center; gap: 6px; box-sizing: border-box; width: 100%; min-height: 28px; margin: 0; padding: 4px 16px 4px calc(35px + var(--agent-offset, 0px) + var(--depth, 0) * 16px); border: 0; border-radius: 0; background: transparent; font: 12px/20px var(--pi-font, system-ui, sans-serif); text-align: left; color: var(--pi-muted); overflow: hidden; }
+    /* Secondary tree disclosures stay compact; indentation remains inside the click target. */
+    .agent-subsession-toggle { position: relative; display: flex; align-items: center; gap: 6px; box-sizing: border-box; width: 100%; min-height: 24px; margin: 0; padding: 2px 16px 2px calc(35px + var(--agent-offset, 0px) + var(--depth, 0) * 16px); border: 0; border-radius: 0; background: transparent; font: 12px/20px var(--pi-font, system-ui, sans-serif); text-align: left; color: var(--pi-muted); overflow: hidden; }
     .agent-subsession-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .agent-subsession-toggle::before { content: ""; position: absolute; top: 0; bottom: 50%; left: calc(19px + var(--agent-offset, 0px) + var(--depth, 0) * 16px); width: 10px; border-left: 1px solid var(--pi-border-muted); border-bottom: 1px solid var(--pi-border-muted); pointer-events: none; }
     .agent-subsession-toggle .action-activity { pointer-events: none; }
     /* The disclosure closes a collapsed group; an expanded group's final row owns its separator. */
     .agent-subsession-toggle[aria-expanded="false"]:not(:last-child) { box-shadow: inset 0 -1px var(--pi-border-muted); }
-    .agent-subsession-toggle[aria-expanded="true"] { color: var(--pi-accent); }
     .action-row.linked-agent-child .action-main { padding-left: calc(19px + var(--agent-offset) + var(--depth, 0) * 16px); }
-    @media (pointer: coarse) {
-      .agent-subsession-toggle { min-height: 44px; padding-block: 12px; }
-    }
     .agent-subsession-toggle:hover, .agent-subsession-toggle:focus-visible { color: var(--pi-text); background: var(--pi-surface-hover); }
     .agent-subsession-toggle:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: -2px; }
     .session-checkbox { position: absolute; top: 9px; left: calc(24px + var(--depth, 0) * 16px + var(--agent-offset, 0px)); z-index: 2; margin: 0; }

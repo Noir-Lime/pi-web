@@ -48,11 +48,23 @@ class ExampleToolbar extends LitElement {
 }
 ```
 
-Popup surfaces use a single-column layout, size to their widest item by default, and are constrained to the available space. Positioning controllers may provide a tighter maximum width; consumers should not add separate sizing rules just because the popup lives in a flex or grid container.
+Popup surfaces use a single-column layout, size to their widest item by default, and are constrained to the available space. `AnchoredPopupController` owns their native popover presentation, anchoring, viewport constraints, and open-only layout subscriptions. Consumers provide the anchor, panel, placement options, and close callback; they should not add separate stacking or positioning rules just because the popup lives in a flex or grid container. The panel stays in its existing themed DOM root rather than being moved to the document body.
 
 A popup item uses both `ui-button` and `ui-menu-item` on its native button. A checkbox option uses `ui-menu-item` on its native label, containing its input. Add `danger` for a destructive action. Keep placement, open/close state, and event handling in the owning component or its existing controller.
 
 `ui-menu` describes the surface, not an ARIA role. Do not add `role="menu"` unless the owner implements the corresponding keyboard behavior.
+
+## Surface ownership
+
+Use three distinct models rather than coordinating application-wide `z-index` values:
+
+- **Local decoration** stays with the layout that owns its boundary. `ConversationLayout` owns transcript/composer placement and the activity indicator across their shared border; `ChatView` owns transcript scrolling and content.
+- **Anchored popup** uses `AnchoredPopupController` in `components/anchoredPopup.ts`. Native popovers escape ancestor clipping and stacking contexts. Shared positioning handles scrolling across shadow roots, resizing, and visual-viewport changes. Completion panels preserve editor focus; action panels retain their own keyboard behavior. Nested popups close from the innermost outward on Escape.
+- **Modal dialog** uses `ModalSurface` backed by native `<dialog>.showModal()`. Browser modality makes background content inert. The modal registry coordinates active ownership and safe focus restoration; it does not establish a global CSS stacking scale.
+
+A popup may open only within the active modal's composed subtree, or in the ordinary application when no modal is active. Opening a modal dismisses unrelated popups. Hiding, making inert, or removing an owner closes its popup. Keep popup state in sync through the close callback, including browser light dismissal. Application layout must not inspect a child's menu-open state or raise entire panels to make a popup visible.
+
+Local sticky headers, shadows, and decorations can still use small stacking values inside their owner. They must not determine popup or modal precedence. Native plugin dialogs participate in the same modality boundary without importing private host modules.
 
 ## Sidebar list surfaces
 
@@ -60,7 +72,7 @@ A popup item uses both `ui-button` and `ui-menu-item` on its native button. A ch
 
 ## Dialog patterns
 
-Use the existing `ModalSurface` component for focus trapping, Escape, backdrop dismissal, and dialog naming. The content patterns in `ui/dialogStyles.ts` compose with that surface; they do not add another modal controller or wrapper.
+Use the existing `ModalSurface` component for native modality, focus placement/restoration, Escape, backdrop dismissal, and dialog naming. The content patterns in `ui/dialogStyles.ts` compose with that surface; they do not add another modal controller or wrapper.
 
 - `uiDialogStyles` provides common header, close button, search row, scrollable body, and footer treatment. It includes `uiButtonStyles`.
 - `uiSelectionStyles` provides gapless option rows, composite rows with separate pin/checkbox actions, descriptions, and empty states. Combine it with `uiDialogStyles` for selections such as models, thinking levels, and Actions.
@@ -72,7 +84,7 @@ Selection lists use `ui-selection-list`; each native choice button uses `ui-butt
 
 Form content uses `ui-dialog-body ui-form-body`. Labels use `ui-form-field`, text inputs use `ui-input`, and checkbox labels use `ui-checkbox-field`. A native form that wraps the complete dialog uses `ui-form`. Its footer uses `ui-dialog-footer`, with native `ui-button` actions and `ui-button--primary` for the submit action. Interior action groups can use `ui-form-actions`. Labels, validation messages, input types, submit behavior, and callbacks remain local.
 
-Keep only content-specific rules in each dialog. Existing dimension differences can use the internal composition properties `--ui-dialog-width`, `--ui-dialog-max-height`, `--ui-dialog-top`, and `--ui-dialog-z`; do not copy the common backdrop or header styles. These primitives use the base theme; selected themes can override their presentation through the existing contributed stylesheet mechanism.
+Keep only content-specific rules in each dialog. Existing dimension differences can use the internal composition properties `--ui-dialog-width`, `--ui-dialog-max-height`, and `--ui-dialog-top`; do not copy the common backdrop or header styles. These primitives use the base theme; selected themes can override their presentation through the existing contributed stylesheet mechanism.
 
 ## Settings and configuration groups
 
@@ -88,9 +100,9 @@ Sections own their internal padding and a bottom separator. Do not surround them
 
 Chat uses flat transcript sections rather than nested card outlines. Put breathing room inside the section; use restrained role/state tones and labels to distinguish hierarchy. Successful tools stay neutral, while running and error states remain explicit. Nested sections do not need another enclosing border. Code/diff content may retain one useful boundary, and editable inputs retain their input affordance.
 
-`uiTranscriptStyles` owns the frameless surface and full-width disclosure treatment (32px desktop, at least 44px for coarse pointers). Consumers own grouping, indentation, native disclosure state, and layout. Give sticky headings an opaque tone matching their section so scrolled text cannot show through them. Transcript patterns are internal and are not part of the browser-plugin UI styles capability.
+`uiTranscriptStyles` owns the frameless surface and full-width disclosure treatment (32px for every input type). Consumers own grouping, indentation, native disclosure state, and layout. Give sticky headings an opaque tone matching their section so scrolled text cannot show through them. Transcript patterns are internal and are not part of the browser-plugin UI styles capability.
 
-Chat navigation arrows render as one bordered group anchored to the message input's top-right, with a divider between the arrows. The bottom-right attachment button matches an individual arrow's 28px size for every pointer type (a deliberate exception to the usual 44px coarse-pointer minimum), and stays anchored as the input grows, without a separate row between transcript and composer. `ChatView` retains scroll ownership and supplies its controls through `onNavigationChange`; `PromptEditor.chatNavigation` renders them with shared `chatNavigationStyles`. The activity indicator floats at the bottom centre of the chat viewport and disappears when idle. The editor keeps a two-line text minimum even when empty or containing one line. Vertical padding belongs to the editor frame, outside the scroller, so long drafts retain top and bottom clearance at the 220px height cap.
+Chat navigation arrows render as one bordered group anchored to the message input's top-right, with a divider between the arrows. The bottom-right attachment button matches an individual arrow's 28px size for every pointer type, and stays anchored as the input grows, without a separate row between transcript and composer. `ChatView` retains scroll ownership and supplies its controls through `onNavigationChange`; `PromptEditor.chatNavigation` renders them with shared `chatNavigationStyles`. The non-interactive activity indicator is 18px tall, centred horizontally and vertically across the chat/composer border, and disappears when idle. `ConversationLayout` positions the indicator over the shared border without adding padding or a separate row; neither the transcript nor composer is raised above the other to accommodate it. The editor keeps a two-line text minimum even when empty or containing one line. Vertical padding belongs to the editor frame, outside the scroller, so long drafts retain top and bottom clearance at the 220px height cap.
 
 ### Activity-group layout contract
 
@@ -117,18 +129,26 @@ The chat consumer owns these layout classes and message separators; `uiTranscrip
 
 ## Ownership and hierarchy
 
+### Control sizing policy
+
+Keep button and other control dimensions consistent across mouse, touch, and pen input. Do not change their size solely through pointer or hover capability queries such as `(pointer: coarse)`. Touch capability does not determine available screen space.
+
+When responsive sizing is needed, use viewport or container size and preserve usable targets, clear separation, and keyboard-focus feedback at every size.
+
+Also prefer consistent visibility and behavior across input types. Avoid pointer and hover capability queries by default; do not use touch capability as a proxy for screen size or user intent. A hover-specific adaptation can be appropriate when the interaction genuinely depends on hover, but keep the same actions discoverable and reachable without hover, including by keyboard. Use these exceptions sparingly, not as a general desktop/mobile split.
+
 - Primitives own control sizing, padding, borders, hover, focus, selected, disabled, and danger treatments. Change those centrally rather than copying them into each screen.
 - Consumers own layout and domain content: labels, counts, tree indentation, popup placement, and callbacks. Preserve semantic classes used by controllers and tests alongside primitive classes.
-- Standalone buttons default to 44px targets. Secondary toolbars, popup items, and compact buttons use 32px desktop targets. Small transcript actions use 28px desktop targets with 14px icons, matching the chat corner arrows. Message headers use a single ellipsis trigger on hover or keyboard focus (always visible for coarse pointers). Clicking it reveals a single-row icon strip to its left; overflow scrolls horizontally rather than wrapping. `pi-message-actions-menu` owns native popover dismissal and placement; consumers supply accessible icon buttons. Conversation controls overlay the bottom-right corner without reserving a text column or header row. The closed trigger has no background. Expanded controls use an opaque background matching the transcript surface and a subtle inset shadow for contrast; expanded message information follows the message body. Respect reduced-motion preferences when revealing the strip. Coarse pointers get at least 44px height, and icon targets also get at least 44px width. Compact file/tree rows are an explicit exception: they remain 32px for every pointer type, with matching 16px indentation in Files and Git.
+- Standalone buttons default to 44px targets. Secondary toolbars, popup items, and compact buttons use 32px targets. Small transcript actions use 28px targets with 14px icons, matching the chat corner arrows. Message headers use a single always-visible ellipsis trigger for every input type. Clicking it reveals a single-row icon strip to its left; overflow scrolls horizontally rather than wrapping. `pi-message-actions-menu` owns native popover dismissal and placement; consumers supply accessible icon buttons. Conversation controls overlay the bottom-right corner without reserving a text column or header row. The closed trigger has no background. Expanded controls use an opaque background matching the transcript surface and a subtle inset shadow for contrast; expanded message information follows the message body. Respect reduced-motion preferences when revealing the strip. Control dimensions do not change with pointer type. Compact file/tree rows remain 32px, with matching 16px indentation in Files and Git.
 - Use shared separators, not repeated outlines or exterior gaps between related controls. A group followed by empty bar space needs a trailing boundary; use `ui-toolbar-group--bounded` rather than a one-off button border. Its separator shares the next group's leading border when the gap collapses. Do not add a trailing separator where the bar edge already bounds the group. Keep meaningful separation between unrelated groups.
-- Keep the existing compact 28px desktop subsession disclosure as a specialized tree control; it is not a toolbar button.
+- Keep the subsession disclosure as a muted, specialized tree control (24px for every pointer type), not a toolbar button. Its size does not depend on touch capability. Expansion changes the chevron, not the text color; preserve hover and keyboard-focus feedback.
 - Check geometry in a real browser. Native-control interaction tests still belong at the consuming component boundary.
 
 ## Renderer headers
 
 Chat code blocks and Files expose each matching renderer as a named native button alongside Raw, rather than a select menu. Clicking a renderer button both selects and activates that view, including manual renderers. Use `aria-pressed` for selection; these are buttons, not ARIA tabs. Renderer titles supply names, with plugin/contribution IDs as the fallback.
 
-Keep the view buttons on one horizontally scrollable row, using native overflow scrolling like the existing shell headers. Buttons must not shrink or wrap their labels. Keyboard focus and touch scrolling keep off-screen views reachable. Chat keeps Copy outside the scrolling strip; Files keeps Open and Download outside it. Preserve the existing compact/coarse-pointer control sizing and inset focus indicators.
+Keep the view buttons on one horizontally scrollable row, using native overflow scrolling like the existing shell headers. Buttons must not shrink or wrap their labels. Keyboard focus and touch scrolling keep off-screen views reachable. Chat keeps Copy outside the scrolling strip; Files keeps Open and Download outside it. Preserve compact control sizing across input types and inset focus indicators.
 
 ## Migration boundary
 
