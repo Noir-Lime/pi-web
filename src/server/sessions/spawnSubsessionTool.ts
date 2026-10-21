@@ -172,7 +172,7 @@ const ListSubsessionsParams = Type.Object({
   limit: Type.Optional(Type.Integer({ minimum: 1, description: "Rendered text only: maximum matching rows, with working first, then error, idle, unknown. Omit for ALL matches, not a small default. Header counts are before this limit; structured details still contain all tracked rows." })),
 });
 const SendParentMessageParams = Type.Object({
-  message: Type.String({ minLength: 1, description: "Progress update, question, or finding for your parent session." }),
+  message: Type.String({ minLength: 1, description: "Readable progress update, question, or finding. Use normal spaces between words and line breaks between items. Preserve exact paths, SHAs, line numbers, commands, and measured values; do not remove spaces to shorten the message." }),
 });
 const SendSubsessionMessageParams = Type.Object({
   sessionId: Type.String({ description: "Tracked child id from spawn_subsession or list_subsessions." }),
@@ -524,7 +524,7 @@ export function createSendParentMessageToolDefinition(deps: Pick<SubsessionToolD
   return defineTool<typeof SendParentMessageParams, { sent: boolean }>({
     name: "send_parent_message",
     label: "Message parent",
-    description: "Send a progress update/question to your verified parent, selected automatically from this active tracked child's persisted links. Does not end your turn, wait for a reply, or cancel the parent's current tool. An idle parent is woken; a working parent receives steering at its next agent boundary. Success means delivery was scheduled, not that the parent read or answered it; a later delivery failure is reported as a session error. If the parent is compacting, wait until compaction finishes before retrying. Only an active tracked child can use this; blank messages are rejected. Continue working after it returns.",
+    description: "Send a progress update/question to your verified parent, selected automatically from this active tracked child's persisted links. Does not end your turn, wait for a reply, or cancel the parent's current tool. An idle parent is woken; a working parent receives steering at its next agent boundary. Success means delivery was scheduled, not that the parent read or answered it; a later delivery failure is reported as a session error. If the parent is compacting, wait until compaction finishes before retrying. Only an active tracked child can use this; blank messages are rejected. Write concise, readable sentences with normal word spacing; do not concatenate words or compress paths, SHAs, line numbers, or measurements. Continue working after it returns.",
     parameters: SendParentMessageParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       await deps.sendParent(ctx.sessionManager.getSessionId(), params.message, ctx.sessionManager.getSessionFile() ?? undefined, "steer");

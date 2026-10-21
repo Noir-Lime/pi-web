@@ -1442,9 +1442,10 @@ describe("PiSessionService", () => {
       await service.start("/workspace");
       await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "review" });
       child.session.isStreaming = true;
-      await service.sendParentMessage("child-1", "Found a problem", "/tmp/child-1.jsonl", mode);
+      const message = "WDA now ready 16.14.2 after one restart\nSHA: b6944d54  elapsed: 1.46 s\n  src/example.ts:14  +4/-1\n";
+      await service.sendParentMessage("child-1", message, "/tmp/child-1.jsonl", mode);
       expect(parent.calls.sendCustomMessage.at(-1)).toMatchObject({
-        message: { customType: "subsession.message", content: "Message from subsession child-1:\n\nFound a problem", display: true, details: { sessionId: "child-1" } },
+        message: { customType: "subsession.message", content: `Message from subsession child-1:\n\n${message}`, display: true, details: { sessionId: "child-1" } },
         options: { triggerTurn: true, deliverAs: "steer" },
       });
       expect(child.session.isStreaming).toBe(true);

@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { Check } from "pi-web-typebox/value";
 import { KNOWN_THINKING_LEVELS } from "../../shared/thinkingLevels.js";
 import { stubExtensionToolContext } from "./piSessionService.testSupport.js";
-import { createSubsessionToolDefinitions, formatMetadataText, subsessionDisplay, type SubsessionToolDeps } from "./spawnSubsessionTool.js";
+import { createSendParentMessageToolDefinition, createSubsessionToolDefinitions, formatMetadataText, subsessionDisplay, type SubsessionToolDeps } from "./spawnSubsessionTool.js";
 
 const dispatchModel = { provider: "anthropic", id: "claude-sonnet" };
 
@@ -46,6 +46,18 @@ function tools(deps: Partial<SubsessionToolDeps>) {
     definitions,
   };
 }
+
+describe("send_parent_message", () => {
+  it("asks for readable spacing and forwards exact message text", async () => {
+    const sendParent = vi.fn(() => Promise.resolve());
+    const tool = createSendParentMessageToolDefinition({ sendParent });
+    const message = "WDA now ready 16.14.2 after one restart\nSHA: b6944d54  elapsed: 1.46 s\n  src/example.ts:14  +4/-1\n";
+    await tool.execute("call-parent", { message }, new AbortController().signal, undefined, ctxFor("child-1", "/tmp/child-1.jsonl"));
+    expect(sendParent).toHaveBeenCalledWith("child-1", message, "/tmp/child-1.jsonl", "steer");
+    expect(tool.description).toContain("normal word spacing");
+    expect(JSON.stringify(tool.parameters)).toContain("do not remove spaces");
+  });
+});
 
 describe("formatMetadataText", () => {
   it("quotes metadata and escapes newlines, ANSI controls, and Unicode separators", () => {
