@@ -1,3 +1,5 @@
+import { createEventBus } from "@earendil-works/pi-coding-agent";
+import { PiSessionEventConnections } from "./piSessionEventConnections.js";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -41,6 +43,7 @@ describe("PiSessionService", () => {
         isArchived: (sessionId: string) => Promise.resolve(archived.has(sessionId)),
       };
       const events = new CapturingSessionEventHub();
+      const sessionEvents = new PiSessionEventConnections();
       const resolveSpawnTarget = vi.fn(() => Promise.resolve(decision));
       const service = new PiSessionService(events, {
         agentDir: TEST_AGENT_DIR,
@@ -50,9 +53,38 @@ describe("PiSessionService", () => {
         archiveStore,
         spawnTargets: { resolveSpawnTarget },
         heartbeatIntervalMs,
+        sessionEvents,
       });
-      return { parent, child, children, service, events, resolveSpawnTarget };
+      return { parent, child, children, service, events, sessionEvents, resolveSpawnTarget };
     }
+
+    it("inspects live child jobs and compresses intermediate notices without losing final output", async () => {
+      const { parent, child, service, sessionEvents } = subsessionService({ allowed: true, cwd: "/workspace" });
+      const bus = createEventBus();
+      sessionEvents.register(child.session, bus);
+      const snapshot = { version: 1, observedAt: "2026-10-21T08:00:00.000Z", jobs: [
+        { id: "bg-1", kind: "background", command: "make", logpath: "/tmp/build.log", pid: 123, startedAt: "2026-10-21T07:59:00.000Z" },
+      ] };
+      bus.on("bash-background:query-v1", (request: unknown) => {
+        if (typeof request === "object" && request !== null && "requestId" in request) {
+          bus.emit("bash-background:snapshot-v1", { requestId: request.requestId, snapshot });
+        }
+      });
+      await service.start("/workspace");
+      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "build" });
+      child.session.isStreaming = true;
+      child.emit({ type: "agent_start" });
+      await expect(service.checkSubsession("parent-1", "child-1")).resolves.toMatchObject({ backgroundJobs: snapshot });
+      await expect(service.checkSubsession("not-the-parent", "child-1")).rejects.toThrow("not one of your subsessions");
+      child.session.isStreaming = false;
+      child.emit({ type: "agent_end" });
+      await vi.waitFor(() => { expect(parent.calls.sendCustomMessage).toHaveLength(1); });
+      expect(parent.calls.sendCustomMessage[0]?.message.content).toContain("ended its turn with background jobs running");
+      expect(parent.calls.sendCustomMessage[0]?.message.content).not.toContain("SUBSESSION OUTPUT");
+      snapshot.jobs = [];
+      await expect(service.checkSubsession("parent-1", "child-1")).resolves.toMatchObject({ backgroundJobs: { jobs: [] } });
+      await service.dispose();
+    });
 
     it("records the parent, delivers the prompt, and lists the tracked child", async () => {
       const { child, service, events } = subsessionService({ allowed: true, cwd: "/workspace" });
@@ -93,6 +125,7 @@ describe("PiSessionService", () => {
       await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "two", name: "Worker Bee" });
       for (const fixture of children) fixture.session.sessionName = "Worker Bee";
       child.session.model = testModel();
+      child.session.getContextUsage = () => ({ tokens: 100, contextWindow: 1000, percent: 10 });
       child.session.getSessionStats = () => ({ sessionId: "child-1", totalMessages: 1, userMessages: 1, assistantMessages: 0, toolCalls: 0, tokens: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, total: 18 }, cost: 0, contextUsage: { tokens: 100, contextWindow: 1000, percent: 10 } });
       const list = await service.listSubsessions("parent-1");
       expect(list.map((entry) => entry.name)).toEqual(["Worker Bee", "Worker Bee"]);
@@ -104,6 +137,55 @@ describe("PiSessionService", () => {
       });
       expect(typeof checked.observedAt).toBe("string");
       await expect(service.readSubsession("parent-1", "child-1", {})).resolves.toMatchObject({ name: "Worker Bee" });
+      await service.dispose();
+    });
+
+    it("observes fresh SDK context after a model switch, not old stats context or cumulative totals", async () => {
+      const { child, service } = subsessionService({ allowed: true, cwd: "/workspace" });
+      await service.start("/workspace");
+      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "go" });
+      child.session.model = { ...testModel(), contextWindow: 1000 };
+      const stats = child.session.getSessionStats();
+      child.session.getSessionStats = () => ({ ...stats, contextUsage: { tokens: 3440, contextWindow: 1000, percent: 344 } });
+      child.session.getContextUsage = () => ({ tokens: 3440, contextWindow: child.session.model?.contextWindow ?? 0, percent: 3440 / (child.session.model?.contextWindow ?? 1) * 100 });
+      expect((await service.checkSubsession("parent-1", "child-1")).contextUsage).toEqual({ tokens: 3440, contextWindow: 1000, percent: 344 });
+      child.session.model = { ...testModel(), id: "switched-model", contextWindow: 10000 };
+      expect((await service.checkSubsession("parent-1", "child-1"))).toMatchObject({ model: "anthropic/switched-model", contextUsage: { tokens: 3440, contextWindow: 10000, percent: 34.4 } });
+      expect((await service.listSubsessions("parent-1"))[0]?.contextUsage?.contextWindow).toBe(10000);
+      child.session.getContextUsage = () => ({ tokens: null, contextWindow: 10000, percent: null });
+      expect((await service.checkSubsession("parent-1", "child-1")).contextUsage?.tokens).toBeNull();
+      child.session.getContextUsage = () => undefined;
+      expect((await service.checkSubsession("parent-1", "child-1")).contextUsage).toBeUndefined();
+      await service.dispose();
+    });
+
+    it("includes persisted custom completion and live overload retries even after a child becomes idle", async () => {
+      const { child, service } = subsessionService({ allowed: true, cwd: "/workspace" });
+      await service.start("/workspace");
+      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "go" });
+      child.session.sessionManager.getBranch = () => [
+        { type: "custom_message", id: "job", customType: "background.bash", display: true, content: "bg-1 complete: exit 0", timestamp: "2026-01-01T00:00:00.000Z" },
+        { type: "custom_message", id: "hidden", customType: "private", display: false, content: "HIDDEN", timestamp: "2026-01-01T00:00:00.000Z" },
+      ];
+      child.session.isStreaming = true;
+      for (let i = 1; i <= 12; i++) child.emit({ type: "auto_retry_start", attempt: i, maxAttempts: 12, delayMs: 2000, errorMessage: `HTTP 429 overloaded ${String(i)}` });
+      const live = await service.checkSubsession("parent-1", "child-1");
+      expect(live.activity?.messages).toHaveLength(4);
+      expect(live.activity?.messages?.at(-1)).toMatchObject({ source: "live", kind: "auto_retry_start", summary: "attempt 12/12; delayMs 2000; HTTP 429 overloaded 12" });
+      expect(JSON.stringify(live.activity)).not.toContain("HIDDEN");
+      child.emit({ type: "auto_retry_end", success: false, attempt: 12, finalError: "provider overloaded" });
+      child.session.isStreaming = false;
+      const idle = await service.checkSubsession("parent-1", "child-1");
+      expect(idle.activity?.messages?.at(-1)).toMatchObject({ source: "live", kind: "auto_retry_end", summary: "attempt 12; success false; provider overloaded" });
+      await service.dispose();
+    });
+
+    it("uses the durable custom-entry timestamp for activity, without exposing hidden custom content", async () => {
+      const { child, service } = subsessionService({ allowed: true, cwd: "/workspace" });
+      await service.start("/workspace");
+      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "go" });
+      child.session.sessionManager.getBranch = () => [{ type: "custom_message", id: "job", customType: "background.bash", display: true, content: "bg-1 done", timestamp: "2026-01-01T00:00:00.000Z" }];
+      expect((await service.checkSubsession("parent-1", "child-1")).activity).toMatchObject({ messages: [{ source: "persisted", kind: "background.bash", summary: "bg-1 done", at: Date.parse("2026-01-01T00:00:00.000Z") }] });
       await service.dispose();
     });
 
@@ -1442,7 +1524,7 @@ describe("PiSessionService", () => {
       await service.dispose();
     });
 
-    it("reports other working children in each completion notice", async () => {
+    it("reports readable names of other working children in each completion notice", async () => {
       const { parent, children, service } = subsessionService(
         { allowed: true, cwd: "/workspace" },
         60_000,
@@ -1450,6 +1532,7 @@ describe("PiSessionService", () => {
       );
       const [first, second] = children;
       if (first === undefined || second === undefined) throw new Error("Expected two child fixtures");
+      second.session.sessionName = "Worker Two";
       await service.start("/workspace");
       await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "first" });
       await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "second" });
@@ -1466,7 +1549,7 @@ describe("PiSessionService", () => {
         expect(parent.calls.sendCustomMessage).toHaveLength(1);
       });
 
-      expect(parent.calls.sendCustomMessage[0]?.message.content).toContain("Still working: child-2. Continue working, or end your turn");
+      expect(parent.calls.sendCustomMessage[0]?.message.content).toContain('Still working: "Worker Two" (child-2). Continue working, or end your turn');
       expect(parent.calls.sendCustomMessage[0]?.message.content).toContain("idle at completion, not necessarily now");
 
       second.session.isStreaming = false;
@@ -1477,7 +1560,7 @@ describe("PiSessionService", () => {
       });
 
       expect(parent.calls.sendCustomMessage[1]?.message.content).toContain("No other tracked subsessions are working.");
-      expect(parent.calls.sendCustomMessage[1]?.message.content).toContain("Current status of subsession child-2 when this notice was sent: idle.");
+      expect(parent.calls.sendCustomMessage[1]?.message.content).toContain('Current status of subsession "Worker Two" (child-2) when this notice was sent: idle.');
       await service.dispose();
     });
 

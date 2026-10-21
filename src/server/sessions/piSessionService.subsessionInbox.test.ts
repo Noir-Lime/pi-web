@@ -126,6 +126,7 @@ describe("PiSessionService shared subsession completion inbox", () => {
     child.session.sessionName = "Worker Bee";
     child.session.model = testModel();
     child.session.thinkingLevel = "low";
+    child.session.getContextUsage = () => ({ tokens: 100, contextWindow: 1000, percent: 10 });
     child.session.getSessionStats = () => ({ sessionId: "child-1", totalMessages: 1, userMessages: 1, assistantMessages: 0, toolCalls: 0, tokens: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, total: 18 }, cost: 0, contextUsage: { tokens: 100, contextWindow: 1000, percent: 10 } });
     startChildRun(child);
     finishChildRun(child);
@@ -136,6 +137,7 @@ describe("PiSessionService shared subsession completion inbox", () => {
     child.session.sessionName = "Renamed Later";
     child.session.model = undefined;
     child.session.thinkingLevel = "xhigh";
+    child.session.getContextUsage = () => ({ tokens: 900, contextWindow: 1000, percent: 90 });
     child.session.getSessionStats = () => ({ sessionId: "child-1", totalMessages: 9, userMessages: 9, assistantMessages: 0, toolCalls: 0, tokens: { input: 900, output: 900, cacheRead: 0, cacheWrite: 0, total: 1800 }, cost: 0, contextUsage: { tokens: 900, contextWindow: 1000, percent: 90 } });
     // The persisted completion records the same old snapshot.
     const persisted = persistedSubsessionCompletions(child.journal.entries);
@@ -149,8 +151,9 @@ describe("PiSessionService shared subsession completion inbox", () => {
     expect(content).toContain('model "anthropic/claude-sonnet-4-5-20250929"');
     expect(content).toContain('thinking level "low"');
     expect(content).toContain("cumulative tokens 18 total");
-    expect(content).toContain("context usage 10% of 1000 context window");
-    expect(content).not.toContain("Renamed Later");
+    expect(content).toContain("context 100 of 1000 tokens (SDK estimate)");
+    expect(content).toContain('Current status of subsession "Renamed Later" (child-1) when this notice was sent: idle.');
+    expect(content.split("Current status")[0]).not.toContain("Renamed Later");
     expect(content).not.toContain("1800");
     void service;
   });

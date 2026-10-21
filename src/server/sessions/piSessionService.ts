@@ -105,8 +105,9 @@ import { DEFAULT_EXTENSION_DIALOGS_TIMEOUT_MS } from "../../config.js";
 import { createSpawnSessionToolDefinition, type SpawnSessionInvocation, type SpawnSessionResult } from "./spawnSessionTool.js";
 import type { SessionUiMetadata } from "../../shared/pluginApiTypes.js";
 import { readSessionUiMetadata, requireSessionUiMetadata, SESSION_UI_METADATA_CUSTOM_TYPE } from "./sessionMetadata.js";
-import { buildSubsessionActivity } from "./subsessionActivity.js";
-import { createSendParentMessageToolDefinition, createSubsessionToolDefinitions, type SpawnSubsessionInvocation, type SpawnSubsessionResult, type SubsessionCheckResult, type SubsessionJoinResult, type SubsessionObservation, type SubsessionReadQuery, type SubsessionReadResult, type SubsessionStatus, type SubsessionSummary, type SubsessionToolDeps } from "./spawnSubsessionTool.js";
+import { buildSubsessionActivity, subsessionRuntimeEvidence, type ActivityMessage } from "./subsessionActivity.js";
+import { querySubsessionBackgroundJobs } from "./subsessionBackgroundJobs.js";
+import { createSendParentMessageToolDefinition, createSubsessionToolDefinitions, subsessionDisplay, type SpawnSubsessionInvocation, type SpawnSubsessionResult, type SubsessionCheckResult, type SubsessionJoinResult, type SubsessionObservation, type SubsessionReadQuery, type SubsessionReadResult, type SubsessionStatus, type SubsessionSummary, type SubsessionToolDeps } from "./spawnSubsessionTool.js";
 import { buildTranscriptView, type TranscriptView } from "./subsessionTranscript.js";
 import { createSubsessionCompletionDelivery, type SubsessionCompletionDeliveryDeps } from "./subsessionCompletionDelivery.js";
 import { completionReceiptIds, persistedSubsessionCompletions, renderSubsessionCompletions, SUBSESSION_COMPLETION_ENTRY_TYPE, SUBSESSION_NOTIFICATION_CUSTOM_TYPE, SUBSESSION_RECEIPT_ENTRY_TYPE, SubsessionCompletionInbox, type SubsessionCompletion } from "./subsessionCompletionInbox.js";
@@ -1236,6 +1237,8 @@ export class PiSessionService implements SessionRouteService {
   private readonly pendingPromptEchoes = new WeakMap<PiAgentSession, { userIndex: number; message: ReturnType<typeof userMessage> }[]>();
   private readonly publishedAssistantPartials = new WeakMap<PiAgentSession, unknown>();
   private readonly assistantStreamIds = new WeakMap<PiAgentSession, string>();
+  /** SDK retries are live events, not transcript entries. Keep only a small loaded-runtime tail. */
+  private readonly subsessionRuntimeEvidence = new WeakMap<PiAgentSession, ActivityMessage[]>();
   /** Settings-wide queue preventing enabled-model read/modify/write races across sessions. */
   private modelScopeMutationQueue: Promise<void> = Promise.resolve();
   /** Global and workspace-owned enabled-model states; live session scopes project one entry lazily. */
@@ -2159,6 +2162,7 @@ export class PiSessionService implements SessionRouteService {
     const messages = historyMessages(session);
     const completion = this.subsessionCompletionForOutput(parentSessionId, parentSessionFile, session, messages);
     if (status !== "working" && completion !== undefined) this.receiveSubsessionCompletions(parentSessionId, parentSessionFile, [completion], toolCallId);
+    const backgroundJobs = querySubsessionBackgroundJobs((signal) => this.sessionEvents.connect(session, signal));
     return {
       sessionId,
       cwd: session.sessionManager.getCwd(),
@@ -2167,7 +2171,8 @@ export class PiSessionService implements SessionRouteService {
       ...this.subsessionObservation(session),
       finalText: finalAssistantText(messages),
       messageCount: messages.length,
-      ...(status === "working" ? { activity: buildSubsessionActivity(messages, activityCalls) } : {}),
+      activity: this.subsessionActivity(session, activityCalls),
+      ...(backgroundJobs === undefined ? {} : { backgroundJobs }),
       ...(status === "working" || completion?.errorDetail === undefined ? {} : { errorDetail: completion.errorDetail }),
     };
   }
@@ -2185,7 +2190,8 @@ export class PiSessionService implements SessionRouteService {
       && (transcriptReturnsFinalOutput(messages, view, completion.finalText) || (completion.finalText === "" && errorDetail !== undefined))) {
       this.receiveSubsessionCompletions(parentSessionId, parentSessionFile, [completion], toolCallId);
     }
-    return { sessionId, cwd: session.sessionManager.getCwd(), status, ...(session.sessionName === undefined ? {} : { name: session.sessionName }), ...view, ...(status === "working" ? { activity: buildSubsessionActivity(messages) } : {}), ...(errorDetail === undefined ? {} : { errorDetail }) };
+    const backgroundJobs = querySubsessionBackgroundJobs((signal) => this.sessionEvents.connect(session, signal));
+    return { sessionId, cwd: session.sessionManager.getCwd(), status, ...(session.sessionName === undefined ? {} : { name: session.sessionName }), ...(backgroundJobs === undefined ? {} : { backgroundJobs }), ...view, ...(status === "working" ? { activity: this.subsessionActivity(session) } : {}), ...(errorDetail === undefined ? {} : { errorDetail }) };
   }
 
   private subsessionInbox(parentSessionId: string, parentSessionFile?: string): SubsessionCompletionInbox {
@@ -2552,7 +2558,9 @@ export class PiSessionService implements SessionRouteService {
    */
   private subsessionObservation(session: PiAgentSession): SubsessionObservation {
     const stats = session.getSessionStats();
-    const contextUsage = "contextUsage" in stats ? stats.contextUsage : session.getContextUsage();
+    // Read a fresh SDK token/window pair; a stats adapter may cache its accounting snapshot.
+    // The SDK owns projection estimates and physical-model limits for virtual selections.
+    const contextUsage = session.getContextUsage();
     return {
       ...(session.model === undefined ? {} : { model: modelSpecOf(session.model) }),
       thinkingLevel: session.thinkingLevel,
@@ -2560,6 +2568,19 @@ export class PiSessionService implements SessionRouteService {
       ...(contextUsage === undefined ? {} : { contextUsage }),
       observedAt: this.now().toISOString(),
     };
+  }
+
+  private subsessionActivity(session: PiAgentSession, calls?: number) {
+    const branch = session.sessionManager.getBranch();
+    const timestamps = new Map(branch.map((entry) => [getString(entry, "id"), getString(entry, "timestamp")]));
+    const messages = historyMessagesFromEntries(branch).map((message) => {
+      // Custom-message normalization omits its enclosing entry timestamp. Use that
+      // durable timestamp for activity only, without changing transcript payloads.
+      if (!isRecord(message) || typeof message["timestamp"] === "number") return message;
+      const timestamp = Date.parse(timestamps.get(getString(message, "entryId")) ?? "");
+      return Number.isFinite(timestamp) ? { ...message, timestamp } : message;
+    });
+    return buildSubsessionActivity(messages, calls, this.subsessionRuntimeEvidence.get(session));
   }
 
   /** Name from existing listing metadata; never opens a child runtime. Listings are shared per cwd within one list operation. */
@@ -2593,7 +2614,7 @@ export class PiSessionService implements SessionRouteService {
     if (active !== undefined) {
       const session = active.runtime.session;
       const status = this.subsessionStatus(session);
-      const lastActivityAt = status === "working" ? buildSubsessionActivity(historyMessages(session), 1).lastActivityAt : undefined;
+      const lastActivityAt = status === "working" ? this.subsessionActivity(session, 1).lastActivityAt : undefined;
       return {
         cwd: active.runtime.cwd, status,
         ...(session.sessionName === undefined ? {} : { name: session.sessionName }),
@@ -2656,11 +2677,13 @@ export class PiSessionService implements SessionRouteService {
       ...(observed.tokens === undefined ? {} : { tokens: observed.tokens }),
       ...(observed.contextUsage === undefined ? {} : { contextUsage: observed.contextUsage }),
     };
+    const backgroundJobs = querySubsessionBackgroundJobs((signal) => this.sessionEvents.connect(session, signal));
     const completion: SubsessionCompletion = {
       completionId: randomUUID(), sessionId: childId, cwd: session.sessionManager.getCwd(),
       status: activity?.phase === "error" ? "error" : "idle",
       startedAt: armed.startedAt, completedAt: this.now().toISOString(),
       finalText: finalAssistantText(messages), messageCount: historyMessages(session).length,
+      ...(backgroundJobs === undefined ? {} : { backgroundJobs }),
       ...(session.sessionName === undefined ? {} : { name: session.sessionName }),
       ...runSnapshot,
       ...(activity?.phase !== "error" || activity.detail === undefined ? {} : { errorDetail: activity.detail }),
@@ -2704,9 +2727,17 @@ export class PiSessionService implements SessionRouteService {
   private async renderSubsessionCompletionNotice(parentId: string, completions: readonly SubsessionCompletion[]): Promise<string> {
     const statuses = await Promise.all(completions.map(async ({ sessionId }) => {
       const status = await this.subsessionStatusOnly(sessionId);
-      return `Current status of subsession ${sessionId} when this notice was sent: ${status}.`;
+      const link = this.subsessionLinks.get(sessionId);
+      const active = link === undefined ? undefined : this.activeChildForSubsessionLink(link);
+      const name = active?.runtime.session.sessionName ?? completions.find((item) => item.sessionId === sessionId)?.name;
+      return `Current status of subsession ${subsessionDisplay(sessionId, name)} when this notice was sent: ${status}.`;
     }));
-    return `${renderSubsessionCompletions(completions, this.workingSubsessionIds(parentId))}\n\n${statuses.join("\n")}`;
+    const working = this.workingSubsessionIds(parentId).map((sessionId) => {
+      const link = this.subsessionLinks.get(sessionId);
+      const active = link === undefined ? undefined : this.activeChildForSubsessionLink(link);
+      return subsessionDisplay(sessionId, active?.runtime.session.sessionName);
+    });
+    return `${renderSubsessionCompletions(completions, working)}\n\n${statuses.join("\n")}`;
   }
 
   /** Busy parents keep results in the inbox; never enqueue a second copy in Pi. */
@@ -4873,6 +4904,11 @@ export class PiSessionService implements SessionRouteService {
     this.reconcileRuntimeMessageCount(session);
     const unsubscribe = session.subscribe((event) => {
       const eventType = getString(event, "type");
+      const evidence = subsessionRuntimeEvidence(event, this.now().getTime());
+      if (evidence !== undefined) {
+        const tail = this.subsessionRuntimeEvidence.get(session) ?? [];
+        this.subsessionRuntimeEvidence.set(session, [...tail, evidence].slice(-8));
+      }
       const message = getProperty(event, "message");
       const inbox = this.subsessionInbox(session.sessionId, session.sessionFile);
       if (eventType === "agent_start") {

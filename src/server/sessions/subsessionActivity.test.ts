@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildSubsessionActivity, renderSubsessionActivity } from "./subsessionActivity.js";
+import { buildSubsessionActivity, renderSubsessionActivity, subsessionRuntimeEvidence } from "./subsessionActivity.js";
 import { renderSubsessionList, type SubsessionSummary } from "./spawnSubsessionTool.js";
 
 const call = (id: string, name: string, args: unknown, timestamp = 1000) => ({ role: "assistant", timestamp, content: [{ type: "toolCall", id, name, arguments: args }] });
@@ -19,6 +19,40 @@ describe("buildSubsessionActivity", () => {
     const a = buildSubsessionActivity(messages, 3);
     expect(a.calls.map((c) => c.summary)).toEqual(["cmd9", "cmd10", "cmd11"]);
     expect(JSON.stringify(a)).not.toContain("SECRET OUTPUT");
+  });
+
+  it("shows bounded persisted system/custom/provider evidence, not assistant prose or tool output", () => {
+    const activity = buildSubsessionActivity([
+      { role: "system", content: "prompt patch", timestamp: 1 },
+      { role: "custom", customType: "background.bash", content: [{ type: "text", text: "bg-1 complete: exit 0" }], timestamp: 2 },
+      { role: "assistant", errorMessage: "429 overloaded", content: [{ type: "text", text: "PRIVATE PROSE" }], timestamp: 3 },
+      result("unknown"),
+      { role: "custom", customType: "job", content: "x".repeat(300), timestamp: 4 },
+      { role: "system", content: "latest", timestamp: 5 },
+    ]);
+    expect(activity.messages).toHaveLength(4);
+    expect(activity.messages?.[0]).toMatchObject({ source: "persisted", kind: "background.bash", summary: "bg-1 complete: exit 0" });
+    expect(activity.messages?.[1]?.summary).toBe("429 overloaded");
+    expect(activity.messages?.[2]?.summary).toHaveLength(240);
+    const text = renderSubsessionActivity(activity, 100, JSON.stringify);
+    expect(text).toContain("[persisted]");
+    expect(text).not.toContain("PRIVATE PROSE");
+    expect(text).not.toContain("SECRET OUTPUT");
+  });
+
+  it("retains actual live retry fields separately from durable messages and deduplicates persisted errors", () => {
+    const event = subsessionRuntimeEvidence({ type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 2000, errorMessage: "HTTP 429 overloaded" }, 30);
+    const ended = subsessionRuntimeEvidence({ type: "auto_retry_end", success: false, attempt: 3, finalError: "still overloaded" }, 40);
+    const error = { role: "assistant", errorMessage: "HTTP 429 overloaded", content: [], timestamp: 20 };
+    const failed = subsessionRuntimeEvidence({ type: "message_end", message: error }, 21);
+    expect(event).toEqual({ source: "live", kind: "auto_retry_start", summary: "attempt 1/3; delayMs 2000; HTTP 429 overloaded", at: 30 });
+    expect(ended?.summary).toBe("attempt 3; success false; still overloaded");
+    if (event === undefined || failed === undefined || ended === undefined) throw new Error("missing evidence");
+    const activity = buildSubsessionActivity([error], 1, [failed, event, ended]);
+    expect(activity.messages).toHaveLength(3);
+    expect(activity.messages?.[0]?.source).toBe("persisted");
+    expect(activity.lastActivityAt).toBe(40);
+    expect(subsessionRuntimeEvidence({ type: "message_update", message: error }, 30)).toBeUndefined();
   });
 
   it("flags a trailing run of identical calls regardless of key order, not a varied run", () => {
@@ -51,10 +85,10 @@ describe("renderSubsessionList", () => {
     expect(renderSubsessionList(rows, {}, 1000).split("\n")[1]).toContain("BETA");
   });
 
-  it("compact output is one short line with context percent and activity age; limit is reported", () => {
+  it("compact output shows raw context tokens/window, not unreliable percent; limit is reported", () => {
     const text = renderSubsessionList(rows, { compact: true, limit: 1 }, 31_000);
     expect(text).toContain("showing 1");
-    expect(text).toContain('- "BETA" (w1) [working] ctx 42% active 30s ago');
+    expect(text).toContain('- "BETA" (w1) [working] context 1 of 2 tokens (SDK estimate) active 30s ago');
     expect(text).not.toContain("/a");
   });
 });

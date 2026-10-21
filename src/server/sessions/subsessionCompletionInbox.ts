@@ -1,4 +1,5 @@
-import { formatMetadataText, subsessionDisplay, type SubsessionContextUsage, type SubsessionStatus, type SubsessionTokens } from "./spawnSubsessionTool.js";
+import { parseSubsessionBackgroundJobs, type SubsessionBackgroundJobs } from "./subsessionBackgroundJobs.js";
+import { contextUsageLabel, formatMetadataText, subsessionDisplay, type SubsessionContextUsage, type SubsessionStatus, type SubsessionTokens } from "./spawnSubsessionTool.js";
 
 export const SUBSESSION_COMPLETION_ENTRY_TYPE = "pi-web.subsession.completed";
 export const SUBSESSION_RECEIPT_ENTRY_TYPE = "pi-web.subsession.received";
@@ -12,6 +13,8 @@ export interface SubsessionCompletion {
   status: Exclude<SubsessionStatus, "working" | "unknown">;
   finalText: string;
   messageCount: number;
+  /** Job registry snapshot at turn end, not a claim about jobs still running now. */
+  backgroundJobs?: SubsessionBackgroundJobs;
   errorDetail?: string;
   startedAt?: string;
   completedAt?: string;
@@ -138,12 +141,14 @@ export function persistedSubsessionCompletions(entries: readonly unknown[], repo
     const name = persistedName(data["name"]);
     const tokens = persistedTokens(data["tokens"]);
     const contextUsage = persistedContextUsage(data["contextUsage"]);
+    const backgroundJobs = parseSubsessionBackgroundJobs(data["backgroundJobs"]);
     const model = typeof data["model"] === "string" && data["model"] !== "" ? data["model"] : undefined;
     const thinkingLevel = typeof data["thinkingLevel"] === "string" && data["thinkingLevel"] !== "" ? data["thinkingLevel"] : undefined;
     if (reportDroppedField !== undefined) {
       if ("name" in data && name === undefined) reportDroppedField("name");
       if ("tokens" in data && tokens === undefined) reportDroppedField("tokens");
       if ("contextUsage" in data && contextUsage === undefined) reportDroppedField("contextUsage");
+      if ("backgroundJobs" in data && backgroundJobs === undefined) reportDroppedField("backgroundJobs");
       if ("model" in data && model === undefined) reportDroppedField("model");
       if ("thinkingLevel" in data && thinkingLevel === undefined) reportDroppedField("thinkingLevel");
     }
@@ -158,6 +163,7 @@ export function persistedSubsessionCompletions(entries: readonly unknown[], repo
       ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
       ...(tokens === undefined ? {} : { tokens }),
       ...(contextUsage === undefined ? {} : { contextUsage }),
+      ...(backgroundJobs === undefined ? {} : { backgroundJobs }),
     }];
   });
 }
@@ -200,14 +206,17 @@ function persistedContextUsage(value: unknown): SubsessionContextUsage | undefin
 
 export function renderSubsessionCompletion(completion: SubsessionCompletion): string {
   const { sessionId, status, finalText, errorDetail, startedAt, completedAt } = completion;
+  if (status === "idle" && errorDetail === undefined && completion.backgroundJobs !== undefined && completion.backgroundJobs.jobs.length > 0) {
+    const ids = completion.backgroundJobs.jobs.map((job) => formatMetadataText(job.id)).join(", ");
+    return `Subsession ${subsessionDisplay(sessionId, completion.name)} ended its turn with background jobs running at ${completion.backgroundJobs.observedAt}: ${ids}. Call check_subsession for current jobs and the full turn output.`;
+  }
   const error = errorDetail === undefined ? "" : `Error: ${errorDetail}\n\n`;
   const snapshotParts: string[] = [];
   if (completion.model !== undefined) snapshotParts.push(`model ${formatMetadataText(completion.model)}`);
   if (completion.thinkingLevel !== undefined) snapshotParts.push(`thinking level ${formatMetadataText(completion.thinkingLevel)}`);
   if (completion.tokens !== undefined) snapshotParts.push(`cumulative tokens ${String(completion.tokens.total)} total`);
   if (completion.contextUsage !== undefined) {
-    const percent = completion.contextUsage.percent === null ? "unknown percent" : `${String(completion.contextUsage.percent)}%`;
-    snapshotParts.push(`context usage ${percent} of ${String(completion.contextUsage.contextWindow)} context window`);
+    snapshotParts.push(contextUsageLabel(completion.contextUsage));
   }
   const snapshot = snapshotParts.length === 0 ? "" : `Run snapshot: ${snapshotParts.join("; ")}.\n\n`;
   const output = finalText.length > 2000

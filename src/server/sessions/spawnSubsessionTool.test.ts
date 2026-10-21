@@ -96,7 +96,7 @@ describe("formatMetadataText", () => {
 });
 
 function workingGuidance(sessionId: string): string {
-  return `Subsession ${sessionId} is working; partial output is withheld. Continue other work, or end your turn with a brief close-out message. Completion notices wake you; do not poll.`;
+  return `Subsession ${sessionId} is working; partial output is withheld. Continue other work, or end your turn with a brief close-out message. Completion notices wake you; do not poll.\n\nBackground jobs: unknown (no live extension response).`;
 }
 
 function firstText(content: readonly (TextContent | ImageContent)[]): string {
@@ -326,7 +326,7 @@ describe("createSubsessionToolDefinitions", () => {
     const text = firstText(result.content);
     expect(text).toContain('- "Worker Bee" (child-1) [idle] in /repos/a');
     expect(text).toContain("cumulative tokens 18 total (input 10, output 5, cache read 2, cache write 1)");
-    expect(text).toContain("context usage 10% (100 tokens of 1000 context window)");
+    expect(text).toContain("context 100 of 1000 tokens (SDK estimate)");
     expect(text).toContain("- child-2 [idle] in /repos/a");
     expect(text).not.toContain("Worker Bee (child-2)");
   });
@@ -346,7 +346,7 @@ describe("createSubsessionToolDefinitions", () => {
 
     expect(check).toHaveBeenCalledWith("parent-1", "child-1", "/sessions/parent-1.jsonl", "call-4", undefined);
     expect(result.details).toMatchObject({ sessionId: "child-1", status: "idle", finalText: "all done" });
-    expect(firstText(result.content)).toBe("Subsession child-1 [idle].\n\n--- SUBSESSION OUTPUT: child-1 ---\nall done");
+    expect(firstText(result.content)).toBe("Subsession child-1 [idle].\n\n--- SUBSESSION OUTPUT: child-1 ---\nall done\n\nBackground jobs: unknown (no live extension response).");
     expect(result.terminate).toBeUndefined();
   });
 
@@ -359,7 +359,25 @@ describe("createSubsessionToolDefinitions", () => {
     expect(text).toContain('model "openai/gpt-5"');
     expect(text).toContain('thinking level "low"');
     expect(text).toContain("cumulative tokens 3 total");
-    expect(text).toContain("context usage unknown percent (unknown tokens of 500 context window)");
+    expect(text).toContain("context unknown of 500 tokens (SDK estimate)");
+  });
+
+  it("check_subsession shows bounded system and live provider evidence, including an idle empty run", async () => {
+    for (const status of ["working", "idle"] as const) {
+      const { check: checkTool } = tools({ check: vi.fn(() => Promise.resolve({
+        sessionId: "child-1", cwd: "/repos/a", status, finalText: "", messageCount: 0,
+        activity: { calls: [], running: 0, totalCalls: 0, messages: [
+          { source: "persisted" as const, kind: "monitor", summary: "bg-1 completed" },
+          { source: "live" as const, kind: "auto_retry_start", summary: "attempt 1/3; delayMs 2000; HTTP 429 overloaded" },
+        ] },
+        contextUsage: { tokens: 3440, contextWindow: 1000, percent: 344 },
+      })) });
+      const output = firstText((await checkTool.execute("check", { sessionId: "child-1" }, undefined, undefined, ctxFor("parent-1", undefined))).content);
+      expect(output).toContain('[persisted] "monitor" "bg-1 completed"');
+      expect(output).toContain('[live] "auto_retry_start" "attempt 1/3; delayMs 2000; HTTP 429 overloaded"');
+      expect(output).toContain("context 3440 of 1000 tokens (SDK estimate)");
+      expect(output).not.toContain("344%");
+    }
   });
 
   it("check_subsession withholds partial working output without yielding", async () => {
@@ -383,7 +401,7 @@ describe("createSubsessionToolDefinitions", () => {
 
     const result = await checkTool.execute("call-error-check", { sessionId: "child-1" }, undefined, undefined, ctxFor("parent-1", undefined));
 
-    expect(firstText(result.content)).toBe("Subsession child-1 [error].\n\n--- SUBSESSION OUTPUT: child-1 ---\nchild failed");
+    expect(firstText(result.content)).toBe("Subsession child-1 [error].\n\n--- SUBSESSION OUTPUT: child-1 ---\nchild failed\n\nBackground jobs: unknown (no live extension response).");
     expect(result.terminate).toBeUndefined();
   });
 
@@ -407,7 +425,7 @@ describe("createSubsessionToolDefinitions", () => {
 
     expect(read).toHaveBeenCalledWith("parent-1", "child-1", { roles: ["assistant"], maxChars: 200, limit: 1 }, "/sessions/parent-1.jsonl", "call-6");
     expect(result.details).toMatchObject({ sessionId: "child-1", matched: 2 });
-    expect(firstText(result.content)).toBe('Subsession "Worker Bee" (child-1) [idle] — messages 2–2 of 5 (2 matched). Earlier matching messages exist before index 2.\n\n--- SUBSESSION TRANSCRIPT: child-1 ---\n#2 assistant\nthe answer');
+    expect(firstText(result.content)).toBe('Subsession "Worker Bee" (child-1) [idle] — messages 2–2 of 5 (2 matched). Earlier matching messages exist before index 2.\n\n--- SUBSESSION TRANSCRIPT: child-1 ---\n#2 assistant\nthe answer\n\nBackground jobs: unknown (no live extension response).');
     expect(result.terminate).toBeUndefined();
   });
 

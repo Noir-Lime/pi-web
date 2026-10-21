@@ -1,4 +1,5 @@
 import { Type } from "pi-web-typebox";
+import { renderSubsessionBackgroundJobs, type SubsessionBackgroundJobs } from "./subsessionBackgroundJobs.js";
 import { KNOWN_THINKING_LEVELS } from "../../shared/thinkingLevels.js";
 import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { requireInitialSessionName } from "./sessionNameGenerator.js";
@@ -12,7 +13,7 @@ export type SubsessionStatus = "working" | "idle" | "error" | "unknown";
 /** Cumulative session token accounting, as in SessionStatus.tokens. Not context occupancy. */
 export interface SubsessionTokens { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }
 
-/** Current context occupancy, as in SessionStatus.contextUsage. Not cumulative usage. */
+/** SDK context estimate, not exact occupancy or cumulative usage. Keep the unmodified SDK pair. */
 export interface SubsessionContextUsage { tokens: number | null; contextWindow: number; percent: number | null }
 
 /**
@@ -84,6 +85,8 @@ export interface SubsessionCheckResult extends SubsessionObservation {
   name?: string;
   finalText: string;
   messageCount: number;
+  /** Live extension-owned jobs; absent means unknown, not an empty registry. */
+  backgroundJobs?: SubsessionBackgroundJobs;
   errorDetail?: string;
   /** Live tool-call activity; present only while the child is working. */
   activity?: SubsessionActivity;
@@ -96,6 +99,8 @@ export interface SubsessionJoinResult {
 
 /** Exploratory transcript read: a filtered, paginated slice of the subsession's history. */
 export interface SubsessionReadResult extends TranscriptView {
+  /** Live extension-owned jobs; absent means unknown. */
+  backgroundJobs?: SubsessionBackgroundJobs;
   sessionId: string;
   cwd: string;
   status: SubsessionStatus;
@@ -163,7 +168,7 @@ const ListSubsessionsParams = Type.Object({
     { description: "Only these statuses; omit for all." },
   )),
   name: Type.Optional(Type.String({ description: "Case-insensitive substring of the child's name. Unnamed children never match." })),
-  compact: Type.Optional(Type.Boolean({ description: "One short line per child (name, status, context percent, last activity, id) after a count-by-status header. Omits cwd, model and token detail." })),
+  compact: Type.Optional(Type.Boolean({ description: "One short line per child (name, status, estimated context tokens/current window, last activity, id) after a count-by-status header. Omits cwd, model and cumulative token detail." })),
   limit: Type.Optional(Type.Integer({ minimum: 1, description: "Show at most this many matches, working first. The header always reports the full match count." })),
 });
 const SendParentMessageParams = Type.Object({
@@ -274,13 +279,15 @@ export function observationLine(observation: SubsessionObservation): string {
     parts.push(`cumulative tokens ${String(t.total)} total (input ${String(t.input)}, output ${String(t.output)}, cache read ${String(t.cacheRead)}, cache write ${String(t.cacheWrite)})`);
   }
   if (observation.contextUsage !== undefined) {
-    const c = observation.contextUsage;
-    const percent = c.percent === null ? "unknown percent" : `${String(c.percent)}%`;
-    const tokens = c.tokens === null ? "unknown tokens" : `${String(c.tokens)} tokens`;
-    parts.push(`context usage ${percent} (${tokens} of ${String(c.contextWindow)} context window)`);
+    parts.push(contextUsageLabel(observation.contextUsage));
   }
   if (observation.observedAt !== undefined) parts.push(`observed at ${observation.observedAt}`);
   return parts.join("; ");
+}
+
+/** One display contract for checks, compact lists and completion snapshots. No rounding or clamping. */
+export function contextUsageLabel(context: SubsessionContextUsage): string {
+  return `context ${context.tokens === null ? "unknown" : String(context.tokens)} of ${String(context.contextWindow)} tokens (SDK estimate)`;
 }
 
 function statusLine(summary: SubsessionSummary): string {
@@ -291,7 +298,7 @@ function statusLine(summary: SubsessionSummary): string {
 function workingInspectionGuidance(sessionId: string, name?: string, activity?: SubsessionActivity): string {
   const tail = "Continue other work, or end your turn with a brief close-out message. Completion notices wake you; do not poll.";
   if (activity === undefined) return `Subsession ${subsessionDisplay(sessionId, name)} is working; partial output is withheld. ${tail}`;
-  return `Subsession ${subsessionDisplay(sessionId, name)} is working; its output and transcript text are withheld, but its tool activity is shown below.\n\n${renderSubsessionActivity(activity, Date.now(), formatMetadataText)}\n\n${tail}`;
+  return `Subsession ${subsessionDisplay(sessionId, name)} is working; its output and transcript text are withheld, but its tool activity and bounded system/custom/provider evidence are shown below.\n\n${renderSubsessionActivity(activity, Date.now(), formatMetadataText)}\n\n${tail}`;
 }
 
 function agoText(iso: string | undefined, now: number): string {
@@ -302,8 +309,8 @@ function agoText(iso: string | undefined, now: number): string {
 }
 
 function compactLine(summary: SubsessionSummary, now: number): string {
-  const percent = summary.contextUsage?.percent;
-  const parts = [`[${summary.status}]`, ...(percent === null || percent === undefined ? [] : [`ctx ${String(Math.round(percent))}%`]), ...(summary.lastActivityAt === undefined ? [] : [`active ${agoText(summary.lastActivityAt, now)}`])];
+  const context = summary.contextUsage;
+  const parts = [`[${summary.status}]`, ...(context === undefined ? [] : [contextUsageLabel(context)]), ...(summary.lastActivityAt === undefined ? [] : [`active ${agoText(summary.lastActivityAt, now)}`])];
   return `- ${subsessionDisplay(summary.sessionId, summary.name)} ${parts.join(" ")}`;
 }
 
@@ -428,7 +435,7 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
   const checkTool = defineTool<typeof CheckSubsessionParams, SubsessionCheckResult | SubsessionReadResult>({
     name: "check_subsession",
     label: "Check subsession",
-    description: "Inspect one tracked child. Default (summary) mode returns status and its latest final output. For a working child, prose and output are withheld, but you get its recent tool calls (name, one-line summary, running/done/error), time since last activity, and a REPEAT warning when the last 3+ calls are identical. Passing any of roles, include, search, maxChars, includeToolArgs, before or limit switches to transcript mode: a filtered, paginated, chronological transcript (limit max 50, default 50; each value clipped to maxChars, default 4000). Read rule for both modes: returning the child's complete latest final output marks that completion read so it will not arrive again; nothing else does, and a clipped, filtered or historical-only view does not. Never yields; do not poll.",
+    description: "Inspect one tracked child. Default (summary) mode returns status and its latest final output. For a working child, assistant prose and tool output are withheld. Summary mode includes recent tool calls (name, one-line summary, running/done/error), up to 4 system/custom/provider evidence messages clipped to 240 characters each, time since last activity, and a REPEAT warning for 3+ identical calls. Evidence labels distinguish persisted history from live runtime events; live retry evidence is lost when the runtime unloads. Both modes also list live background jobs with IDs, original commands, start times and log paths; commands over 300 characters show an explicit truncated prefix. No extension response means unknown, never an empty job list. Passing any of roles, include, search, maxChars, includeToolArgs, before or limit switches to transcript mode: a filtered, paginated, chronological transcript (limit max 50, default 50; each value clipped to maxChars, default 4000). Read rule for both modes: returning the child's complete latest final output marks that completion read so it will not arrive again; nothing else does, and a clipped, filtered or historical-only view does not. Never yields; do not poll.",
     promptSnippet: "check_subsession: inspect a child (status/final output/live tool activity; filter args give its transcript); never yields",
     parameters: CheckSubsessionParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -441,7 +448,7 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
         const text = result.status === "working"
           ? workingInspectionGuidance(result.sessionId, result.name, result.activity)
           : renderTranscript(result);
-        return { content: [{ type: "text", text }], details: result };
+        return { content: [{ type: "text", text: `${text}\n\n${renderSubsessionBackgroundJobs(result.backgroundJobs, formatMetadataText)}` }], details: result };
       }
       const result = await deps.check(parentSessionId, sessionId, parentSessionFile, _toolCallId, calls);
       const body = result.finalText === "" ? "(no output yet)" : result.finalText;
@@ -449,8 +456,8 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
       const observedText = observed === "" ? "" : `${observed}\n\n`;
       const text = result.status === "working"
         ? `${workingInspectionGuidance(result.sessionId, result.name, result.activity)}\n\n${observedText}`.trimEnd()
-        : `Subsession ${subsessionDisplay(result.sessionId, result.name)} [${result.status}].\n\n${observedText}${result.errorDetail === undefined ? "" : `Error: ${result.errorDetail}\n\n`}--- SUBSESSION OUTPUT: ${result.sessionId} ---\n${body}`;
-      return { content: [{ type: "text", text }], details: result };
+        : `Subsession ${subsessionDisplay(result.sessionId, result.name)} [${result.status}].\n\n${observedText}${result.errorDetail === undefined ? "" : `Error: ${result.errorDetail}\n\n`}${result.activity === undefined ? "" : `${renderSubsessionActivity(result.activity, Date.now(), formatMetadataText)}\n\n`}--- SUBSESSION OUTPUT: ${result.sessionId} ---\n${body}`;
+      return { content: [{ type: "text", text: `${text}\n\n${renderSubsessionBackgroundJobs(result.backgroundJobs, formatMetadataText)}` }], details: result };
     },
   });
 

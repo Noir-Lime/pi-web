@@ -32,6 +32,21 @@ function receiptEntry(completionIds: readonly string[]) {
 }
 
 describe("SubsessionCompletionInbox", () => {
+  it("shrinks only successful turn notices with authoritative running jobs, preserving full stored output", () => {
+    const result = completion({ name: "Builder", finalText: "Waiting for the compile. ".repeat(50), backgroundJobs: {
+      version: 1, observedAt: "2026-10-21T08:00:00.000Z",
+      jobs: [{ id: "bg-1", kind: "background", command: "make", logpath: "/tmp/build.log", pid: 123, startedAt: "2026-10-21T07:59:00.000Z" }],
+    } });
+    const restored = persistedSubsessionCompletions([completionEntry(result)])[0];
+    expect(restored).toEqual(result);
+    const notice = renderSubsessionCompletion(result);
+    expect(notice.split("\n")).toHaveLength(1);
+    expect(notice).toContain('"Builder" (child-1)');
+    expect(notice).toContain("bg-1");
+    expect(notice).not.toContain(result.finalText);
+    expect(renderSubsessionCompletion({ ...result, status: "error", errorDetail: "compile failed" })).toContain("compile failed");
+    expect(renderSubsessionCompletion(completion({ finalText: "Waiting is a word, not proof of a background job." }))).toContain("SUBSESSION OUTPUT");
+  });
   it("keeps pending and latest inspection non-acknowledging", () => {
     const inbox = new SubsessionCompletionInbox();
     const result = completion();
@@ -334,6 +349,9 @@ describe("persistedSubsessionCompletions", () => {
     ]);
     expect(over[0]?.tokens?.total).toBe(999);
     expect(over[0]?.contextUsage?.percent).toBe(150);
+    const text = renderSubsessionCompletions(over, []);
+    expect(text).toContain("context 1500 of 1000 tokens (SDK estimate)");
+    expect(text).not.toContain("150%");
   });
 
   it("renders injected persisted names and model strings as escaped quoted data on one line", () => {
@@ -373,7 +391,7 @@ describe("renderSubsessionCompletions", () => {
   it("renders the snapshotted name as name (id) with model and usage labels", () => {
     const text = renderSubsessionCompletions([completion({ name: "Worker Bee", model: "openai/gpt-5", thinkingLevel: "high", tokens: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, total: 18 }, contextUsage: { tokens: 100, contextWindow: 1000, percent: 10 } })], []);
     expect(text).toContain('Subsession "Worker Bee" (child-1) stopped working');
-    expect(text).toContain('Run snapshot: model "openai/gpt-5"; thinking level "high"; cumulative tokens 18 total; context usage 10% of 1000 context window.');
+    expect(text).toContain('Run snapshot: model "openai/gpt-5"; thinking level "high"; cumulative tokens 18 total; context 100 of 1000 tokens (SDK estimate).');
   });
 
   it("identifies completion-time status and this run's output", () => {
