@@ -1,4 +1,6 @@
 // @vitest-environment happy-dom
+import { installNativeDialogFake } from "./nativeDialog.testSupport";
+installNativeDialogFake();
 
 import { LitElement, html } from "lit";
 import { useDeferredContent, settleDeferredContent } from "../formatting/deferredContent.testSupport";
@@ -20,6 +22,7 @@ import type { WorkspacePanelContext } from "../plugins/types";
 import { PiWebApp } from "./PiWebApp";
 import { themeStylesheetFetch } from "./themeStylesheetFetch.testSupport";
 import { ChatView } from "./ChatView";
+import { ConversationLayout } from "./ConversationLayout";
 import type { ActionPalette } from "./ActionPalette";
 import { FormattedText } from "./FormattedText";
 import { ContentRendererHost } from "./ContentRendererHost";
@@ -570,6 +573,20 @@ describe("application rendering boundaries", () => {
     await settle(app);
     expect(app.shadowRoot?.querySelector("app-mobile-main-tabs")).not.toBeNull();
     expect(loadNavigationPreferences().mobileCollapsed).toBe(true);
+  });
+
+  it("composes transcript, composer, and status under one conversation boundary", async () => {
+    const status = { ...sessionStatus(session.id), isStreaming: true };
+    const app = await mountApp({ selectedSession: session, status });
+    await settle(app);
+    const layout = app.shadowRoot?.querySelector<ConversationLayout>("conversation-layout");
+    expect(layout).toBeInstanceOf(ConversationLayout);
+    expect(layout?.status).toEqual(status);
+    expect(layout?.querySelector("chat-view")).toBeInstanceOf(ChatView);
+    expect(layout?.querySelector('[slot="composer"] prompt-editor')).toBe(promptEditor(app));
+    expect(layout?.querySelector('[slot="status"]')).toBeInstanceOf(StatusBar);
+    await layout?.updateComplete;
+    expect(layout?.shadowRoot?.querySelector(".activity-text")?.textContent).toBe("running");
   });
 
   it("keeps the activity notice in the blocked composer until dismissal without losing drafts or attachments", async () => {

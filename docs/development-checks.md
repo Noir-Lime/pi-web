@@ -40,6 +40,21 @@ The first cached typecheck still pays for a full check; subsequent runs reuse `n
 
 Documentation/comment-only changes need link/path review, relevant documentation or asset tests, and `git diff --check`; they do not need a local typecheck or whole-project lint. Use the [testing guide](../.agents/skills/testing-guide/SKILL.md#decide-whether-a-test-adds-protection) to choose the smallest boundary that proves the behavior.
 
+## Browser surface contracts
+
+For popup, modal, or conversation-boundary changes, run the isolated component browser suite:
+
+```sh
+npx playwright install chromium firefox webkit
+npm run test:browser
+```
+
+On Linux, browser system libraries may also be needed; Playwright documents missing dependencies when a browser cannot launch. CI installs them with `npx playwright install --with-deps chromium firefox webkit`.
+
+The suite builds an isolated component fixture into `node_modules/.cache/pi-web/browser-fixture` and starts its own Vite preview server on `127.0.0.1:8516`. It uses fake completion data and does not start or connect to a session daemon. It does not rebuild the published app or use the running development server. It covers Chromium, Firefox, WebKit, and a touch/mobile Chromium profile. Use `npm run test:browser -- --project=chromium` for focused iteration. Failure traces are written under `test-results/` and can be opened with `npx playwright show-trace <trace.zip>`.
+
+These tests prove browser painting, hit targeting, anchoring, and focus/dismissal composition; happy-dom tests remain responsible for component event wiring and state. They are a separate CI job, not part of `npm test` or `npm run verify`.
+
 ## Check ownership
 
 | Stage | Required checks | Where they run |
@@ -47,8 +62,8 @@ Documentation/comment-only changes need link/path review, relevant documentation
 | Local iteration | Focused tests, optionally in watch mode | Developer/agent workspace |
 | Local completion | Relevant tests; scoped ESLint and cached typecheck for TypeScript changes; diff/link checks as applicable | Developer/agent workspace |
 | Commit | `git diff --cached --check` only, through the pre-commit hook | Local workspace after `npm install`/`npm ci` configures `.githooks` |
-| Pull request | `npm run verify`, build, artifact checks | GitHub Actions CI, Linux and Windows |
-| Merge/push to `main` | Same full CI checks; installed-package smoke on Linux | GitHub Actions CI |
+| Pull request | `npm run verify`, build, artifact checks; browser surface contracts in a separate Linux job | GitHub Actions CI, Linux and Windows |
+| Merge/push to `main` | Same full CI and browser checks; installed-package smoke on Linux | GitHub Actions CI |
 | Manual CI run | Same full CI checks; installed-package smoke on Linux | GitHub Actions `workflow_dispatch`, selected ref |
 | Package publication | Full verification, build, artifact checks, installed-package smoke, then publish | GitHub Actions publish workflow, Linux |
 

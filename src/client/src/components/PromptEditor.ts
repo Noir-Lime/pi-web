@@ -135,9 +135,6 @@ export class PromptEditor extends LitElement {
   }
 
   protected override updated(changed: PropertyValues) {
-    // Expose menu visibility so the shell can lift the composer above the
-    // transcript's activity badge without changing the idle stacking order.
-    if (changed.has("completions")) this.toggleAttribute("completion-menu-open", this.completions.length > 0);
     if (changed.has("disabled")) this.updateEditorDisabledState();
     if (changed.has("sessionId") || changed.has("machineId")) this.syncEditorDoc();
   }
@@ -167,7 +164,7 @@ export class PromptEditor extends LitElement {
           </div>
           ${this.renderPromptChips()}
           ${this.renderAttachments()}
-          <autocomplete-menu .items=${this.completions} .selectedIndex=${this.selectedIndex} .onPick=${(item: CompletionItem) => { this.pick(item); }}></autocomplete-menu>
+          <autocomplete-menu .onClose=${() => { this.closeCompletions(); }} .items=${this.completions} .selectedIndex=${this.selectedIndex} .onPick=${(item: CompletionItem) => { this.pick(item); }}></autocomplete-menu>
         </div>
         <div class="actions ui-toolbar ui-toolbar--primary">
           ${this.renderCompactStatus()}
@@ -468,6 +465,9 @@ export class PromptEditor extends LitElement {
   }
 
   private closeCompletions(): boolean {
+    // Dismissal also invalidates loads started while the previous menu was
+    // visible, so a late response cannot reopen it after focus moved away.
+    this.requestVersion += 1;
     if (!this.completions.length) return false;
     this.completions = [];
     return true;
