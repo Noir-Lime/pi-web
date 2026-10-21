@@ -158,6 +158,31 @@ describe("PiSessionService shared subsession completion inbox", () => {
     void service;
   });
 
+  it("puts the provider error that ended the run into the completion notice", async () => {
+    const { parent, child } = await inboxService();
+    startChildRun(child);
+    child.journal.entries.push({ type: "message", message: { role: "assistant", content: [], stopReason: "error", errorMessage: "Codex error: This content was flagged for possible cybersecurity risk" } });
+    child.session.isStreaming = false;
+    child.emit({ type: "agent_end" });
+    await vi.advanceTimersByTimeAsync(0);
+    await settleParent(parent);
+    const content = parent.calls.sendCustomMessage[0]?.message.content ?? "";
+    expect(content).toContain("(error at completion");
+    expect(content).toContain("Error: Codex error: This content was flagged for possible cybersecurity risk");
+  });
+
+  it("does not report an earlier retried provider error once the run ends normally", async () => {
+    const { parent, child } = await inboxService();
+    startChildRun(child);
+    child.journal.entries.push({ type: "message", message: { role: "assistant", content: [], stopReason: "error", errorMessage: "overloaded_error 529" } });
+    finishChildRun(child);
+    await vi.advanceTimersByTimeAsync(0);
+    await settleParent(parent);
+    const content = parent.calls.sendCustomMessage[0]?.message.content ?? "";
+    expect(content).toContain("(idle at completion");
+    expect(content).not.toContain("overloaded_error");
+  });
+
   it("returns ready answers at the yield/join point without later automatic replay", async () => {
     const { service, parent, child } = await inboxService();
     startChildRun(child);

@@ -2678,15 +2678,18 @@ export class PiSessionService implements SessionRouteService {
       ...(observed.contextUsage === undefined ? {} : { contextUsage: observed.contextUsage }),
     };
     const backgroundJobs = querySubsessionBackgroundJobs((signal) => this.sessionEvents.connect(session, signal));
+    // The SDK ends a provider-rejected turn with an error assistant message and
+    // does not publish an error activity, so read the run's own final message.
+    const providerError = activity?.phase === "error" ? undefined : finalAssistantProviderError(messages);
     const completion: SubsessionCompletion = {
       completionId: randomUUID(), sessionId: childId, cwd: session.sessionManager.getCwd(),
-      status: activity?.phase === "error" ? "error" : "idle",
+      status: activity?.phase === "error" || providerError !== undefined ? "error" : "idle",
       startedAt: armed.startedAt, completedAt: this.now().toISOString(),
       finalText: finalAssistantText(messages), messageCount: historyMessages(session).length,
       ...(backgroundJobs === undefined ? {} : { backgroundJobs }),
       ...(session.sessionName === undefined ? {} : { name: session.sessionName }),
       ...runSnapshot,
-      ...(activity?.phase !== "error" || activity.detail === undefined ? {} : { errorDetail: activity.detail }),
+      ...(activity?.phase === "error" && activity.detail !== undefined ? { errorDetail: activity.detail } : providerError === undefined ? {} : { errorDetail: providerError }),
     };
     try {
       session.sessionManager.appendCustomEntry?.(SUBSESSION_COMPLETION_ENTRY_TYPE, completion);
@@ -6090,6 +6093,20 @@ function transcriptReturnsFinalOutput(messages: readonly unknown[], view: Transc
 }
 
 /** Most recent assistant text from a history message list, or "" if none. */
+const MAX_PROVIDER_ERROR_CHARS = 500;
+
+/** The provider error that ended the run: the last assistant message, only if it stopped with an error. */
+function finalAssistantProviderError(messages: readonly unknown[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (!isRecord(message) || message["role"] !== "assistant") continue;
+    const text = message["errorMessage"];
+    if (message["stopReason"] !== "error" || typeof text !== "string" || text === "") return undefined;
+    return text.length > MAX_PROVIDER_ERROR_CHARS ? `${text.slice(0, MAX_PROVIDER_ERROR_CHARS)}… [${String(text.length - MAX_PROVIDER_ERROR_CHARS)} characters omitted]` : text;
+  }
+  return undefined;
+}
+
 function finalAssistantText(messages: readonly unknown[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
