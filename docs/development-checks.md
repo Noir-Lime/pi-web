@@ -97,15 +97,15 @@ Unlike ordinary tests or artifact inspection, the smoke test packs the existing 
 
 | Installed boundary | Protection |
 | --- | --- |
-| Pi SDK peers | A global install resolves supported Pi 1.x peers, loads the SDK barrels, and finds the three built-in extension factories. |
+| Shared Pi runtime | Independently installed Pi versions supply the SDK to fresh PI WEB CLI processes and server module checks. Isolated session daemons start, report the selected Pi version, and stop cleanly. PI WEB does not provision its own SDK. |
 | Standalone server TypeBox | Native Node creates/validates schemas through the declared `pi-web-typebox` alias and imports the built server tools without Pi's module mapping or Vitest transforms. |
-| Pi-managed install | A separate `--legacy-peer-deps` installation omits automatic SDK peers and still resolves server TypeBox. This checks the dependency boundary, not standalone server provisioning without the SDK. |
+| Pi-managed install | A separate `--legacy-peer-deps` installation omits automatic SDK peers and uses the selected existing Pi installation to load the CLI and server tool modules. |
 | Pi extension loading | The real Pi resource loader loads the installed `/pi-web` extension in both install layouts, registers its command, and reports no dependency warnings. |
 | Public plugin API | Strict browser/server consumer and example compilations resolve installed public entries under NodeNext and Bundler; unsupported deep imports are rejected and emitted session-bridge entries import successfully. |
 | Shipped plugin behavior | The installed Captain's Log translator uses real Pi sessions/extensions with fake model streaming to check read-only source access, translator-session reuse, failure recovery, reconnects, and persisted archive records. |
 | Native terminal | The installed stable `node-pty` and terminal service execute a real shell command, capture its output, and exit successfully. |
 
-This catches missing packaged files, bad exports, undeclared or incorrectly resolved dependencies, peer-install-policy differences, resource-loader incompatibility, and native PTY/install-script failures that can pass in a development checkout. It does not replace application tests, start the CLI/session daemon, verify real HTTP/WebSocket transport or host admission, exercise browser rendering/live model calls, or test every supported machine/platform. Captain's Log archive recreation is covered; process-crash recovery and reopening an on-disk Pi transcript are not.
+This catches missing packaged files, bad exports, undeclared or incorrectly resolved dependencies, peer-install-policy differences, resource-loader incompatibility, and native PTY/install-script failures that can pass in a development checkout. It does not replace application tests, install user services, verify full HTTP/WebSocket interactions or host admission, exercise browser rendering/live model calls, or test every supported machine/platform. Captain's Log archive recreation is covered; process-crash recovery and reopening an on-disk Pi transcript are not.
 
 Its cost comes largely from downloading/installing npm and runtime dependencies into a fresh temporary cache, unpacking two install layouts, and strict consumer/example compilations. It requires registry access and a POSIX shell. Prefixes, caches, and fixture agent directories are temporary and cleaned up afterward; npm subprocesses get a temporary home. The harness and PTY still inherit the process environment and run with the user's permissions, so this is test isolation rather than a security sandbox. It does not install into the user's global prefix or restart the live session daemon.
 
@@ -124,6 +124,14 @@ CI runs it after merges/pushes to `main` and on manual runs, on Linux only. Ordi
 
 The implementation lives in [`scripts/smoke-package-install.mjs`](../scripts/smoke-package-install.mjs), [`scripts/plugin-api-package-smoke.mjs`](../scripts/plugin-api-package-smoke.mjs), and [`scripts/captains-log-package-smoke.mjs`](../scripts/captains-log-package-smoke.mjs).
 
+## Shared Pi runtime
+
+PI WEB reuses the user's existing Pi installation. The `/pi-web` extension gets that installation through Pi's public `getPackageDir()` API and passes it to the CLI as `PI_WEB_PI_PACKAGE_DIR`. Native service definitions retain that selection. Without an explicit selection, ordinary npm SDK resolution takes precedence; if no peer is locally resolvable, standalone commands can find an existing npm-installed `pi` executable on `PATH`. An invalid explicit selection is an error, not permission to silently select a different Pi or install one.
+
+Standalone application code imports SDK values through `src/piSdk.ts` and AI helpers through `src/piAi.ts`. Their shared loader, `src/piRuntime.ts`, resolves the selected installation's public package exports using `import-meta-resolve`. It does not register a Node loader hook, rewrite other modules' imports, or assume private SDK file paths. Pi's own dependencies and extension loader retain their ordinary resolution and module identity. Keep runtime imports behind this boundary; canonical type-only imports are safe because they disappear from emitted JavaScript. The canonical SDK peers are optional with `"*"` ranges, and there is no runtime version gate. Development dependencies support the checkout's tests and typechecking rather than provisioning a published runtime.
+
+Upgrading or downgrading Pi in place takes effect when services restart. If Pi moves to another path, reinstall the PI WEB service definitions from that Pi instance. The startup environment selects an installation, not a frozen copy of its version.
+
 ## Server-only TypeBox
 
 `pi-web-typebox` is an npm alias for the ordinary `typebox` package, pinned to the server's existing version. It is not a fork or vendored copy.
@@ -132,6 +140,6 @@ PI WEB has two execution environments: its `/pi-web` extension runs inside Pi, w
 
 Pi warns when an extension package lists `typebox` in `dependencies`, even if only its standalone server imports it ([#277](https://github.com/jmfederico/pi-web/issues/277)). The server-only alias retains an explicit runtime dependency without triggering that extension diagnostic. Server tool schemas and their tests import `pi-web-typebox`; code under `extensions/` must not import this alias or the server tools. Extensions that need TypeBox should use Pi's host-provided `typebox` instead.
 
-The installed-package smoke checks native Node schema creation/validation and imports all three built server tool modules after a normal global npm install. It also installs the tarball with Pi's `--legacy-peer-deps` policy and verifies native alias resolution without the Pi SDK peer present. Both installations load `/pi-web` through the real Pi resource loader with no dependency warning. The managed check covers TypeBox, not standalone provisioning of the server's separate Pi SDK peers.
+The installed-package smoke checks native Node schema creation/validation and imports all three built server tool modules against the selected existing Pi installation. It also installs the tarball with Pi's `--legacy-peer-deps` policy. Both installations load `/pi-web` through the real Pi resource loader with no dependency warning; neither requires PI WEB to install another SDK.
 
 Revisit the alias if Pi introduces a supported way to distinguish standalone runtime dependencies from extension dependencies. Until then, keep the explicit server dependency and preserve these installation checks rather than moving it to peers or relying on an undeclared transitive dependency.
