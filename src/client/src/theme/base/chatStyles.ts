@@ -53,7 +53,7 @@ export const chatStyles = css`
   .msg.tool { color: var(--pi-text); }
   .msg.tool-execution-shell, .msg.ask-user-record-shell { padding: 0; border: 0; background: transparent; color: var(--pi-text); }
   .msg.ask-user-record-shell ask-user-card { margin: 0 auto; }
-  .msg.system { --ui-transcript-bg: var(--pi-chat-system-bg, color-mix(in srgb, var(--pi-surface) 40%, var(--pi-bg))); color: var(--pi-text-secondary); }
+  .msg.system { --ui-transcript-bg: var(--pi-chat-system-bg, color-mix(in srgb, var(--pi-surface) 40%, var(--pi-bg))); color: var(--pi-text-secondary); border-inline-start: 3px dashed var(--pi-chat-system-border, transparent); }
   .msg.event-group { --ui-activity-tone: var(--pi-border); --ui-transcript-bg: var(--pi-bg); --ui-transcript-heading-bg: var(--pi-bg); padding: 0; color: var(--pi-text); }
   .msg.event-group > summary { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 8px; padding-inline: 13px; }
   .msg.event-group > summary:hover { background: var(--pi-surface-hover); }
