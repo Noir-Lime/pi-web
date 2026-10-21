@@ -1,5 +1,13 @@
 # @jmfederico/pi-web
 
+## 1.202610.6
+
+### Patch Changes
+
+- 995b701: Restore the visible caret when the empty chat input is focused.
+- 4de7e81: Show a static dot beneath the chat navigation arrow while following live, making the state distinguishable without relying on colour.
+- 478c5c5: Fix slash-command, file, and model completion menus appearing behind chat messages.
+
 ## 1.202610.5
 
 ### Patch Changes
