@@ -203,6 +203,9 @@ describe("createSubsessionToolDefinitions", () => {
     expect(spawnTool.description).toContain("without waiting for its work to finish");
     expect(spawnTool.description).toContain("does NOT create a worktree");
     expect(spawnTool.description).toContain("finished turn, not proof its background jobs are done");
+    expect(spawnTool.description).toContain("registered slash-command handling");
+    expect(spawnTool.description).toContain("may leave a tracked child behind");
+    expect(spawnTool.description).toContain("Check list_subsessions before retrying");
     expect(spawnTool.promptSnippet).toContain("not file isolation");
     expect(spawnTool.description).not.toMatch(/spawn_session|fully independent/i);
 
@@ -225,6 +228,10 @@ describe("createSubsessionToolDefinitions", () => {
     const stop = definitions.definitions.find(({ name }) => name === "stop_subsession");
     expect(update?.description).toContain("NOT ATOMIC");
     expect(update?.description).toContain("NO rollback");
+    const send = definitions.definitions.find(({ name }) => name === "send_subsession_message");
+    expect(send?.description).toContain("Identical already-queued text is silently ignored");
+    expect(send?.description).toContain("compaction defers delivery");
+    expect(send?.description).toContain("asynchronously as session errors");
     expect(stop?.description).toContain("kill its detached Bash/monitor jobs");
     expect(stop?.description).toContain("shared schema are ignored");
     expect(JSON.stringify(definitions.check.parameters)).toContain("NOT a total-output cap");
