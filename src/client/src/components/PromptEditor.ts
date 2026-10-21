@@ -135,6 +135,9 @@ export class PromptEditor extends LitElement {
   }
 
   protected override updated(changed: PropertyValues) {
+    // Expose menu visibility so the shell can lift the composer above the
+    // transcript's activity badge without changing the idle stacking order.
+    if (changed.has("completions")) this.toggleAttribute("completion-menu-open", this.completions.length > 0);
     if (changed.has("disabled")) this.updateEditorDisabledState();
     if (changed.has("sessionId") || changed.has("machineId")) this.syncEditorDoc();
   }

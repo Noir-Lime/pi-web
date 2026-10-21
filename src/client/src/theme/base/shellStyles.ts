@@ -86,6 +86,8 @@ export const appStyles = css`
   /* Let the non-interactive activity badge straddle the composer border. */
   chat-view { flex: 1 1 auto; min-height: 0; overflow: visible; z-index: 6; }
   .composer-area { position: relative; z-index: 5; flex: 0 0 auto; display: grid; min-width: 0; background: var(--pi-bg); }
+  /* Completion menus must clear the transcript and its overhanging activity badge. */
+  .composer-area:has(> prompt-editor[completion-menu-open]) { z-index: 7; }
   /* Share a grid cell instead of adding banner height; allow long notices to grow the area rather than clip their controls. */
   .composer-area > prompt-editor, .composer-activity-notice { grid-area: 1 / 1; min-width: 0; }
   .composer-area > prompt-editor[inert] { visibility: hidden; }
