@@ -17,6 +17,7 @@ Make interactions consistent through shared primitives, not repeated styling ins
 
 - Let primitives own common control treatments. Keep consumer styles focused on layout and domain content.
 - If a treatment is missing, consider extending an existing primitive before creating a local variant. Add a new primitive when it represents a reusable pattern, not merely to wrap one screen's markup.
+- Keep control sizes consistent across input types; touch capability alone should not change button dimensions. When responsive sizing is needed, base it on available viewport or container space. Existing pointer-based sizing is legacy behavior, not a pattern to extend; migrate it within the scope of the task.
 - Preserve native semantics, accessible names, keyboard interaction, focus management, and action behavior. Styling alone does not supply an interaction contract.
 - For plugins, use the supported host UI styles capability and respect its compatibility boundary; see the primitive reference rather than deep-importing internal styles.
 - When a shared treatment changes, update its reference documentation alongside the implementation. Keep dimensions, selectors, and exceptions there instead of duplicating them in this skill or `AGENTS.md`.
