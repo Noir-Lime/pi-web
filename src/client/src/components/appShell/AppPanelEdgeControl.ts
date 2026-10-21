@@ -184,7 +184,7 @@ export class AppPanelEdgeControl extends LitElement {
     :host([side="navigation"]) { grid-column: 2; }
     :host([side="workspace"]) { grid-column: 4; }
     /* Keep the wider resize target below the top-bar buttons, including when a panel is collapsed. */
-    .resize-handle { position: absolute; inset: 45px -6px 0; z-index: 0; cursor: col-resize; touch-action: none; outline: none; }
+    .resize-handle { position: absolute; inset: 45px -8px 0; z-index: 0; cursor: col-resize; touch-action: none; outline: none; }
     .resize-handle::after { content: ""; position: absolute; top: 0; bottom: 0; left: 50%; width: 1px; transform: translateX(-50%); background: transparent; transition: width .12s ease, background .12s ease, opacity .12s ease; }
     .resize-handle:hover::after, .resize-handle:focus-visible::after, :host([resizing]) .resize-handle::after { width: 3px; background: var(--pi-accent); opacity: .72; }
     @media (max-width: 1180px) {
