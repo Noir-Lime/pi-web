@@ -157,19 +157,19 @@ const SpawnSubsessionParams = Type.Object({
 const UpdateSubsessionParams = Type.Object({
   sessionId: Type.String({ description: "Your direct tracked child id." }),
   name: Type.Optional(Type.String({ description: "New display name, using the ordinary session-naming rules. Allowed while the child is working." })),
-  model: Type.Optional(Type.String({ description: 'Exact "provider/model-id". The child must be idle; a busy child rejects the whole call without being stopped.' })),
+  model: Type.Optional(Type.String({ description: 'Exact "provider/model-id". Requires an idle child and preserves history. Applied before thinkingLevel and name; if a later step fails this model change is NOT rolled back.' })),
   thinkingLevel: Type.Optional(Type.Enum(KNOWN_THINKING_LEVELS, {
-    description: "New thinking level. The child must be idle. Applied after any model change in the same call. Must be a level the child's model supports, otherwise the call is rejected; the result reports the level in effect.",
+    description: "Explicit level, not a relative increase. Requires an idle child. Applied after model, before name. Unsupported levels are rejected, not clamped; an already-applied model change remains. Omit to keep the current level (which a model change may clamp).",
   })),
 });
 const ListSubsessionsParams = Type.Object({
   status: Type.Optional(Type.Array(
     Type.Union([Type.Literal("working"), Type.Literal("idle"), Type.Literal("error"), Type.Literal("unknown")]),
-    { description: "Only these statuses; omit for all." },
+    { description: "Agent status filter. Omit or pass [] for all. idle does not mean its detached jobs have finished; unknown can mean the runtime is unloaded, not broken." },
   )),
-  name: Type.Optional(Type.String({ description: "Case-insensitive substring of the child's name. Unnamed children never match." })),
+  name: Type.Optional(Type.String({ description: "Case-insensitive name substring, not an ID lookup. A nonempty filter excludes unnamed children; omit or use an empty string for all names." })),
   compact: Type.Optional(Type.Boolean({ description: "One short line per child (name, status, estimated context tokens/current window, last activity, id) after a count-by-status header. Omits cwd, model and cumulative token detail." })),
-  limit: Type.Optional(Type.Integer({ minimum: 1, description: "Show at most this many matches, working first. The header always reports the full match count." })),
+  limit: Type.Optional(Type.Integer({ minimum: 1, description: "Rendered text only: maximum matching rows, with working first, then error, idle, unknown. Omit for ALL matches, not a small default. Header counts are before this limit; structured details still contain all tracked rows." })),
 });
 const SendParentMessageParams = Type.Object({
   message: Type.String({ minLength: 1, description: "Progress update, question, or finding for your parent session." }),
@@ -189,34 +189,34 @@ const CheckSubsessionParams = Type.Object({
   calls: Type.Optional(Type.Integer({
     minimum: 1,
     maximum: MAX_ACTIVITY_CALLS,
-    description: `Summary mode, working child: how many recent tool calls to show (default ${String(DEFAULT_ACTIVITY_CALLS)}, max ${String(MAX_ACTIVITY_CALLS)}).`,
+    description: `Summary mode only: recent tool-call count (default ${String(DEFAULT_ACTIVITY_CALLS)}, max ${String(MAX_ACTIVITY_CALLS)}), also available for idle/error children. Ignored in transcript mode; working transcript requests use the default activity count.`,
   })),
   roles: Type.Optional(Type.Array(
     Type.Union([Type.Literal("assistant"), Type.Literal("user"), Type.Literal("tool"), Type.Literal("system"), Type.Literal("custom")]),
-    { description: "Transcript mode: roles to include; omit for all." },
+    { description: "Selects transcript mode. Recorded-history roles, not the child's system prompt or live retry buffer. Omit for all roles; [] matches none. Does not unlock a working transcript." },
   )),
   include: Type.Optional(Type.Array(
     Type.Union([Type.Literal("text"), Type.Literal("thinking"), Type.Literal("tool_call"), Type.Literal("tool_result"), Type.Literal("image")]),
-    { description: "Transcript mode: content kinds to include; omit for all." },
+    { description: "Selects transcript mode. Keep these content parts before search/pagination. Omit for all kinds; [] matches none. Images are placeholders, not image data." },
   )),
   search: Type.Optional(Type.String({
-    description: "Transcript mode: case-insensitive text or tool-name substring; searches full content before maxChars truncation.",
+    description: "Selects transcript mode. Case-insensitive substring over retained content, tool names and full serialized arguments before clipping. Empty string adds no search filter. A hit may be hidden by display summaries/clipping; request raw arguments or increase maxChars to inspect it.",
   })),
   maxChars: Type.Optional(Type.Integer({
     minimum: 0,
-    description: `Transcript mode: maximum characters per text, thinking, or tool-result value (default ${String(TRANSCRIPT_DEFAULT_MAX_CHARS)}). A clipped final answer is not marked read.`,
+    description: `Selects transcript mode. Characters per text/thinking/tool-result value (default ${String(TRANSCRIPT_DEFAULT_MAX_CHARS)}, 0 hides those values); increase explicitly for longer text. NOT a total-output cap: tool-call summaries, raw args and error headers are not clipped by it. A clipped final answer alone is not acknowledged.`,
   })),
   includeToolArgs: Type.Optional(Type.Boolean({
-    description: "Transcript mode: include raw tool-call arguments; summaries are always included.",
+    description: "Selects transcript mode even when false. Default false; true includes complete serialized arguments, which maxChars does NOT bound and which can be large. Compact argument summaries remain either way.",
   })),
   before: Type.Optional(Type.Integer({
     minimum: 0,
-    description: "Transcript mode: return messages before this index; use the previous start to page backward.",
+    description: "Selects transcript mode. Exclusive original-message index, not a matching-row count. Use the previous start to page backward. An empty page with matches outside it may require raising/omitting before rather than paging further back.",
   })),
   limit: Type.Optional(Type.Integer({
     minimum: 1,
     maximum: 50,
-    description: "Transcript mode: maximum recent matches, in chronological order. Defaults to 50.",
+    description: "Selects transcript mode. Return the newest matching messages before the cursor, oldest first within the page. Default and maximum 50. Filters run before pagination; matched counts the whole history, not just this page.",
   })),
 });
 
@@ -390,8 +390,8 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
   const spawnTool = defineTool<typeof SpawnSubsessionParams, SpawnSubsessionResult>({
     name: "spawn_subsession",
     label: "Spawn subsession",
-    description: "Start a tracked child session in this session's workspace or another workspace of the same project to carry out part of the current task and return immediately. Its transcript and result are available here after it finishes.",
-    promptSnippet: "spawn_subsession: tracked child work in a same-project workspace; result available after completion",
+    description: "Start a new tracked child for part of the current task, then return its ID/cwd and resolved model/effort without waiting for its work to finish. Omitted model and thinkingLevel inherit this session's settings; Pi may clamp inherited/requested effort for the model. cwd must be an existing workspace of the same registered project. It selects a checkout but does NOT create a worktree, switch branches or isolate files from other workers. Reuse an existing child with send_subsession_message for follow-ups instead of spawning a replacement. Completion notices describe a finished turn, not proof its background jobs are done: detached jobs may wake it later, and waiting notices may be compact. Inspect with check_subsession; do not poll. Name is display metadata, not a unique identity.",
+    promptSnippet: "spawn_subsession: new tracked child, not file isolation; returns before work finishes; reuse existing children for follow-ups",
     parameters: SpawnSubsessionParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const parentSessionId = ctx.sessionManager.getSessionId();
@@ -420,7 +420,7 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
   const listTool = defineTool<typeof ListSubsessionsParams, { subsessions: SubsessionSummary[] }>({
     name: "list_subsessions",
     label: "List subsessions",
-    description: "List tracked child statuses, working first. Optional filters: status, name substring, limit; compact gives one short line per child. The header always reports the full match count and counts by status. Never yields or changes control flow; do not poll.",
+    description: "Snapshot of your direct tracked children, not all sessions or descendants. Default is a full rendered row for EVERY child; use compact:true and limit for a short list. Optional status/name filters and limit affect rendered text only; structured details retain all rows. Header counts are after filtering but before the limit. Context tokens/window are SDK estimates, distinct from cumulative session token totals. Unloaded children may have unknown status or missing/stored observations; missing values are not zero. idle/error describe agent state, not whether detached jobs remain: check_subsession queries those jobs. Quoted metadata is escaped and capped at 120 displayed characters; IDs remain the identity. Does not wait, resume work or acknowledge completion notices. Do not poll.",
     promptSnippet: "list_subsessions: inspect child statuses; never yields",
     parameters: ListSubsessionsParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -435,7 +435,7 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
   const checkTool = defineTool<typeof CheckSubsessionParams, SubsessionCheckResult | SubsessionReadResult>({
     name: "check_subsession",
     label: "Check subsession",
-    description: "Inspect one tracked child. Default (summary) mode returns status and its latest final output. For a working child, assistant prose and tool output are withheld. Summary mode includes recent tool calls (name, one-line summary, running/done/error), up to 4 system/custom/provider evidence messages clipped to 240 characters each, time since last activity, and a REPEAT warning for 3+ identical calls. Evidence labels distinguish persisted history from live runtime events; live retry evidence is lost when the runtime unloads. Both modes also list live background jobs with IDs, original commands, start times and log paths; commands over 300 characters show an explicit truncated prefix. No extension response means unknown, never an empty job list. Passing any of roles, include, search, maxChars, includeToolArgs, before or limit switches to transcript mode: a filtered, paginated, chronological transcript (limit max 50, default 50; each value clipped to maxChars, default 4000). Read rule for both modes: returning the child's complete latest final output marks that completion read so it will not arrive again; nothing else does, and a clipped, filtered or historical-only view does not. Never yields; do not poll.",
+    description: "Inspect a verified direct child; may open an unloaded runtime but does not wait for the child to finish. SUMMARY (default): status, SDK-estimated context/current window, cumulative usage, latest available assistant text without a size cap, recent tool activity, and up to 4 system/custom/provider evidence excerpts. Text can predate a silent/failed turn: check status/errors before treating it as new work. Activity uses recorded message/event times, not a heartbeat. A running tool means no result was recorded, not OS liveness. 3+ identical calls trigger a warning, not proof of a stuck worker. WORKING: rendered text withholds assistant prose, full tool output and transcript even if you pass transcript filters. TRANSCRIPT: any roles/include/search/maxChars/includeToolArgs/before/limit value, even false or [], selects this mode; calls is then ignored. At most 50 newest matching messages are returned in chronological order. See parameter descriptions for clipping/search/paging rules; images are placeholders. Evidence labels separate persisted messages from live provider/retry events; the bounded live buffer is lost on runtime unload and is not part of transcript search. Quoted metadata, evidence excerpts and displayed job commands/paths are escaped and capped at 120 displayed characters. Both modes query live detached jobs; structured details retain full commands/paths. Logs hold full job output. No registry response means UNKNOWN, not no jobs. SIDE EFFECT: returning a matching latest completion's full assistant text acknowledges it and suppresses its pending notice. Returning an error-only completion also acknowledges it, even in a filtered transcript. Clipped/older/filtered text otherwise leaves the notice unread. A receipt-storage failure fails the tool and leaves the completion unread. Never waits for completion or sends an instruction; do not poll.",
     promptSnippet: "check_subsession: inspect a child (status/final output/live tool activity; filter args give its transcript); never yields",
     parameters: CheckSubsessionParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -464,7 +464,7 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
   const sendTool = defineTool<typeof SendSubsessionMessageParams, { sessionId: string }>({
     name: "send_subsession_message",
     label: "Message subsession",
-    description: "Send a steering message to an existing tracked child, preserving its conversation and model. Redirects active work at the next steering boundary without forcibly cancelling running tools; resumes an idle child. Completion notices wake you again; end your turn normally when waiting.",
+    description: "Send another instruction to your existing direct tracked child, preserving its history, model and effort. Reuse this for follow-ups. If working, the message steers it at the next agent boundary; it does NOT cancel a running tool, stop detached jobs or guarantee immediate interruption. If idle, it starts another turn. A successful return means the instruction was accepted, not that work finished or succeeded. It does not wait for a reply; continue other work or end your turn normally and await a completion notice. To interrupt rather than steer, use stop_subsession. Empty/whitespace messages are rejected.",
     promptSnippet: "send_subsession_message: continue an existing child's conversation by sessionId",
     parameters: SendSubsessionMessageParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -479,7 +479,7 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
   const stopTool = defineTool<typeof CheckSubsessionParams, { sessionId: string }>({
     name: "stop_subsession",
     label: "Stop subsession",
-    description: "Interrupt a tracked child's current work and clear its queued prompts. Preserves its history and model so send_subsession_message can resume it later. Only stops your own direct child, not its descendants. Does not undo completed tool actions.",
+    description: "Interrupt only your direct tracked child's current agent run and clear its queued prompts. Preserves history/model/effort; this does not delete or permanently retire the child. Does NOT stop descendants, kill its detached Bash/monitor jobs, undo effects already performed, or erase previously delivered notices. check_subsession can inspect remaining jobs; background_stop must run in the session that owns a job. send_subsession_message resumes the stopped child. Only sessionId is used; inspection options exposed by the shared schema are ignored. The stop can fail; an error is not proof that every operation stopped.",
     parameters: CheckSubsessionParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       await deps.stop(ctx.sessionManager.getSessionId(), params.sessionId, ctx.sessionManager.getSessionFile() ?? undefined);
@@ -493,7 +493,7 @@ export function createSubsessionToolDefinitions(spawningCwd: string, deps: Subse
   const updateTool = defineTool<typeof UpdateSubsessionParams, { sessionId: string; name?: string } & Partial<SubsessionObservation>>({
     name: "update_subsession",
     label: "Update subsession",
-    description: "Change your direct tracked child's display name, model and/or thinking level (at least one). name only changes the persisted display name and works on a working child. model needs an exact provider/model-id and an idle child, keeps the conversation, and clamps the existing thinking level to the new model. thinkingLevel also needs an idle child; when given together with model it is applied after the model change and must be a level the new model supports (otherwise that step is rejected after the model change applied), and the result reports the level in effect. The name is validated first, then the model, then the thinking level, then the rename, so a rejected call (invalid name, unknown model, busy child, not your child) changes nothing; a later step cannot fail after an earlier one applied except by an unexpected runtime error, which is reported with the earlier changes already applied.",
+    description: "Change your direct tracked child's name, model and/or thinkingLevel; provide at least one. Conversation/history are preserved. Name-only works while the child is working. Model and effort changes require idle state when each step is checked; they never stop active work for you. A model-only change lets Pi clamp the existing effort to the new model. An explicit thinkingLevel must be supported by the resulting model or that step rejects it. NOT ATOMIC: validates name first, then applies model, then effort, then rename. There is NO rollback. If effort is invalid, the child becomes busy, or another later step fails, earlier successful changes remain and rename may not happen. The error may not enumerate those changes: inspect the child before retrying. Successful model/effort changes report the settings in effect; name-only changes report the name.",
     parameters: UpdateSubsessionParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       if (params.name === undefined && params.model === undefined && params.thinkingLevel === undefined) throw new Error("Provide name, model, thinkingLevel, or a combination");
@@ -524,7 +524,7 @@ export function createSendParentMessageToolDefinition(deps: Pick<SubsessionToolD
   return defineTool<typeof SendParentMessageParams, { sent: boolean }>({
     name: "send_parent_message",
     label: "Message parent",
-    description: "Send a steering message to your verified parent without ending your run or waiting for a reply. The parent is selected automatically and woken if idle; active work is redirected at the next steering boundary. Only usable by tracked children. Continue working after this tool returns.",
+    description: "Send a progress update/question to your verified parent, selected automatically from this active tracked child's persisted links. Does not end your turn, wait for a reply, or cancel the parent's current tool. An idle parent is woken; a working parent receives steering at its next agent boundary. Success means delivery was scheduled, not that the parent read or answered it; a later delivery failure is reported as a session error. If the parent is compacting, wait until compaction finishes before retrying. Only an active tracked child can use this; blank messages are rejected. Continue working after it returns.",
     parameters: SendParentMessageParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       await deps.sendParent(ctx.sessionManager.getSessionId(), params.message, ctx.sessionManager.getSessionFile() ?? undefined, "steer");

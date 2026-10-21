@@ -200,8 +200,10 @@ describe("createSubsessionToolDefinitions", () => {
       spawn: vi.fn(() => Promise.resolve({ sessionId: "child-1", cwd: "/repos/a" })),
     });
 
-    expect(spawnTool.description).toBe("Start a tracked child session in this session's workspace or another workspace of the same project to carry out part of the current task and return immediately. Its transcript and result are available here after it finishes.");
-    expect(spawnTool.promptSnippet).toBe("spawn_subsession: tracked child work in a same-project workspace; result available after completion");
+    expect(spawnTool.description).toContain("without waiting for its work to finish");
+    expect(spawnTool.description).toContain("does NOT create a worktree");
+    expect(spawnTool.description).toContain("finished turn, not proof its background jobs are done");
+    expect(spawnTool.promptSnippet).toContain("not file isolation");
     expect(spawnTool.description).not.toMatch(/spawn_session|fully independent/i);
 
     const result = await spawnTool.execute("call-contract", { prompt: "do it" }, undefined, undefined, ctxFor("parent-1", undefined));
@@ -211,11 +213,22 @@ describe("createSubsessionToolDefinitions", () => {
   it("distinguishes status inspection from yielding in tool metadata", () => {
     const definitions = tools({});
 
-    expect(definitions.list.description).toContain("List tracked child statuses");
+    expect(definitions.list.description).toContain("Default is a full rendered row for EVERY child");
+    expect(definitions.list.description).toContain("structured details retain all rows");
     expect(definitions.list.promptSnippet).toBe("list_subsessions: inspect child statuses; never yields");
-    expect(definitions.check.description).toContain("returning the child's complete latest final output marks that completion read");
-    expect(definitions.check.description).toContain("transcript mode");
+    expect(definitions.check.description).toContain("SIDE EFFECT");
+    expect(definitions.check.description).toContain("error-only completion also acknowledges it");
+    expect(definitions.check.description).toContain("even if you pass transcript filters");
+    expect(definitions.check.description).toContain("UNKNOWN, not no jobs");
     expect(definitions.check.promptSnippet).toContain("never yields");
+    const update = definitions.definitions.find(({ name }) => name === "update_subsession");
+    const stop = definitions.definitions.find(({ name }) => name === "stop_subsession");
+    expect(update?.description).toContain("NOT ATOMIC");
+    expect(update?.description).toContain("NO rollback");
+    expect(stop?.description).toContain("kill its detached Bash/monitor jobs");
+    expect(stop?.description).toContain("shared schema are ignored");
+    expect(JSON.stringify(definitions.check.parameters)).toContain("NOT a total-output cap");
+    expect(JSON.stringify(definitions.check.parameters)).toContain("maxChars does NOT bound");
   });
 
   it("spawn_subsession omits the inherited model when the dispatching session has no current model", async () => {
