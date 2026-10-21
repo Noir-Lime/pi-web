@@ -135,6 +135,43 @@ test("unmanaged plugin dialogs share the modality boundary", async ({ page }) =>
   await expect(page.locator("dialog .machine-switcher-menu")).toBeVisible();
 });
 
+test("attachment sources stay hidden until requested and activate their native inputs", async ({ page }) => {
+  const editor = page.locator("prompt-editor");
+  const attach = editor.getByRole("button", { name: "Attach files", exact: true });
+  const panel = editor.locator(".attach-source-panel");
+  await expect(panel).toBeHidden();
+  if (test.info().project.name !== "touch") {
+    const chooser = page.waitForEvent("filechooser");
+    await attach.click();
+    const picker = await chooser;
+    expect(await picker.element().getAttribute("class")).toBe("attachment-input");
+    expect(picker.isMultiple()).toBe(true);
+    await expect(panel).toBeHidden();
+    return;
+  }
+  for (const [name, input] of [["Photos", "attachment-image-input"], ["Camera", "attachment-camera-input"], ["Files", "attachment-input"]] as const) {
+    await attach.tap();
+    await expect(panel).toBeVisible();
+    const box = await panel.boundingBox();
+    const viewport = page.viewportSize();
+    if (!box || !viewport) throw new Error("Missing attachment popup geometry");
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
+    expect(box.y + box.height).toBeLessThanOrEqual(viewport.height);
+    const chooser = page.waitForEvent("filechooser");
+    await panel.getByRole("button", { name, exact: true }).tap();
+    expect(await (await chooser).element().getAttribute("class")).toBe(input);
+    await expect(panel).toBeHidden();
+    await expect(attach).toHaveAttribute("aria-expanded", "false");
+  }
+  await attach.tap();
+  await expect(panel).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(panel).toBeHidden();
+  await expect(attach).toBeFocused();
+});
+
 test("hiding the conversation closes its suggestions", async ({ page }) => {
   await page.locator("prompt-editor .cm-content").fill("/");
   await expect(page.locator("autocomplete-menu button")).toBeVisible();

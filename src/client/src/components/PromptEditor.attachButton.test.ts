@@ -3,8 +3,12 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { html } from "lit";
 import { PromptEditor } from "./PromptEditor";
 import { clearStagedAttachments, saveStagedAttachments } from "../promptAttachmentStaging";
+import { installPopoverFake } from "./anchoredPopup.testSupport";
+
+installPopoverFake();
 
 beforeEach(() => {
+  stubAttachSourceMedia(false);
   // CodeMirror measurement is a browser concern; keep this test on the control's native interaction.
   vi.stubGlobal("requestAnimationFrame", () => 1);
   vi.stubGlobal("cancelAnimationFrame", () => undefined);
@@ -35,84 +39,137 @@ it("renders supplied chat navigation inside the input alongside the attachment c
 
 function stubAttachSourceMedia(matches: boolean): void {
   const media = window.matchMedia("(pointer: coarse)");
-  Object.defineProperty(media, "matches", { value: matches });
+  Object.defineProperty(media, "matches", { value: matches, configurable: true });
   vi.spyOn(window, "matchMedia").mockReturnValue(media);
 }
 
-it("offers image and camera pickers so touch devices can reach the photo gallery", async () => {
+async function mountAttachmentControls() {
   const editor = new PromptEditor();
   document.body.append(editor);
   await editor.updateComplete;
-  const image = editor.renderRoot.querySelector<HTMLInputElement>(".attachment-image-input");
+  const attach = editor.renderRoot.querySelector<HTMLButtonElement>(".editor-attach");
+  const panel = editor.renderRoot.querySelector<HTMLDivElement>(".attach-source-panel");
+  const files = editor.renderRoot.querySelector<HTMLInputElement>(".attachment-input");
+  const photos = editor.renderRoot.querySelector<HTMLInputElement>(".attachment-image-input");
   const camera = editor.renderRoot.querySelector<HTMLInputElement>(".attachment-camera-input");
-  // The image accept hint is the contract: Android only offers the photo
-  // gallery for inputs that accept images.
-  expect(image?.accept).toBe("image/*");
-  expect(camera?.getAttribute("capture")).toBe("environment");
-  expect(image?.multiple).toBe(true);
-  expect(camera?.multiple).toBe(true);
+  if (!attach || !panel || !files || !photos || !camera) throw new Error("Expected attachment controls");
+  return { editor, attach, panel, files, photos, camera };
+}
+
+it("keeps library selection separate from the rear-camera capture preference", async () => {
+  const { photos, camera, files } = await mountAttachmentControls();
+  // accept and capture are native chooser hints, not guarantees of OS UI.
+  expect(photos.accept).toBe("image/*");
+  expect(photos.hasAttribute("capture")).toBe(false);
+  expect(photos.multiple).toBe(true);
+  expect(camera.accept).toBe("image/*");
+  expect(camera.getAttribute("capture")).toBe("environment");
+  expect(camera.multiple).toBe(false);
+  expect(files.hasAttribute("accept")).toBe(false);
+  expect(files.multiple).toBe(true);
 });
 
-it("opens the file dialog directly on pointer devices", async () => {
-  stubAttachSourceMedia(false);
-  const editor = new PromptEditor();
-  document.body.append(editor);
-  await editor.updateComplete;
-  const attach = editor.renderRoot.querySelector<HTMLButtonElement>(".editor-attach");
-  const direct = editor.renderRoot.querySelector<HTMLInputElement>(".attachment-input");
-  const panel = editor.renderRoot.querySelector<HTMLDivElement>(".attach-source-panel");
-  if (!attach || !direct || !panel) throw new Error("Expected attachment controls");
-  const showPopover = vi.fn();
-  Object.defineProperty(panel, "showPopover", { value: showPopover, configurable: true });
-  const openDirect = vi.spyOn(direct, "click");
+it("opens the file dialog directly on fine-pointer devices without announcing a menu", async () => {
+  const { attach, panel, files } = await mountAttachmentControls();
+  const shown = vi.spyOn(panel, "showPopover");
+  const open = vi.spyOn(files, "click").mockImplementation(() => undefined);
   attach.click();
-  expect(openDirect).toHaveBeenCalledOnce();
-  expect(showPopover).not.toHaveBeenCalled();
-  expect(attach.getAttribute("aria-expanded")).toBe("false");
+  expect(open).toHaveBeenCalledOnce();
+  expect(shown).not.toHaveBeenCalled();
+  expect(attach.hasAttribute("aria-haspopup")).toBe(false);
+  expect(attach.hasAttribute("aria-expanded")).toBe(false);
+  expect(attach.hasAttribute("aria-controls")).toBe(false);
 });
 
-it("opens the source menu on touch devices and wires each item to its picker", async () => {
+it("opens the touch source group and synchronously activates each native picker", async () => {
   stubAttachSourceMedia(true);
-  const editor = new PromptEditor();
-  document.body.append(editor);
-  await editor.updateComplete;
-  const attach = editor.renderRoot.querySelector<HTMLButtonElement>(".editor-attach");
-  const panel = editor.renderRoot.querySelector<HTMLDivElement>(".attach-source-panel");
-  if (!attach || !panel) throw new Error("Expected attachment source menu");
-  const shown = vi.fn();
-  const hidden = vi.fn();
-  Object.defineProperty(panel, "showPopover", { value: shown, configurable: true });
-  Object.defineProperty(panel, "hidePopover", { value: hidden, configurable: true });
-  attach.click();
-  expect(shown).toHaveBeenCalledOnce();
-  // happy-dom does not implement native popover activation/dismissal. Model only
-  // its toggle notification; native light-dismiss and placement need a browser.
-  panel.dispatchEvent(Object.assign(new Event("toggle"), { newState: "open" }));
-  await editor.updateComplete;
-  expect(attach.getAttribute("aria-expanded")).toBe("true");
+  const { editor, attach, panel, photos, camera, files } = await mountAttachmentControls();
   const items = [...panel.querySelectorAll<HTMLButtonElement>(".ui-menu-item")];
-  expect(items.length).toBe(3);
   expect(items.map((item) => item.textContent.trim())).toEqual(["Photos", "Camera", "Files"]);
-  const [photosItem, cameraItem, filesItem] = items;
-  if (!photosItem || !cameraItem || !filesItem) throw new Error("Expected three attachment source items");
-  const pickImage = editor.renderRoot.querySelector<HTMLInputElement>(".attachment-image-input");
-  const pickCamera = editor.renderRoot.querySelector<HTMLInputElement>(".attachment-camera-input");
-  const pickFiles = editor.renderRoot.querySelector<HTMLInputElement>(".attachment-input");
-  if (!pickImage || !pickCamera || !pickFiles) throw new Error("Expected attachment picker inputs");
-  const pickImageClick = vi.spyOn(pickImage, "click");
-  const pickCameraClick = vi.spyOn(pickCamera, "click");
-  const pickFilesClick = vi.spyOn(pickFiles, "click");
-  photosItem.click();
-  expect(hidden).toHaveBeenCalledOnce();
-  expect(pickImageClick).toHaveBeenCalledOnce();
-  cameraItem.click();
-  expect(pickCameraClick).toHaveBeenCalledOnce();
-  filesItem.click();
-  expect(pickFilesClick).toHaveBeenCalledOnce();
-  // Simulate the native dismissal notification after a pick.
-  panel.dispatchEvent(Object.assign(new Event("toggle"), { newState: "closed" }));
+  expect(panel.getAttribute("role")).toBe("group");
+  expect(attach.hasAttribute("aria-haspopup")).toBe(false);
+  expect(attach.getAttribute("aria-controls")).toBe(panel.id);
+  const shown = vi.spyOn(panel, "showPopover");
+  const hidden = vi.spyOn(panel, "hidePopover");
+  for (const [index, input] of [photos, camera, files].entries()) {
+    attach.click();
+    await editor.updateComplete;
+    expect(attach.getAttribute("aria-expanded")).toBe("true");
+    expect(shown).toHaveBeenLastCalledWith({ source: attach });
+    const pick = vi.spyOn(input, "click").mockImplementation(() => undefined);
+    const item = items[index];
+    if (!item) throw new Error("Missing source item");
+    item.click();
+    // Activation stays inside the click handler to preserve user activation.
+    expect(pick).toHaveBeenCalledOnce();
+    expect(hidden).toHaveBeenCalledTimes(index + 1);
+    expect(editor.shadowRoot?.activeElement).toBe(attach);
+    await editor.updateComplete;
+    expect(attach.getAttribute("aria-expanded")).toBe("false");
+  }
+});
+
+it("reconciles native dismissal and Escape, and can reopen", async () => {
+  stubAttachSourceMedia(true);
+  const { editor, attach, panel } = await mountAttachmentControls();
+  attach.click(); await editor.updateComplete;
+  panel.hidePopover(); await editor.updateComplete;
+  expect(attach.getAttribute("aria-expanded")).toBe("false");
+  attach.click(); await editor.updateComplete;
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
   await editor.updateComplete;
   expect(attach.getAttribute("aria-expanded")).toBe("false");
+  expect(editor.shadowRoot?.activeElement).toBe(attach);
+  attach.click(); await editor.updateComplete;
+  expect(attach.getAttribute("aria-expanded")).toBe("true");
+});
+
+it.each(["disabled", "sending"] as const)("closes the touch picker and disables its items when %s changes", async (property) => {
+  stubAttachSourceMedia(true);
+  const { editor, attach, panel, photos } = await mountAttachmentControls();
+  attach.click(); await editor.updateComplete;
+  const hide = vi.spyOn(panel, "hidePopover");
+  const pick = vi.spyOn(photos, "click").mockImplementation(() => undefined);
+  editor[property] = true;
+  // Guard the event boundary even before Lit renders disabled attributes.
+  panel.querySelector<HTMLButtonElement>("button")?.click();
+  expect(pick).not.toHaveBeenCalled();
+  await editor.updateComplete;
+  expect(hide).toHaveBeenCalledOnce();
+  expect(attach.getAttribute("aria-expanded")).toBe("false");
+  for (const item of panel.querySelectorAll<HTMLButtonElement>("button")) {
+    expect(item.disabled).toBe(true);
+    item.click();
+  }
+  expect(pick).not.toHaveBeenCalled();
+  editor[property] = false;
+  await editor.updateComplete;
+  expect(attach.getAttribute("aria-expanded")).toBe("false");
+});
+
+it("closes the source popup when switching sessions or removing the composer", async () => {
+  stubAttachSourceMedia(true);
+  const { editor, attach, panel } = await mountAttachmentControls();
+  attach.click(); await editor.updateComplete;
+  const hide = vi.spyOn(panel, "hidePopover");
+  editor.sessionId = "another-session";
+  await editor.updateComplete;
+  expect(hide).toHaveBeenCalledOnce();
+  expect(attach.getAttribute("aria-expanded")).toBe("false");
+  attach.click(); await editor.updateComplete;
+  editor.remove();
+  expect(hide).toHaveBeenCalledTimes(2);
+});
+
+it.each(["photos", "camera"] as const)("stages %s selections through the existing attachment pipeline and resets the input", async (source) => {
+  const controls = await mountAttachmentControls();
+  const input = controls[source];
+  Object.defineProperty(input, "files", { configurable: true, value: [new File(["image"], "photo.png", { type: "image/png" })] });
+  input.dispatchEvent(new Event("change"));
+  await vi.waitFor(() => {
+    expect(controls.editor.renderRoot.querySelector(".attachment-chip")).not.toBeNull();
+  });
+  expect(input.value).toBe("");
 });
 
 it("keeps attachment delivery and removal wired through native shared controls", async () => {
