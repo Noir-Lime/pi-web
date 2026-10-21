@@ -123,6 +123,5 @@ export class NavigationSectionResizeHandle extends LitElement {
     [role="separator"]::after { content: ""; position: absolute; top: 50%; inset-inline: 0; height: 1px; transform: translateY(-50%); background: transparent; transition: height .12s ease, background .12s ease, opacity .12s ease; }
     [role="separator"]:hover::after, [role="separator"]:focus-visible::after,
     :host([resizing]) [role="separator"]::after { height: 3px; background: var(--pi-accent); opacity: .72; }
-    @media (pointer: coarse) { [role="separator"] { inset-block: -8px; } }
   `;
 }

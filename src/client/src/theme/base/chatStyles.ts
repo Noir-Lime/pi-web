@@ -29,9 +29,6 @@ export const chatStyles = css`
   .session-warning-path { margin: 0; color: var(--pi-muted); font-size: 12px; font-family: var(--pi-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); overflow-wrap: anywhere; }
   .session-warning-source { color: var(--pi-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
   .session-warning-dismiss { position: absolute; top: 6px; right: 6px; font-size: 18px; }
-  @media (pointer: coarse) {
-    .session-warning { min-height: 56px; padding-right: 56px; }
-  }
   .visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0 0 0 0) !important; clip-path: inset(50%) !important; white-space: nowrap !important; border: 0 !important; }
   /* Contain sticky headers in the scroller's paint context, below its overlay scrollbar. */
   .chat { isolation: isolate; --pi-chat-sticky-top: 0px; flex: 1 1 auto; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 0; box-sizing: border-box; }
@@ -107,16 +104,9 @@ export const chatStyles = css`
   .msg-actions [role="alert"] { max-width: 240px; padding: 4px 10px; color: var(--pi-danger); }
   .msg-fork-icon { font-size: 14px; }
   .msg-info-icon { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
-  pi-message-actions-menu { flex: 0 0 auto; opacity: 0; pointer-events: none; }
+  pi-message-actions-menu { flex: 0 0 auto; }
   .label { display: block; color: var(--pi-muted); font-size: 12px; font-weight: 400; }
   .msg-header .label { min-width: 0; margin: 0; overflow-wrap: anywhere; }
-  .msg:hover > .msg-header pi-message-actions-menu, .msg:focus-within > .msg-header pi-message-actions-menu,
-  .msg:hover > .conversation-content > .msg-header pi-message-actions-menu, .msg:focus-within > .conversation-content > .msg-header pi-message-actions-menu,
-  .group-msg:hover > .transcript-content > .msg-header pi-message-actions-menu, .group-msg:focus-within > .transcript-content > .msg-header pi-message-actions-menu,
-  pi-message-actions-menu:focus-within, pi-message-actions-menu[open] { opacity: 1; pointer-events: auto; }
-  @media (hover: none), (pointer: coarse) {
-    pi-message-actions-menu { opacity: 1; pointer-events: auto; }
-  }
   .msg-actions-strip .ui-button:hover:not(:disabled), .msg-meta[aria-expanded="true"] { background: color-mix(in srgb, var(--pi-text) 8%, transparent); color: var(--pi-text); }
   .msg-meta-details { clear: both; min-width: 0; padding: 6px 0; color: var(--pi-muted); font: 12px/18px var(--pi-font, system-ui, sans-serif); overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
   formatted-text.part { display: block; }

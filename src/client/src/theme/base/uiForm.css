@@ -8,6 +8,3 @@
   .ui-checkbox-field input { flex: 0 0 auto; margin: 0; accent-color: var(--pi-accent); }
   .ui-checkbox-field:has(input:focus-visible) { outline: 2px solid var(--pi-accent); outline-offset: 1px; }
   .ui-form-error { border: 1px solid var(--pi-danger); border-radius: 6px; background: color-mix(in srgb, var(--pi-danger) 10%, transparent); color: var(--pi-danger); padding: 10px 12px; line-height: 1.4; overflow-wrap: anywhere; }
-  @media (pointer: coarse) {
-    .ui-checkbox-field { min-height: 44px; }
-  }

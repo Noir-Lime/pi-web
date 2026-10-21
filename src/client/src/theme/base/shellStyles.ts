@@ -289,9 +289,6 @@ export const promptEditorLayoutStyles = css`
   .attachment-file-preview { display: grid; place-items: center; width: 34px; height: 26px; border: 1px solid var(--pi-border-muted); border-radius: 4px; background: var(--pi-surface); color: var(--pi-muted); font: 700 10px/1 var(--pi-font, system-ui, sans-serif); letter-spacing: .03em; }
   .attachment-file-name { position: absolute; inset-inline-end: calc(var(--attachment-remove-width) + 4px); bottom: 3px; inset-inline-start: 4px; overflow: hidden; color: var(--pi-muted); font-size: 10px; line-height: 1.2; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
   .attachment-remove { position: absolute; top: 0; inset-inline-end: 0; width: var(--attachment-remove-width); height: 100%; border-inline-start: 1px solid var(--pi-border-muted); background: var(--pi-surface); }
-  @media (pointer: coarse) {
-    .attachment-chip { --attachment-remove-width: 44px; }
-  }
   .attachment-delivery { min-width: 0; max-width: 100%; }
   .attachment-delivery .ui-select { width: 100%; }
   .attachment-error { flex-basis: 100%; color: var(--pi-danger); font-size: 12px; }

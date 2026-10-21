@@ -371,9 +371,6 @@ export class WorkspaceFileViewer extends LitElement {
       .viewer-mode button:hover, .viewer-actions .viewer-action:hover { background: var(--pi-surface-hover); color: var(--pi-text); }
       .viewer-mode button[aria-pressed="true"] { background: var(--pi-surface-hover); color: var(--pi-text); }
       .viewer-actions button:focus-visible, .viewer-actions a:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: -2px; }
-      @media (pointer: coarse) {
-        .viewer-mode button, .viewer-actions .viewer-action { min-width: 44px; min-height: 44px; }
-      }
       .preview-state button:focus-visible, a:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 1px; }
       pi-web-files-code-viewer { flex: 1 1 auto; min-height: 0; }
       .markdown-preview { flex: 1 1 auto; min-height: 0; box-sizing: border-box; overflow: auto; padding: 16px; }

@@ -409,7 +409,7 @@ The current bundle provides these native HTML patterns:
 | Tabs | `.ui-tabs` containing `button.ui-button.ui-tab`; optionally `ui-tabs--primary` for main navigation; nested groups can use `.ui-toolbar-group` |
 | Active tab | `.selected`, `aria-current="page"`, or `aria-pressed="true"` on the tab button |
 
-Toolbars and tabs use compact 32px desktop controls by default. Primary variants use 44px controls; coarse-pointer targets grow to at least 44px. Icon-only buttons need an accessible name. Keep grouped controls gapless and let the shared styles provide separators and hover/focus states. Use existing `--pi-*` colour tokens in plugin-specific content styles so theme changes continue to propagate through shadow roots.
+Toolbars and tabs use compact 32px controls by default. Primary variants use 44px controls. Control dimensions stay consistent across input types; use available viewport or container space, not touch capability, for responsive sizing. Icon-only buttons need an accessible name. Keep grouped controls gapless and let the shared styles provide separators and hover/focus states. Use existing `--pi-*` colour tokens in plugin-specific content styles so theme changes continue to propagate through shadow roots.
 
 The shared bundle also provides compact file/tree lists:
 

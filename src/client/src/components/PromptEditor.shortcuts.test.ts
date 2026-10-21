@@ -11,7 +11,7 @@ afterEach(() => {
 });
 
 async function mount(shortcut: string | null, mobile = false) {
-  const media = window.matchMedia("(pointer: coarse)");
+  const media = window.matchMedia("(max-width: 760px)");
   Object.defineProperty(media, "matches", { value: mobile });
   vi.spyOn(window, "matchMedia").mockReturnValue(media);
   const editor = new PromptEditor();

@@ -27,9 +27,6 @@
   .notification-row-dismiss { position: absolute; top: 5px; right: 0; }
   .visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0 0 0 0) !important; clip-path: inset(50%) !important; white-space: nowrap !important; border: 0 !important; }
   .notification-live span { display: block; }
-  @media (pointer: coarse) {
-    .notification-row { min-height: 54px; padding-right: 50px; }
-  }
   @media (max-width: 520px) {
     .notification-header { gap: 4px; padding-inline: 8px; }
     .notification-list { padding-inline: 8px; }
