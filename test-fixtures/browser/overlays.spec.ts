@@ -1,4 +1,12 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
+
+async function typeComposerText(input: Locator, text: string): Promise<void> {
+  // Exercise CodeMirror through keyboard input, not contenteditable DOM filling.
+  // WebKit can finish fill() without inserting text into this shadow-root editor.
+  await input.press("ControlOrMeta+A");
+  await input.press("Backspace");
+  await input.pressSequentially(text);
+}
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/overlays.html");
@@ -8,7 +16,7 @@ test.beforeEach(async ({ page }) => {
 test("completions escape layout clipping, preserve editor focus, and disappear on session changes", async ({ page }) => {
   const input = page.locator("prompt-editor .cm-content");
   for (const trigger of ["/", "@", "#"]) {
-    await input.fill(trigger);
+    await typeComposerText(input, trigger);
     const suggestion = page.locator("autocomplete-menu button").first();
     await expect(suggestion).toBeVisible();
     await suggestion.click({ trial: true });
@@ -16,14 +24,14 @@ test("completions escape layout clipping, preserve editor focus, and disappear o
     await input.press("Escape");
     await expect(page.locator("autocomplete-menu [popover]:popover-open")).toHaveCount(0);
   }
-  await input.fill("/");
+  await typeComposerText(input, "/");
   const pick = page.locator("autocomplete-menu button");
   await expect(pick).toBeVisible();
   if (test.info().project.name === "touch") await pick.tap();
   else await pick.click();
   await expect(input).toHaveText("/tree");
   await expect(input).toBeFocused();
-  await input.fill("/");
+  await typeComposerText(input, "/");
   await expect(page.locator("autocomplete-menu button")).toBeVisible();
   await page.getByRole("button", { name: "Switch session", exact: true }).click();
   await expect(page.locator("autocomplete-menu [popover]:popover-open")).toHaveCount(0);
@@ -96,7 +104,7 @@ test("message actions share top-layer placement and restore their trigger", asyn
 
 test("modal ownership dismisses background suggestions, allows owned menus, and restores focus", async ({ page }) => {
   const input = page.locator("prompt-editor .cm-content");
-  await input.fill("/");
+  await typeComposerText(input, "/");
   await expect(page.locator("autocomplete-menu button")).toBeVisible();
   const opener = page.getByRole("button", { name: "Open dialog", exact: true });
   await opener.click();
@@ -126,7 +134,7 @@ test("modal ownership dismisses background suggestions, allows owned menus, and 
 });
 
 test("unmanaged plugin dialogs share the modality boundary", async ({ page }) => {
-  await page.locator("prompt-editor .cm-content").fill("/");
+  await typeComposerText(page.locator("prompt-editor .cm-content"), "/");
   await expect(page.locator("autocomplete-menu button")).toBeVisible();
   await page.evaluate(() => { window.overlayFixture.openPluginModal(); });
   await expect(page.getByRole("textbox", { name: "Plugin input" })).toBeFocused();
@@ -135,8 +143,45 @@ test("unmanaged plugin dialogs share the modality boundary", async ({ page }) =>
   await expect(page.locator("dialog .machine-switcher-menu")).toBeVisible();
 });
 
+test("attachment sources stay hidden until requested and activate their native inputs", async ({ page }) => {
+  const editor = page.locator("prompt-editor");
+  const attach = editor.getByRole("button", { name: "Attach files", exact: true });
+  const panel = editor.locator(".attach-source-panel");
+  await expect(panel).toBeHidden();
+  if (test.info().project.name !== "touch") {
+    const chooser = page.waitForEvent("filechooser");
+    await attach.click();
+    const picker = await chooser;
+    expect(await picker.element().getAttribute("class")).toBe("attachment-input");
+    expect(picker.isMultiple()).toBe(true);
+    await expect(panel).toBeHidden();
+    return;
+  }
+  for (const [name, input] of [["Photos", "attachment-image-input"], ["Camera", "attachment-camera-input"], ["Files", "attachment-input"]] as const) {
+    await attach.tap();
+    await expect(panel).toBeVisible();
+    const box = await panel.boundingBox();
+    const viewport = page.viewportSize();
+    if (!box || !viewport) throw new Error("Missing attachment popup geometry");
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
+    expect(box.y + box.height).toBeLessThanOrEqual(viewport.height);
+    const chooser = page.waitForEvent("filechooser");
+    await panel.getByRole("button", { name, exact: true }).tap();
+    expect(await (await chooser).element().getAttribute("class")).toBe(input);
+    await expect(panel).toBeHidden();
+    await expect(attach).toHaveAttribute("aria-expanded", "false");
+  }
+  await attach.tap();
+  await expect(panel).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(panel).toBeHidden();
+  await expect(attach).toBeFocused();
+});
+
 test("hiding the conversation closes its suggestions", async ({ page }) => {
-  await page.locator("prompt-editor .cm-content").fill("/");
+  await typeComposerText(page.locator("prompt-editor .cm-content"), "/");
   await expect(page.locator("autocomplete-menu button")).toBeVisible();
   await page.evaluate(() => { window.overlayFixture.hideConversation(); });
   await expect(page.locator("autocomplete-menu [popover]:popover-open")).toHaveCount(0);

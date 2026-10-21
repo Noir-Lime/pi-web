@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -90,7 +90,7 @@ describe("Pi package selection", () => {
     await executableFixture(host, bin);
     expect(await selectPiRuntimePackageDir({
       env: { PATH: [join(directory, "absent"), bin].join(delimiter) }, resolveLocalSdk: missingLocalSdk,
-    })).toBe(host);
+    })).toBe(await realpath(host));
   });
 
   it("finds the SDK beside an npm Windows command shim", async () => {
@@ -101,7 +101,7 @@ describe("Pi package selection", () => {
     await chmod(join(prefix, "pi.cmd"), 0o755);
     expect(await selectPiRuntimePackageDir({
       env: { PATH: prefix }, platform: "win32", resolveLocalSdk: missingLocalSdk,
-    })).toBe(host);
+    })).toBe(await realpath(host));
   });
 
   it("does not silently replace an unsupported PATH Pi with a later installation", async () => {
@@ -154,12 +154,13 @@ it("loads the selected public SDK/AI graph without changing other Node imports a
   await symlink(resolverRoot, join(application, "node_modules", "import-meta-resolve"));
   await writeFile(join(application, "probe.js"), `
     import assert from 'node:assert/strict';
+    import { join } from 'node:path';
     import { loadPiSdk, loadPiAi, resolvePiRuntimeImport, piRuntimeCliPath } from './piRuntime.js';
     const sdk = await loadPiSdk();
     assert.equal(await loadPiSdk(), sdk);
     const ai = await loadPiAi();
     assert.equal(await loadPiAi(), ai);
-    assert.equal(ai.identity, sdk.identity + '/node_modules/@earendil-works/pi-ai');
+    assert.equal(ai.identity, join(sdk.identity, 'node_modules', '@earendil-works/pi-ai'));
     assert.equal((await import(await resolvePiRuntimeImport('${sdkName}/public'))).value, 'public');
     await assert.rejects(resolvePiRuntimeImport('${sdkName}/private'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
     assert.equal((await import('${sdkName}')).identity, ${JSON.stringify(localSdk)});
