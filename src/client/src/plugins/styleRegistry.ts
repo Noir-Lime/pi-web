@@ -93,6 +93,18 @@ export class PluginStyleRegistry {
     }
     this.replaceSheets(this.sheets.filter((sheet) => retainedSheets.has(sheet)));
 
+    const publishLoadedSheets = () => {
+      if (revision !== this.revision) return;
+      // Publish every completed file in contribution order, without waiting for peers.
+      const sheets = ordered.flatMap(({ url }) => {
+        const sheet = this.files.get(url)?.sheet;
+        return sheet === undefined ? [] : [sheet];
+      });
+      // Multiple contributions can intentionally reference the same file.
+      this.replaceSheets([...new Set(sheets)]);
+    };
+    publishLoadedSheets();
+
     const loaded = await Promise.allSettled(ordered.map(async (contribution) => {
       let file = this.files.get(contribution.url);
       if (file === undefined) {
@@ -106,6 +118,7 @@ export class PluginStyleRegistry {
       try {
         const sheet = await requestedFile.loaded;
         requestedFile.sheet = sheet;
+        publishLoadedSheets();
         return sheet;
       } catch (cause) {
         if (this.files.get(contribution.url) === requestedFile) this.files.delete(contribution.url);
@@ -113,16 +126,10 @@ export class PluginStyleRegistry {
       }
     }));
     if (revision !== this.revision) return;
-    // Independent contributions must not block each other, especially theme files.
-    // Keep the requested order regardless of completion order or failures.
-    const sheets: CSSStyleSheet[] = [];
     const errors: unknown[] = [];
     for (const result of loaded) {
-      if (result.status === "fulfilled") sheets.push(result.value);
-      else errors.push(result.reason);
+      if (result.status === "rejected") errors.push(result.reason);
     }
-    // Multiple contributions can intentionally reference the same file.
-    this.replaceSheets([...new Set(sheets)]);
     if (errors.length === 1) throw errors[0];
     if (errors.length > 1) throw new AggregateError(errors, "Failed to load plugin stylesheets");
   }

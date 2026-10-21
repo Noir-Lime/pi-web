@@ -20,7 +20,7 @@ function isStylesheetIntegration(value: unknown): value is StylesheetIntegration
 }
 
 const plugin = {
-  apiVersion: 4,
+  apiVersion: 5,
   name: "Mermaid",
   // Fail explicitly on older API v4 hosts that cannot consume renderers.
   // This plugin contributes to the capability but does not call its methods.

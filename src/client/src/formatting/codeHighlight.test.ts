@@ -6,6 +6,7 @@ import type { TokenHighlightedCode } from "../../../../pi-web-plugins/code-highl
 import { PluginRegistry } from "../plugins/registry";
 import { adaptPublicPlugin } from "../plugins/publicContext";
 import { FormattedText } from "../components/FormattedText";
+import { createContentRenderingService } from "./contentRendering";
 import { ContentRendererHost } from "../components/ContentRendererHost";
 import { HighlightedCode } from "../../../../pi-web-plugins/code-highlight/HighlightedCode";
 import plugin from "../../../../pi-web-plugins/code-highlight/pi-web-plugin";
@@ -72,6 +73,46 @@ it("extends the one Highlighted renderer with plugin grammars and filename match
   expect(preview.renderRoot.querySelector("code")?.textContent).toBe(source);
   expect(preview.renderRoot.querySelector("script")).toBeNull();
   expect(host.renderRoot.querySelector("select")).toBeNull();
+});
+
+it("refreshes a mounted Highlighted preview after late grammar registration and enablement changes", async () => {
+  let grammarEnabled = true;
+  const registry = new PluginRegistry({ isContributionEnabled: (id) => id !== "grammar" || grammarEnabled });
+  await registry.register({ id: "code-highlight", plugin: adaptPublicPlugin(plugin) });
+  const view = new FormattedText();
+  view.text = "```js\nconst x = 1;\n```";
+  // Exercise the service/host boundary; the registry owns stable revision identity.
+  const refresh = async (revision: object) => {
+    view.contentRendering = createContentRenderingService((request) => registry.matchContentRenderers(request), () => revision);
+    await settleDeferredContent(view);
+  };
+  document.body.append(view);
+  await refresh({});
+  const host = view.renderRoot.querySelector<ContentRendererHost>("pi-web-content-renderer");
+  if (host === null) throw new Error("Expected Highlighted host");
+  await settleDeferredContent(host);
+  expect(host.renderRoot.querySelector("pi-web-highlighted-code")).not.toBeNull();
+  await registry.register({ id: "grammar", plugin: {
+    apiVersion: 5, name: "Grammar", activate: () => ({ contributions: { syntaxHighlighters: [{
+      id: "js", languages: ["js"], highlight: () => [{ from: 0, to: 5, kind: "type" }],
+    }] } }),
+  } });
+  await refresh({});
+  await settleDeferredContent(host);
+  expect(view.renderRoot.querySelector("pi-web-content-renderer")).toBe(host);
+  const preview = host.renderRoot.querySelector<TokenHighlightedCode>("pi-web-token-highlighted-code");
+  if (preview === null) throw new Error("Expected late grammar preview");
+  await vi.waitFor(() => { expect(preview.renderRoot.querySelector(".hljs-type")?.textContent).toBe("const"); });
+  grammarEnabled = false;
+  await refresh({});
+  await settleDeferredContent(host);
+  expect(host.renderRoot.querySelector("pi-web-token-highlighted-code")).toBeNull();
+  expect(host.renderRoot.querySelector("pi-web-highlighted-code")).not.toBeNull();
+  grammarEnabled = true;
+  await refresh({});
+  await settleDeferredContent(host);
+  expect(host.renderRoot.querySelector("pi-web-token-highlighted-code")).not.toBeNull();
+  await registry.dispose();
 });
 
 it("offers two independent highlighting systems and defaults to the last discovered one", async () => {

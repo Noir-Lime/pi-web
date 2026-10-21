@@ -88,7 +88,7 @@ export interface QualifiedStylesheetContribution extends StylesheetContribution 
 
 export interface PluginContributions {
   stylesheets?: StylesheetContribution[];
-  contentRenderers?: import("../../../plugin-api").ContentRendererContribution[];
+  contentRenderers?: import("../../../plugin-api").ContentRendererContributionV5[];
   syntaxHighlighters?: import("../../../plugin-api").SyntaxHighlighterContribution[];
   messageActions?: import("../../../plugin-api").MessageActionContribution[];
   actions?: PluginAction[];
@@ -435,6 +435,8 @@ export interface ThemeContribution {
   order?: number;
   colorScheme: ThemeColorScheme;
   stylesheets?: StylesheetContribution[];
+  /** Compatibility-only palettes from v4 plugins. */
+  tokens?: import("../../../plugin-api").ThemeTokens;
 }
 
 export interface ThemePairContribution {

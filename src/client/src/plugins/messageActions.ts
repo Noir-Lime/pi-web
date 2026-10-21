@@ -1,4 +1,4 @@
-import type { DisplayedMessageActionAvailabilityContext, DisplayedMessageActionMessage, MessageActionAvailabilityContext, MessageActionContribution, MessageActionMessage } from "../../../plugin-api";
+import type { DisplayedMessageActionAvailabilityContext, DisplayedMessageActionMessage, MessageActionAvailabilityContextV5 as MessageActionAvailabilityContext, MessageActionContribution, MessageActionMessageV5 as MessageActionMessage } from "../../../plugin-api";
 import type { ChatLine } from "../chatTypes";
 import type { WorkspacePluginBinding } from "./types";
 

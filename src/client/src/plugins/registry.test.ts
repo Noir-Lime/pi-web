@@ -248,7 +248,7 @@ describe("PluginRegistry", () => {
           render: panelRender,
         }],
         workspaceLabels: [{ id: "label", items: labelItems }],
-        themes: [{ id: "light", name: "Light", colorScheme: "light" }],
+        themes: [{ id: "light", name: "Light", colorScheme: "light", tokens: {} }],
         themePairs: [{ id: "pair", name: "Pair", light: "light", dark: "light" }],
       },
     }));
@@ -311,7 +311,7 @@ describe("PluginRegistry", () => {
               render: () => html`<p>Portable</p>`,
             }],
             workspaceLabels: [{ id: "label", items: () => [{ type: "text", text: "portable" }] }],
-            themes: [{ id: "theme", name: "Portable", colorScheme: "light" }],
+            themes: [{ id: "theme", name: "Portable", colorScheme: "light", tokens: {} }],
           },
         }),
       },
@@ -1536,8 +1536,8 @@ describe("PluginRegistry", () => {
         activate: () => ({
           contributions: {
             themes: [
-              { id: "last", name: "Last", order: 20, colorScheme: "dark" },
-              { id: "first", name: "First", order: 10, colorScheme: "light" },
+              { id: "last", name: "Last", order: 20, colorScheme: "dark", tokens: {} },
+              { id: "first", name: "First", order: 10, colorScheme: "light", tokens: {} },
             ],
             themePairs: [
               { id: "pair", name: "Pair", light: "first", dark: "last" },
@@ -1631,7 +1631,7 @@ describe("PluginRegistry", () => {
             actions: [{ id: "do-thing", title: "Do Thing", run: () => undefined }],
             workspacePanels: [{ id: "workspace.tools", title: "Tools", render: () => html`<p>Tools</p>` }],
             workspaceLabels: [{ id: "badge", items: () => [{ type: "text", text: "remote" }] }],
-            themes: [{ id: "remote-theme", name: "Remote Theme", colorScheme: "dark" }],
+            themes: [{ id: "remote-theme", name: "Remote Theme", colorScheme: "dark", tokens: {} }],
           },
         }),
       },

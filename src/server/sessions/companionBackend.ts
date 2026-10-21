@@ -1,7 +1,7 @@
 import type { EventBus } from "@earendil-works/pi-coding-agent";
 import type { PluginBackend, PluginBackendScope, PluginPeer, PluginPeerChannel, PluginPeerChannelClose, PluginPeerChannelOptions } from "../../shared/pluginApiTypes.js";
 import type { JsonValue } from "../../server-plugin-api.js";
-import { cloneBoundedPluginBackendJson, PLUGIN_BACKEND_CHANNEL_DATA_JSON_MAX_BYTES, PLUGIN_BACKEND_CHANNEL_QUEUE_MAX_FRAMES, PLUGIN_BACKEND_CHANNEL_QUEUE_MAX_BYTES, PLUGIN_BACKEND_CHANNEL_DRAIN_TIMEOUT_MS } from "../../shared/pluginBackendProtocol.js";
+import { cloneBoundedPluginBackendJson, PLUGIN_BACKEND_CHANNEL_DATA_JSON_MAX_BYTES, PLUGIN_BACKEND_CHANNEL_QUEUE_MAX_FRAMES, PLUGIN_BACKEND_CHANNEL_QUEUE_MAX_BYTES, PLUGIN_BACKEND_CHANNEL_DRAIN_TIMEOUT_MS, PLUGIN_BACKEND_CHANNEL_SERVER_TO_BROWSER_QUEUE_MAX_BYTES, serializePluginBackendChannelDataEnvelope, serializePluginBackendChannelReadyEnvelope } from "../../shared/pluginBackendProtocol.js";
 import type { PluginBackendRegistry, PluginBackendRequest, PluginBackendChannelSession } from "../plugins/pluginBackendRegistry.js";
 import type { ServerPluginPairedBackendContribution } from "../plugins/serverPluginRuntime.js";
 import type { ProjectService } from "../projects/projectService.js";
@@ -145,12 +145,17 @@ async function openChannel(
   let result: PluginPeerChannelClose | undefined;
   let closing = false;
   let draining = false;
+  let ready = false;
+  const openingFrames: JsonValue[] = [];
+  let openingBytes = 0;
+  const discardOpeningFrames = () => { openingFrames.length = 0; openingBytes = 0; };
   let queued = Promise.resolve();
   let error: PluginPeerChannelClose["error"];
   let resolveClosed!: (close: PluginPeerChannelClose) => void;
   const closed = new Promise<PluginPeerChannelClose>((resolve) => { resolveClosed = resolve; });
   const finish = (code: number, reason: string) => {
     if (result !== undefined) return;
+    discardOpeningFrames();
     result = Object.freeze({ code, reason, wasClean: code === 1000 && error === undefined, ...(error === undefined ? {} : { error }) });
     call.signal.removeEventListener("abort", abort);
     call.dispose();
@@ -187,9 +192,18 @@ async function openChannel(
       session = await backends.openChannel(request, {
         send: (data) => {
           if ((closing && !draining) || result !== undefined) throw new Error("Companion channel is closed");
-          options.onData(data);
+          if (ready) { options.onData(data); return; }
+          // Match the browser writer: reserve room for ready and bound serialized frames.
+          const bytes = Buffer.byteLength(serializePluginBackendChannelDataEnvelope(data), "utf8");
+          const readyBytes = Buffer.byteLength(serializePluginBackendChannelReadyEnvelope(), "utf8");
+          if (openingFrames.length >= PLUGIN_BACKEND_CHANNEL_QUEUE_MAX_FRAMES - 1
+            || openingBytes + bytes + readyBytes > PLUGIN_BACKEND_CHANNEL_SERVER_TO_BROWSER_QUEUE_MAX_BYTES) {
+            throw new Error("Companion channel plugin queue limit was exceeded");
+          }
+          openingFrames.push(data);
+          openingBytes += bytes;
         },
-        sendError: (code, message) => { error ??= Object.freeze({ code, message }); },
+        sendError: (code, message) => { discardOpeningFrames(); error ??= Object.freeze({ code, message }); },
         close: finish,
       }, call.signal);
       if (result !== undefined || call.signal.aborted) {
@@ -203,6 +217,18 @@ async function openChannel(
   }
   if (session === undefined) throw new Error("Companion channel did not open");
   const opened = session;
+  ready = true;
+  const isClosed = () => closing || result !== undefined || call.signal.aborted;
+  try {
+    for (const frame of openingFrames) {
+      if (isClosed()) break;
+      options.onData(frame);
+    }
+  } catch (failure) {
+    // Once ready, consumer failures close the channel rather than fail its open.
+    error ??= Object.freeze({ code: "protocol-error", message: failure instanceof Error ? failure.message : String(failure) });
+    close(1000, "Channel protocol error");
+  } finally { discardOpeningFrames(); }
   let pending = 0;
   let pendingBytes = 0;
   return Object.freeze({

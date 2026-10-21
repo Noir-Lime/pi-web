@@ -9,8 +9,8 @@ export const chatStyles = css`
   ${uiTranscriptStyles}
   ${chatNavigationStyles}
   @layer pi-web-base {
-  :host { position: relative; z-index: 0; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; color: var(--pi-text); font: 14px var(--pi-font, system-ui, sans-serif); }
-  .chat-wrap { --pi-chat-jump-size: 28px; position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+  :host { position: relative; z-index: 0; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: visible; color: var(--pi-text); font: 14px var(--pi-font, system-ui, sans-serif); }
+  .chat-wrap { --pi-chat-jump-size: 28px; position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; overflow: visible; display: flex; flex-direction: column; }
   .top-notices { box-sizing: border-box; flex: 0 0 auto; max-height: 40%; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border-bottom: 1px solid var(--pi-border); background: var(--pi-bg-overlay); }
   /* Empty notification hosts retain live regions without leaving a visible stack boundary. */
   .top-notices:not(:has(> .session-warnings)):has(> session-notification-tray[empty]) { border-bottom: 0; }
@@ -39,7 +39,8 @@ export const chatStyles = css`
   .chat-wrap.plain .msg-header, .chat-wrap.plain .event-group > summary { position: static; top: auto; }
   .chat-wrap.plain *, .chat-wrap.plain *::before, .chat-wrap.plain *::after { transition: none !important; animation: none !important; box-shadow: none !important; text-shadow: none !important; filter: none !important; backdrop-filter: none !important; transform: none !important; border-radius: 0 !important; }
   .chat-wrap.plain .chat-image { --pi-image-radius: 0; }
-  .activity-dock { position: absolute; bottom: 0; left: 50%; transform: translateX(-50%); z-index: 20; display: flex; align-items: center; gap: 4px; max-width: calc(100% - 16px); height: var(--pi-chat-jump-size); min-width: 0; box-sizing: border-box; background: var(--pi-success-surface); color: var(--pi-text); padding: 3px 6px; font-size: 11px; line-height: 16px; pointer-events: none; }
+  /* Straddle the composer border without reserving a separate row. */
+  .activity-dock { position: absolute; bottom: -9px; left: 50%; transform: translateX(-50%); z-index: 20; display: flex; align-items: center; gap: 4px; max-width: calc(100% - 16px); height: 18px; min-width: 0; box-sizing: border-box; background: var(--pi-success-surface); color: var(--pi-text); padding: 1px 6px; font-size: 11px; line-height: 16px; pointer-events: none; }
   .chat-wrap.plain .activity-dock { left: 8px; right: 8px; width: max-content; margin-inline: auto; }
   .activity-dock.active .dot { color: var(--pi-success); }
   .activity-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

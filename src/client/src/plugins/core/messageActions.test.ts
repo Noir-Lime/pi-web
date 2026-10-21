@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DisplayedMessageActionContext, DisplayedMessageActionContribution, MessageActionAvailabilityContext } from "../../../../plugin-api";
+import type { DisplayedMessageActionContext, DisplayedMessageActionContribution, MessageActionAvailabilityContextV5 as MessageActionAvailabilityContext } from "../../../../plugin-api";
 import { availableDisplayedMessageActions, availableMessageActions } from "../messageActions";
 import { createCoreMessageActions } from "./messageActions";
 

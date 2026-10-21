@@ -38,6 +38,8 @@ export class ContentRendererHost extends LitElement {
   @property() intentKey: string | undefined;
   private restoreIntent = true;
   @property({ attribute: false }) choices: readonly ContentRendererChoice[] = [];
+  // Host-private dependency token: grammar eligibility can change without a new renderer.
+  @property({ attribute: false }) renderingRevision: unknown;
   @property() rendererId: string | undefined;
   @property({ type: Boolean }) allowManualPreview = false;
   @state() private manuallyActivated = false;
@@ -77,6 +79,11 @@ export class ContentRendererHost extends LitElement {
       this.cancelPreview();
       this.failure = undefined;
       this.copyStatus = "Copy source";
+    }
+    if (changes.has("renderingRevision")) {
+      // Refresh output/failures without discarding explicit activation or Raw intent.
+      this.cancelPreview();
+      this.failure = undefined;
     }
     if (this.activateSelected) {
       this.manuallyActivated = true;

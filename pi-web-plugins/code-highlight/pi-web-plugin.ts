@@ -44,7 +44,7 @@ function builtInLanguage(request: Pick<ContentRenderRequest, "language" | "fileP
 }
 
 const plugin = {
-  apiVersion: 4,
+  apiVersion: 5,
   name: "Code highlighting",
   requires: [stylesheetIntegrationCapability, syntaxHighlightingCapability, { pluginId: "pi-web", id: "content-rendering", version: 1, parse: () => undefined }],
   activate: ({ html }) => {

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { html } from "lit";
-import type { ContentRendererContribution } from "../../../plugin-api";
+import type { ContentRendererContributionV5 as ContentRendererContribution } from "../../../plugin-api";
 import { PluginRegistry } from "./registry";
 import { contentRendererMatches, snapshotContentRenderer } from "./contentRenderers";
 import { contentRenderingCapabilityToken } from "../formatting/contentRendering";
@@ -10,7 +10,7 @@ function contribution(): ContentRendererContribution {
 }
 
 function plugin() {
-  return { apiVersion: 4 as const, name: "Diagram", activate: () => ({ contributions: { contentRenderers: [contribution()] } }) };
+  return { apiVersion: 5 as const, name: "Diagram", activate: () => ({ contributions: { contentRenderers: [contribution()] } }) };
 }
 
 const request = { machineId: "remote", text: "graph TD", language: "MERMAID extra" };

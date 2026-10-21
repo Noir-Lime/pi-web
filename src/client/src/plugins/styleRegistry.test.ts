@@ -52,17 +52,91 @@ describe("PluginStyleRegistry", () => {
     const registry = new PluginStyleRegistry((url) => url === a.url ? first.promise : second.promise);
     const root = shadowRoot();
     registry.registerRoot(root);
-    const update = registry.setContributions([b, a]);
+    registry.registerRoot(document);
+    const snapshots: CSSStyleSheet[][] = [];
+    const unsubscribe = registry.subscribe(() => {
+      expect(document.adoptedStyleSheets).toEqual(root.adoptedStyleSheets);
+      snapshots.push([...root.adoptedStyleSheets]);
+    });
+    const update = registry.setContributions([b, a, { ...b, id: "test:zalias" }]);
+    const settled = vi.fn();
+    void update.then(settled);
     const aSheet = new CSSStyleSheet();
     const bSheet = new CSSStyleSheet();
     second.resolve(bSheet);
+    await vi.waitFor(() => { expect(snapshots).toEqual([[bSheet]]); });
+    expect(settled).not.toHaveBeenCalled();
+    const later = shadowRoot("closed");
+    registry.registerRoot(later);
+    expect(later.adoptedStyleSheets).toEqual([bSheet]);
     first.resolve(aSheet);
     await update;
+    expect(snapshots).toEqual([[bSheet], [aSheet, bSheet]]);
+    expect(later.adoptedStyleSheets).toEqual([aSheet, bSheet]);
     expect(root.adoptedStyleSheets).toEqual([aSheet, bSheet]);
+    unsubscribe();
     const local = new CSSStyleSheet();
     root.adoptedStyleSheets = [local, ...root.adoptedStyleSheets];
     await registry.setContributions([{ ...a, order: 20 }, { ...b, order: 10 }]);
     expect(root.adoptedStyleSheets).toEqual([local, bSheet, aSheet]);
+    registry.clear();
+  });
+
+  it("publishes a replacement theme while a retained unrelated file is still loading", async () => {
+    const unrelated = deferredSheet();
+    const replacement = deferredSheet();
+    const theme = { id: "test:theme", url: "https://example.test/theme.css", order: 10 };
+    const oldSheet = new CSSStyleSheet();
+    const themeSheet = new CSSStyleSheet();
+    const unrelatedSheet = new CSSStyleSheet();
+    const signals = new Map<string, AbortSignal>();
+    const load = vi.fn<PluginStylesheetLoader>((url, signal) => {
+      signals.set(url, signal);
+      return url === a.url ? Promise.resolve(oldSheet) : url === b.url ? unrelated.promise : replacement.promise;
+    });
+    const registry = new PluginStyleRegistry(load);
+    const root = shadowRoot();
+    registry.registerRoot(root);
+    await registry.setContributions([a]);
+    const obsolete = registry.setContributions([a, b]);
+    const update = registry.setContributions([b, theme]);
+    expect(root.adoptedStyleSheets).toEqual([]);
+    replacement.resolve(themeSheet);
+    await vi.waitFor(() => { expect(root.adoptedStyleSheets).toEqual([themeSheet]); });
+    expect(signals.get(a.url)?.aborted).toBe(true);
+    expect(signals.get(b.url)?.aborted).toBe(false);
+    unrelated.resolve(unrelatedSheet);
+    await Promise.all([obsolete, update]);
+    expect(root.adoptedStyleSheets).toEqual([themeSheet, unrelatedSheet]);
+    expect(load).toHaveBeenCalledTimes(3);
+    registry.clear();
+  });
+
+  it("does not publish a late load after clear, even when its URL is reused", async () => {
+    const stale = deferredSheet();
+    const current = deferredSheet();
+    const load = vi.fn<PluginStylesheetLoader>()
+      .mockReturnValueOnce(stale.promise)
+      .mockReturnValueOnce(current.promise);
+    const registry = new PluginStyleRegistry(load);
+    const root = shadowRoot();
+    registry.registerRoot(root);
+    const obsolete = registry.setContributions([a]);
+    await vi.waitFor(() => { expect(load).toHaveBeenCalledTimes(1); });
+    registry.clear();
+    registry.registerRoot(root);
+    const update = registry.setContributions([a]);
+    const listener = vi.fn();
+    registry.subscribe(listener);
+    stale.resolve(new CSSStyleSheet());
+    await obsolete;
+    expect(root.adoptedStyleSheets).toEqual([]);
+    expect(listener).not.toHaveBeenCalled();
+    const sheet = new CSSStyleSheet();
+    current.resolve(sheet);
+    await update;
+    expect(root.adoptedStyleSheets).toEqual([sheet]);
+    expect(listener).toHaveBeenCalledOnce();
     registry.clear();
   });
 
@@ -103,6 +177,8 @@ describe("PluginStyleRegistry", () => {
     const unsubscribe = registry.subscribe(listener);
     const update = registry.setContributions([a, b]);
     const failure = expect(update).rejects.toThrow("Failed to load stylesheet test:b (https://example.test/b.css)");
+    await vi.waitFor(() => { expect(root.adoptedStyleSheets).toEqual([aSheet]); });
+    expect(listener).toHaveBeenCalledOnce();
     failed.reject(new Error("network failed"));
     await failure;
     expect(root.adoptedStyleSheets).toEqual([aSheet]);

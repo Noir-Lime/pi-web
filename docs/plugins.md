@@ -142,17 +142,17 @@ Incomplete, truncated, or oversized input is not rendered. Files also limits the
 
 ### Highlight additional languages
 
-The bundled **Code highlighting** plugin supplies one **Highlighted** renderer, offered only for languages it supports. Browser plugins can extend it with `syntaxHighlighters` for any language, including languages that PI WEB does not recognize on the server. Match chat fences with `languages` (including aliases) and files with `fileExtensions` (without a leading dot). Adding a grammar expands this renderer's coverage; it does not add a separate renderer choice. Highlighting is available in completed chat fences, Markdown files, and standalone Files previews. **Raw** stays unhighlighted.
+The bundled **Code highlighting** plugin supplies one **Highlighted** renderer, offered only for languages it supports. Browser v5 plugins can extend it with `syntaxHighlighters` for any language, including languages that PI WEB does not recognize on the server. Match chat fences with `languages` (including aliases) and files with `fileExtensions` (without a leading dot). Adding a grammar expands this renderer's coverage; it does not add a separate renderer choice. Highlighting is available in completed chat fences, Markdown files, and standalone Files previews. **Raw** stays unhighlighted.
 
 Use any tokenizer or grammar bundled with your plugin. The `highlight({ text, signal })` callback returns tokens synchronously or asynchronously: `{ from, to, kind }`, with UTF-16 offsets into the unchanged source. Ranges must be ordered, non-overlapping, non-empty, and within the source. Unmarked text remains plain. Kinds are `keyword`, `string`, `number`, `comment`, `type`, `function`, `variable`, `operator`, `punctuation`, `property`, `literal`, or `meta`; PI WEB supplies theme-aware colours. Return tokens, not HTML or CodeMirror extensions, so independently bundled parsers do not need to share an editor-library instance with the host.
 
 Plugins should stop asynchronous work when `signal` is aborted. Oversized input is not sent to highlighters. A failed highlighter leaves source readable and reports the failure. If several grammar contributions match, the last discovered one wins. Highlighting adds no editing, completion, language-server support, or plugin-defined styling.
 
-A plugin can instead provide an independent highlighting system as a `contentRenderers` contribution. Both highlighting renderers remain separate choices when they support the source; the same last-automatic-renderer rule chooses the default. A renderer's `supports(request)` callback can determine eligibility dynamically, and `title` names its view button—for example, **Highlighted** or **Diagram**. Without a title, the host uses the plugin and contribution IDs. Rendering receives the source language, file path, and machine as well as the text. The bundled highlighting plugin demonstrates this pattern.
+A plugin can instead provide an independent highlighting system as a `contentRenderers` contribution. Both highlighting renderers remain separate choices when they support the source; the same last-automatic-renderer rule chooses the default. A v5 renderer's `supports(request)` callback can determine eligibility dynamically, and `title` names its view button—for example, **Highlighted** or **Diagram**. Without a title, the host uses the plugin and contribution IDs. V5 rendering receives the source language, file path, and machine as well as the text; v4 renderer inputs retain their original text, signal, and failure callback. The bundled highlighting plugin demonstrates this pattern.
 
 The bundled Mermaid plugin contributes both a **Diagram** renderer and a source grammar for `mermaid` fences and `.mmd`/`.mermaid` files. Its grammar adds **Highlighted** to those sources without loading the diagram engine. Diagram rendering stays manual; **Raw**, **Highlighted**, and **Diagram** retain the same source text. The lightweight grammar colours common Mermaid syntax; it does not validate diagrams.
 
-Older hosts ignore syntax-highlighter contributions; require the host capability `{ pluginId: "pi-web", id: "syntax-highlighting", version: 1 }` when your plugin depends on this feature. This capability exposes `supports()` and `highlight()` for renderers that consume semantic token contributions. See `SyntaxHighlighterContribution`, `SyntaxHighlightingCapability`, and `ContentRendererContribution` in the [public browser contract](https://github.com/jmfederico/pi-web/blob/main/src/plugin-api.ts).
+Older hosts ignore syntax-highlighter contributions; require the host capability `{ pluginId: "pi-web", id: "syntax-highlighting", version: 1 }` when your plugin depends on this feature. This capability exposes `supports()` and `highlight()` for renderers that consume semantic token contributions. See `SyntaxHighlighterContribution`, `SyntaxHighlightingCapability`, and `ContentRendererContributionV5` in the [public browser contract](https://github.com/jmfederico/pi-web/blob/main/src/plugin-api.ts).
 
 ### Conversations and companion extensions
 
@@ -374,7 +374,7 @@ Use the smallest example that fits. Source links below track development on `mai
 | A simpler initial-prompt workflow | [Workspace Reviews example](https://github.com/jmfederico/pi-web/tree/main/examples/session-bridge-plugin) |
 | Package discovery rules and diagnostics | [Plugin catalog](https://github.com/jmfederico/pi-web/blob/main/src/server/piWebPluginCatalog.ts) |
 
-The current browser and server contracts are both **API v5**. Browser v4 and server v3 remain supported with a once-per-plugin deprecation diagnostic; no removal date is set. Other versions are unsupported. The public source contracts and their tests are the reference for signatures, validation, limits, and lifecycle details.
+The current browser and server contracts are both **API v5**. Browser v4 and server v3 remain supported with a once-per-plugin deprecation diagnostic; no removal date is set. Other versions are unsupported. Legacy entrypoint contracts stay frozen; new contribution fields and callback inputs belong to v5. Capabilities have independent versions: a compatible v4 browser or v3 server plugin can declare and resolve a new capability without changing its entrypoint version. The public source contracts and their tests are the reference for signatures, validation, limits, and lifecycle details.
 
 ### Host-provided UI styles
 
@@ -433,7 +433,7 @@ Stylesheet integration works with supported browser APIs v4 and v5. Its capabili
 
 Contribute CSS files to customize the document and participating host or plugin shadow roots. This builds on the shared UI patterns above and inherited `--pi-*` custom properties; it does not require a separate option for each styling choice. Internal host classes, component names, and markup are **not stable selectors**: you may target them, but test your CSS when upgrading PI WEB. CSS changes presentation, not behavior or component structure.
 
-Add `stylesheets` to the object returned by `activate().contributions`:
+With browser API v5, add `stylesheets` to the object returned by `activate().contributions`:
 
 ```ts
 import type { PiWebPlugin } from "@jmfederico/pi-web/plugin-api";
@@ -587,7 +587,7 @@ Listeners run synchronously after a changed active stylesheet list has been adop
 
 Themes extend the built-in base theme: they can supply layout and control rules as well as palette properties. The base provides the default shell, responsive layout, shared controls, and transcript presentation in the `pi-web-base` cascade layer. Normal unlayered theme rules override those defaults. This separation is in place before a stable layout-selector contract; specialised local component/plugin styles are still being migrated. See [theme architecture](theme-architecture.md) for composition, examples, and current limits.
 
-Themes declare CSS files, not TypeScript `tokens`. The built-in Dark, Light, and Classic palettes use this same contribution API. Put palette custom properties on `:root` so they inherit into shadow trees; use ordinary selectors in the same file when you need direct rules in participating roots.
+V5 themes declare CSS files, not TypeScript `tokens`. V4 themes retain their required `tokens: ThemeTokens` palette contract for compatibility; they cannot declare stylesheet contributions. Their original palette properties still style the current UI, while newer semantic properties use fallbacks. Switching away from a v4 theme clears its palette overrides. The built-in Dark, Light, and Classic palettes use this same contribution API. Put palette custom properties on `:root` so they inherit into shadow trees; use ordinary selectors in the same file when you need direct rules in participating roots.
 
 ```ts
 import type { PiWebPlugin } from "@jmfederico/pi-web/plugin-api";
