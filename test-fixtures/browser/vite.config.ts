@@ -9,6 +9,11 @@ export default defineConfig({
   build: {
     outDir: fileURLToPath(new URL("../../node_modules/.cache/pi-web/browser-fixture", import.meta.url)),
     emptyOutDir: true,
-    rollupOptions: { input: fileURLToPath(new URL("overlays.html", import.meta.url)) },
+    rollupOptions: {
+      input: {
+        overlays: fileURLToPath(new URL("overlays.html", import.meta.url)),
+        terminal: fileURLToPath(new URL("terminal.html", import.meta.url)),
+      },
+    },
   },
 });
