@@ -68,14 +68,14 @@ describe("Docker command assets", () => {
     const customImageHooksIndex = devDockerfile.indexOf("for script in /tmp/pi-web-custom-image.d/*.sh");
     const dependencyGenerationIndex = devDockerfile.indexOf("/opt/pi-web-dev-dependencies/generation");
 
-    expect(dockerfile).toContain("COPY pi-web-docker /usr/local/bin/pi-web-docker");
-    expect(dockerfile).toContain("COPY internal/bin/hostexec /usr/local/bin/hostexec");
-    expect(dockerfile).toContain("COPY internal/image/install-opensuse-base /usr/local/sbin/install-pi-web-opensuse-base");
+    expect(dockerfile).toContain("COPY --chmod=0755 pi-web-docker /usr/local/bin/pi-web-docker");
+    expect(dockerfile).toContain("COPY --chmod=0755 internal/bin/hostexec internal/bin/pi-web-service internal/bin/pi-web-image-doctor /usr/local/bin/");
+    expect(dockerfile).toContain("COPY --chmod=0755 internal/image/install-ubuntu-base /usr/local/sbin/install-pi-web-ubuntu-base");
     expect(dockerfile).toContain('@earendil-works/pi-coding-agent "@jmfederico/pi-web@${PI_WEB_VERSION}" --allow-scripts=node-pty');
     expect(dockerfile).toContain("command -v pi");
     expect(dockerfile).not.toContain("@earendil-works/pi-coding-agent@");
-    expect(devDockerfile).toContain("COPY docker/pi-web-docker /usr/local/bin/pi-web-docker");
-    expect(devDockerfile).toContain("COPY docker/internal/bin/hostexec /usr/local/bin/hostexec");
+    expect(devDockerfile).toContain("COPY --chmod=0755 docker/pi-web-docker /usr/local/bin/pi-web-docker");
+    expect(devDockerfile).toContain("COPY --chmod=0755 docker/internal/bin/hostexec docker/internal/bin/pi-web-service docker/internal/bin/pi-web-image-doctor /usr/local/bin/");
     expect(devDockerfile).toContain("COPY --chmod=0755 docker/internal/dev/sync-node-modules /usr/local/sbin/pi-web-dev-sync-node-modules");
     expect(devDockerfile).toContain("/opt/pi-web-dev-dependencies/node_modules");
     // The seed can be hidden by the host /opt mount; the CLI must use the active volume.
@@ -238,7 +238,7 @@ describe("Docker command assets", () => {
       });
     });
 
-    expect(await readFile(join(installDir, "Dockerfile"), "utf8")).toContain("COPY pi-web-docker /usr/local/bin/pi-web-docker");
+    expect(await readFile(join(installDir, "Dockerfile"), "utf8")).toContain("COPY --chmod=0755 pi-web-docker /usr/local/bin/pi-web-docker");
     expect(await readFile(join(installDir, "pi-web-docker"), "utf8")).toContain("Usage: pi-web-docker");
     const env = await readFile(join(installDir, ".env"), "utf8");
     expect(env).toContain(`PI_WEB_DOCKER_INSTALL_DIR=${installDir}`);
@@ -689,8 +689,8 @@ describe("Docker command assets", () => {
     expect(log).toContain(`PI_WEB_DOCKER_DATA_DIR=${join(installDir, "data")}`);
     expect(log).toContain("PI_WEB_PORT=12345");
     expect(log).toContain("PI_WEB_DOCKER_EXTRA_HOST_PATHS=/srv/pi-web-extra /opt/pi-web-extra");
-    expect(log).toContain("PI_WEB_EXTRA_ZYPPER_PACKAGES=git-lfs jq");
-    expect(log).not.toContain('PI_WEB_EXTRA_ZYPPER_PACKAGES="git-lfs jq"');
+    expect(log).toContain("PI_WEB_EXTRA_APT_PACKAGES=git-lfs jq");
+    expect(log).not.toContain('PI_WEB_EXTRA_APT_PACKAGES="git-lfs jq"');
     expect(log).toContain("PI_WEB_DOCKER_HELPER_IMAGE=pi-web:test");
     expect(log).toContain("COMPOSE_PROJECT_NAME=pi-web-test");
     expect(log).toContain("pi-web.docker-helper.mode=runtime");
@@ -848,7 +848,7 @@ async function createRuntimeInstall(): Promise<string> {
     "PI_WEB_DOCKER_EXTRA_HOST_PATHS=\"/srv/pi-web-extra /opt/pi-web-extra\"",
     "PI_WEB_BIND_ADDR=127.0.0.1",
     "PI_WEB_PORT=12345",
-    "PI_WEB_EXTRA_ZYPPER_PACKAGES=\"git-lfs jq\"",
+    "PI_WEB_EXTRA_APT_PACKAGES=\"git-lfs jq\"",
     "PI_WEB_IMAGE=pi-web:test",
     "COMPOSE_PROJECT_NAME=pi-web-test",
     "",

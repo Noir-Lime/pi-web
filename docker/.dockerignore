@@ -5,8 +5,10 @@
 !internal/
 !internal/bin/
 !internal/bin/hostexec
+!internal/bin/pi-web-service
+!internal/bin/pi-web-image-doctor
 !internal/image/
-!internal/image/install-opensuse-base
+!internal/image/*
 !custom-image.d/
 !custom-image.d/.gitkeep
 !custom-image.d/*.sh
