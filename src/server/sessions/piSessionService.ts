@@ -2482,11 +2482,15 @@ export class PiSessionService implements SessionRouteService {
     if (this.subsessionNotifyArmed.get(childId) !== true) return;
     const activity = this.activities.get(childId);
     const messages = historyMessages(session);
+    // A provider failure that ends the run is recorded on the final assistant
+    // message, not as an activity error; an earlier retried error is not reported.
+    const providerError = finalAssistantProviderError(messages);
+    const errorDetail = activity?.phase === "error" ? activity.detail : providerError;
     const completion: SubsessionCompletion = {
       completionId: randomUUID(), sessionId: childId, cwd: session.sessionManager.getCwd(),
-      status: activity?.phase === "error" ? "error" : "idle",
+      status: activity?.phase === "error" || providerError !== undefined ? "error" : "idle",
       finalText: finalAssistantText(messages), messageCount: messages.length,
-      ...(activity?.phase !== "error" || activity.detail === undefined ? {} : { errorDetail: activity.detail }),
+      ...(errorDetail === undefined ? {} : { errorDetail }),
     };
     try {
       session.sessionManager.appendCustomEntry?.(SUBSESSION_COMPLETION_ENTRY_TYPE, completion);
@@ -5848,6 +5852,23 @@ function finalAssistantText(messages: readonly unknown[]): string {
     if (texts.length > 0) return texts.join("\n").trim();
   }
   return "";
+}
+
+const MAX_PROVIDER_ERROR_CHARS = 500;
+
+/** Provider error of the last assistant message when the run ended on it, else undefined. */
+function finalAssistantProviderError(messages: readonly unknown[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (!isRecord(message) || message["role"] !== "assistant") continue;
+    const errorMessage = message["errorMessage"];
+    if (message["stopReason"] !== "error" || typeof errorMessage !== "string" || errorMessage.trim() === "") return undefined;
+    const text = errorMessage.trim();
+    return text.length <= MAX_PROVIDER_ERROR_CHARS
+      ? text
+      : `${text.slice(0, MAX_PROVIDER_ERROR_CHARS)}… [${String(text.length - MAX_PROVIDER_ERROR_CHARS)} characters omitted]`;
+  }
+  return undefined;
 }
 
 function annotateAssistantStreamId(message: unknown, streamId?: string): unknown {

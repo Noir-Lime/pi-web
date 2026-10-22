@@ -495,6 +495,43 @@ describe("PiSessionService shared subsession completion inbox", () => {
     expect(parent.calls.sendCustomMessage).toHaveLength(0);
   });
 
+  it("reports a provider error from the final assistant message in the automatic completion", async () => {
+    const { parent, child } = await inboxService();
+    startChildRun(child);
+    child.journal.entries.push({
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [],
+        stopReason: "error",
+        errorMessage: "Codex error: This content was flagged for possible cybersecurity risk",
+      },
+    });
+    child.session.isStreaming = false;
+    child.emit({ type: "agent_end" });
+
+    await settleParent(parent);
+    expect(parent.calls.sendCustomMessage).toHaveLength(1);
+    const content = parent.calls.sendCustomMessage[0]?.message.content;
+    expect(content).toContain("stopped working (error)");
+    expect(content).toContain("Error: Codex error: This content was flagged for possible cybersecurity risk");
+  });
+
+  it("does not report an earlier provider error after the subsession recovers", async () => {
+    const { parent, child } = await inboxService();
+    startChildRun(child);
+    child.journal.entries.push({
+      type: "message",
+      message: { role: "assistant", content: [], stopReason: "error", errorMessage: "overloaded_error 529" },
+    });
+    finishChildRun(child);
+    await settleParent(parent);
+    expect(parent.calls.sendCustomMessage).toHaveLength(1);
+    const content = parent.calls.sendCustomMessage[0]?.message.content;
+    expect(content).toContain("stopped working (idle)");
+    expect(content).not.toContain("overloaded_error");
+  });
+
   it("recovers unread runs from verified files and retains persisted parent receipts after reopening", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-web-subsession-inbox-"));
     tempDirs.push(dir);
