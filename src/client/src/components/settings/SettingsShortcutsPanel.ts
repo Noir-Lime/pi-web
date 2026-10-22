@@ -99,7 +99,7 @@ export class SettingsShortcutsPanel extends LitElement {
           <details class="config-path-card ui-settings-path">
             <summary>Shortcut details</summary>
             <p>Unmodified app shortcuts work outside editable fields. Composer send shortcuts accept one key combination and take priority inside the editor. Unassigned Enter and Shift+Enter insert newlines.</p>
-            <p>Narrow screen applies to viewports at most 760px wide. Desktop applies above 760px, regardless of pointer type.</p>
+            <p>Touch or narrow screen applies when the primary pointer is coarse or the viewport is at most 760px wide. Desktop applies otherwise.</p>
             <p>Custom app shortcuts take priority over defaults. Ties use action id order. Shorter shortcuts block longer sequences with the same prefix.</p>
             <span>Config file</span>
             <code>${this.configResponse?.path ?? "Unknown"}</code>
