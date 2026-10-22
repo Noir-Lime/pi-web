@@ -68,6 +68,30 @@ source "$SERVICE_TEST_LAUNCHER" "$SERVICE_TEST_ENTRY"
     expect(installer.match(/apt-get update --error-on=any/gu)).toHaveLength(2);
   });
 
+  it("ships gh through shared mise installs with writable user upgrades and lower-precedence defaults", async () => {
+    const installer = await readFile("docker/internal/image/install-ubuntu-base", "utf8");
+    const packages = /packages=\(([\s\S]*?)\n\)/u.exec(installer)?.[1] ?? "";
+    expect(packages).toContain("git-lfs");
+    expect(packages).not.toMatch(/\bgh\b/u);
+    expect(installer).toContain("/etc/mise/config.toml");
+    expect(installer).toContain('gh = { version = "latest", minimum_release_age = "0s" }');
+    expect(installer).toContain("MISE_DATA_DIR=/usr/local/share/pi-web/mise MISE_SHARED_INSTALL_DIRS=");
+    expect(installer).toContain("mise -C / install gh");
+    expect(installer).not.toMatch(/mise[^\n]*install --system/u);
+    // A relative global alias would be pruned when an upgrade or user pin
+    // selects /data, making mise fail against the protected shared directory.
+    expect(installer).toContain('ln -sfn "$(readlink -f "$gh_global")" "$gh_global"');
+    for (const path of ["docker/Dockerfile", "docker/Dockerfile.dev"]) {
+      const dockerfile = await readFile(path, "utf8");
+      expect(dockerfile).toContain("MISE_SHARED_INSTALL_DIRS=/usr/local/share/pi-web/mise/installs");
+      expect(dockerfile).toContain("/data/home/.local/share/mise/shims:/usr/local/share/pi-web/mise/shims:");
+      expect(dockerfile).toContain("MISE_PARANOID=true");
+      expect(dockerfile).toContain("MISE_AUTO_INSTALL=false");
+      expect(dockerfile).toContain("MISE_NOT_FOUND_SYSTEM_FALLBACK=false");
+      expect(dockerfile).not.toContain("MISE_MINIMUM_RELEASE_AGE=");
+    }
+  });
+
   it("keeps expensive ownership walks out of dev startup and stamps dependencies after hooks", async () => {
     const compose = await readFile("docker/compose.dev.yml", "utf8");
     expect(compose).not.toMatch(/chown\s+-R/u);

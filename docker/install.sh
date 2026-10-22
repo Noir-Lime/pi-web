@@ -384,6 +384,7 @@ write_asset internal/bin/hostexec 0755
 write_asset internal/image/install-ubuntu-base 0755
 write_asset internal/bin/pi-web-service 0755
 write_asset internal/bin/pi-web-image-doctor 0755
+write_asset internal/bin/pi-web-reconcile-mise 0755
 write_asset internal/image/write-manifest 0755
 write_asset internal/host-profile.sh 0644
 

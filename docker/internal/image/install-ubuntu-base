@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build-time only. Tool installations and mise configuration belong to the user
-# on /data; nothing installed here relies on mounted home or /opt contents.
+# Build-time only. Image defaults live outside mounted home and /opt contents;
+# user configuration and subsequent tool installs belong on /data.
 # shellcheck disable=SC1091
 source /etc/os-release
 if [[ $ID != ubuntu || $VERSION_ID != 26.04 ]]; then
@@ -31,7 +31,7 @@ printf 'deb [signed-by=/etc/apt/keyrings/git-core-ppa.gpg] http://ppa.launchpadc
 # Never silently substitute distro Git when the upstream index is unavailable.
 apt-get update --error-on=any
 packages=(
-  bash wget git-lfs gh openssh-client procps tini passwd
+  bash wget git-lfs openssh-client procps tini passwd
   build-essential python3 python3-dev python3-pip python3-venv
   jq ripgrep fd-find fzf bat vim shellcheck less file which
   tar gzip xz-utils unzip zip zstd findutils grep sed gawk patch diffutils
@@ -66,6 +66,22 @@ curl --fail --silent --show-error --location --retry 3 "$mise_url/$mise_asset" -
 curl --fail --silent --show-error --location --retry 3 "$mise_url/SHASUMS256.txt" -o "$tmp/SHASUMS256.txt"
 (cd "$tmp"; grep -E "^[a-f0-9]{64}  (\./)?${mise_asset}$" SHASUMS256.txt > checksum; sha256sum --check --strict checksum)
 install -m 0755 "$tmp/$mise_asset" /usr/local/bin/mise
+
+# System config is lower precedence than persistent user and project pins.
+install -d -m 0755 /etc/mise
+printf '[tools]\ngh = { version = "latest", minimum_release_age = "0s" }\n' > /etc/mise/config.toml
+# Use an ordinary data root, NOT --system: upgrades of system installs retain
+# their protected destination. Shared installs allow new versions under /data.
+# Keep build caches/state out of the runtime user's mounted directories.
+HOME="$tmp" XDG_CONFIG_HOME="$tmp/config" MISE_CONFIG_DIR="$tmp/config/mise" \
+  MISE_DATA_DIR=/usr/local/share/pi-web/mise MISE_SHARED_INSTALL_DIRS="" \
+  MISE_CACHE_DIR="$tmp/cache" MISE_STATE_DIR="$tmp/state" \
+  MISE_CEILING_PATHS=/ MISE_NO_ENV=1 MISE_NO_HOOKS=1 mise -C / install gh
+# mise 2026.10.17 prunes a relative shared `global` alias when a user pin or
+# upgrade selects another root. An absolute alias is unmanaged, so that repair
+# never attempts to modify the read-only image. Shims still resolve config.
+gh_global=/usr/local/share/pi-web/mise/installs/gh/global
+ln -sfn "$(readlink -f "$gh_global")" "$gh_global"
 
 runtime_uid=${PI_WEB_UID:-1000}
 runtime_gid=${PI_WEB_GID:-1000}

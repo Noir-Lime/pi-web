@@ -515,7 +515,7 @@ run_runtime_installer_update() {
   installer=$(runtime_installer "$root")
   PI_WEB_DOCKER_REFRESH_ASSETS=1
   export PI_WEB_DOCKER_REFRESH_ASSETS
-  exec "$installer" --install-dir "$root"
+  "$installer" --install-dir "$root"
 }
 
 dev_update_fast_forward() {
@@ -568,6 +568,11 @@ run_update() {
       dev_compose up -d --force-recreate --remove-orphans
       ;;
   esac
+  log "Reconciling global mise tools in the updated container ..."
+  # Compose exec inherits the service UID/GID, not the host/helper identity.
+  # Use image-owned tools rather than persistent user shims.
+  compose_for_install exec -T --workdir / web env PATH=/usr/local/bin:/usr/bin:/bin \
+    /usr/local/bin/pi-web-reconcile-mise
 }
 
 validate_logs_target() {

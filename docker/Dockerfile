@@ -58,6 +58,7 @@ ENV NPM_CONFIG_PREFIX="" \
   XDG_CONFIG_HOME=/data/config \
   MISE_CONFIG_DIR=/data/config/mise \
   MISE_DATA_DIR=/data/home/.local/share/mise \
+  MISE_SHARED_INSTALL_DIRS=/usr/local/share/pi-web/mise/installs \
   MISE_CACHE_DIR=/data/home/.cache/mise \
   MISE_STATE_DIR=/data/home/.local/state/mise \
   MISE_AUTO_INSTALL=false \
@@ -70,13 +71,14 @@ ENV NPM_CONFIG_PREFIX="" \
   PI_WEB_SESSIOND_SOCKET=/data/pi-web/sessiond.sock \
   PI_CODING_AGENT_DIR=/data/pi-agent \
   HOSTEXEC_IMAGE=alpine:3.22
-ENV PATH=/workspace/node_modules/.bin:/data/home/.local/share/mise/shims:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV PATH=/workspace/node_modules/.bin:/data/home/.local/share/mise/shims:/usr/local/share/pi-web/mise/shims:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 COPY --from=package /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=package /usr/local/bin /usr/local/bin
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=docker-cli /usr/local/libexec/docker/cli-plugins /usr/local/libexec/docker/cli-plugins
 COPY --chmod=0755 internal/bin/hostexec internal/bin/pi-web-service internal/bin/pi-web-image-doctor /usr/local/bin/
+COPY --chmod=0755 internal/bin/pi-web-reconcile-mise /usr/local/bin/
 COPY --chmod=0755 pi-web-docker /usr/local/bin/pi-web-docker
 COPY --chmod=0755 internal/image/write-manifest /usr/local/sbin/pi-web-write-image-manifest
 

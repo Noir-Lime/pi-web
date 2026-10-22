@@ -156,9 +156,15 @@ curl -fsSL https://raw.githubusercontent.com/jmfederico/pi-web/main/docker/insta
   | sh -s -- --extra-apt-packages "libpq-dev libssl-dev"
 ```
 
+Every successful `pi-web-docker update` (runtime and development) reconciles global mise tools after recreating the services, using the new image as the service's nonroot user. Missing exact pins are installed without changing their requested versions; `latest` and version ranges are refreshed within their configured requests, bypassing the local remote-version cache. Older installs are retained. Project configuration and trust are not loaded or changed, and an empty global tool configuration is safe.
+
+Reconciliation failures appear in update output and make the update exit nonzero. The services have already been recreated at that point; fix the reported tool/configuration or network problem and rerun the update. Direct installer runs and `start` do not reconcile tools.
+
 ### Agent tool setup with mise
 
-The image supplies mise in `/usr/local/bin`. Tool installs and shims live under `/data/home/.local/share/mise`, and the shim directory is on the inherited PATH for both agent commands and terminals. Installation does not depend on interactive shell activation. Missing tools do not automatically install themselves or silently fall back through a shim to a different system version. Paranoid trust mode requires explicit review and trust of project configuration, including after its contents change.
+The image supplies mise in `/usr/local/bin` and a ready-to-use, mise-managed GitHub CLI (`gh`), including with a fresh `/data` mount. `/etc/mise/config.toml` defaults to `gh@latest` with tool-level `minimum_release_age = "0s"`; other tools retain their release-age policy. Override this default with a persistent user pin (`mise use --global gh@<version>`) or a trusted project pin.
+
+Image installs and fallback shims are root-owned under `/usr/local/share/pi-web/mise`, outside `/data` and `/opt`. User installs and shims live under `/data/home/.local/share/mise`; their shim directory precedes the image shim directory on the inherited PATH for both agent commands and terminals. Updates install newer `gh` versions under `/data` as the service user, without sudo or modifying image installs; exact user pins remain exact. There is no apt-installed `gh` fallback. Installation does not depend on interactive shell activation. Missing tools do not automatically install themselves or silently fall back through a shim to a different system version. Paranoid trust mode requires explicit review and trust of project configuration, including after its contents change.
 
 For a project, create a `mise.toml` with explicit versions, for example:
 

@@ -39,6 +39,7 @@ describe("Docker command assets", () => {
   it("keeps shell entrypoints syntactically valid", async () => {
     await Promise.all([
       execUtf8("sh", ["-n", dockerEntrypoint], process.env),
+      execUtf8("sh", ["-n", join(repoRoot, "docker/internal/bin/pi-web-reconcile-mise")], process.env),
       execUtf8("sh", ["-n", join(repoRoot, "docker", "install.sh")], process.env),
       execUtf8("sh", ["-n", join(repoRoot, "docker", "internal", "dev", "compose")], process.env),
       execUtf8("bash", ["-n", join(repoRoot, "docker", "internal", "dev", "sync-node-modules")], process.env),
@@ -86,6 +87,10 @@ describe("Docker command assets", () => {
     expect(dependencySync).toContain(".pi-web-dev-dependency-generation");
     expect(dockerignore).toContain("!pi-web-docker");
     expect(dockerignore).toContain("!internal/bin/hostexec");
+    expect(dockerignore).toContain("!internal/bin/pi-web-reconcile-mise");
+    expect(dockerfile).toContain("COPY --chmod=0755 internal/bin/pi-web-reconcile-mise /usr/local/bin/");
+    expect(devDockerfile).toContain("COPY --chmod=0755 docker/internal/bin/pi-web-reconcile-mise /usr/local/bin/");
+    expect(installer).toContain("write_asset internal/bin/pi-web-reconcile-mise 0755");
     expect(installer).toContain("write_asset pi-web-docker 0755");
     expect(installer).toContain("write_asset internal/host-profile.sh 0644");
     expect(installer).toContain("compose_cmd --project-name \"$compose_project_name\"");
@@ -579,9 +584,27 @@ describe("Docker command assets", () => {
     expect(await readFile(helperLog, "utf8")).toBe([
       "allow=0 args=build --pull",
       "allow=0 args=up -d --force-recreate --remove-orphans",
+      "allow=0 args=exec -T --workdir / web env PATH=/usr/local/bin:/usr/bin:/bin /usr/local/bin/pi-web-reconcile-mise",
       "allow=0 args=up -d --build",
       "",
     ].join("\n"));
+  });
+
+  dockerCommandIt.each([
+    "build --pull",
+    "up -d --force-recreate --remove-orphans",
+    "exec -T --workdir / web env PATH=/usr/local/bin:/usr/bin:/bin /usr/local/bin/pi-web-reconcile-mise",
+  ])("fails development update when %s fails", async (failedCommand) => {
+    const helperLog = join(tempDir, "dev-helper.log");
+    const devRoot = await createCleanDevGitRepoWithFakeHelper(helperLog);
+    const fakeDocker = await installFakeDocker();
+    await installFakeId(fakeDocker.binDir, 1234, 2345);
+    const result = await runDockerCommandAllowFailure(["--dev", "update"], devHostEnv(fakeDocker, devRoot, join(tempDir, "home"), {
+      FAKE_COMPOSE_FAIL: failedCommand,
+    }));
+    expect(result.exitCode).toBe(17);
+    const calls = (await readFile(helperLog, "utf8")).trim().split("\n");
+    expect(calls.at(-1)).toBe(`allow=0 args=${failedCommand}`);
   });
 
   dockerCommandIt.each([false, true])("sequences development restart according to the typed plan (detached=%s)", async (detached) => {
@@ -725,7 +748,71 @@ describe("Docker command assets", () => {
     expect(installerCalls).toContain(`install.sh --install-dir ${installDir}`);
     // The installer drives Docker itself, so the helper must not schedule another helper.
     const log = await readFile(fakeDocker.logPath, "utf8").catch(() => "");
+    expect(log).toContain("exec -T --workdir / web env PATH=/usr/local/bin:/usr/bin:/bin /usr/local/bin/pi-web-reconcile-mise");
     expect(log).not.toContain("run -d");
+  });
+
+  dockerCommandIt.each(["installer", "reconciliation"])("reports runtime update %s failures without hiding them", async (failure) => {
+    const installDir = await createRuntimeInstall();
+    const fakeDocker = await installFakeDocker();
+    if (failure === "installer") {
+      await writeFile(join(installDir, "install.sh"), "#!/bin/sh\necho installer-failed >&2\nexit 7\n");
+    }
+    const result = await runDockerCommandAllowFailure(["__run-detached", "update"], {
+      ...runtimeEnv(fakeDocker, installDir),
+      FAKE_RECONCILE_EXIT: "8",
+    });
+    expect(result.exitCode).toBe(failure === "installer" ? 7 : 8);
+    expect(result.stderr).toContain(failure === "installer" ? "installer-failed" : "reconciliation-failed");
+    const log = await readFile(fakeDocker.logPath, "utf8").catch(() => "");
+    expect(log.includes("/usr/local/bin/pi-web-reconcile-mise")).toBe(failure !== "installer");
+  });
+
+  dockerCommandIt.each(["", "install", "upgrade", "reshim"])("runs global reconciliation with isolated discovery and fresh metadata (failure=%s)", async (failure) => {
+    const binDir = join(tempDir, "bin");
+    await mkdir(binDir);
+    await installFakeId(binDir, 1234, 2345);
+    const logPath = join(tempDir, "mise.log");
+    const mise = join(binDir, "mise");
+    // Fake only the mise boundary; requests must not be reparsed or bumped by our shell.
+    await writeFile(mise, `#!/bin/sh
+set -eu
+[ "$PWD" = / ]
+[ "$MISE_CEILING_PATHS" = / ]
+[ -z "\${MISE_CD:-}" ]
+[ "$MISE_NO_ENV:$MISE_NO_HOOKS" = 1:1 ]
+[ "$MISE_FETCH_REMOTE_VERSIONS_CACHE:$MISE_PREFER_OFFLINE" = 0s:0 ]
+printf '%s\\n' "$*" >>"$MISE_TEST_LOG"
+if [ "$1" = "$MISE_TEST_FAILURE" ]; then
+  echo "mise-$1-failed" >&2
+  exit 9
+fi
+`);
+    await chmod(mise, 0o755);
+    const result = await execUtf8AllowFailure("sh", [join(repoRoot, "docker/internal/bin/pi-web-reconcile-mise")], {
+      ...cleanProcessEnv(),
+      PATH: `${binDir}:${process.env["PATH"] ?? ""}`,
+      MISE_TEST_LOG: logPath,
+      MISE_TEST_FAILURE: failure,
+      MISE_CD: repoRoot,
+    });
+    const commands = ["install", "upgrade --global --no-prune", "reshim"];
+    const count = failure ? ["install", "upgrade", "reshim"].indexOf(failure) + 1 : 3;
+    expect((await readFile(logPath, "utf8")).trim().split("\n")).toEqual(commands.slice(0, count));
+    expect(result.exitCode).toBe(failure ? 9 : 0);
+    if (failure) expect(result.stderr).toContain(`mise-${failure}-failed`);
+  });
+
+  dockerCommandIt("rejects root global reconciliation before running mise", async () => {
+    const binDir = join(tempDir, "bin");
+    await mkdir(binDir);
+    await installFakeId(binDir, 0, 0);
+    const result = await execUtf8AllowFailure("sh", [join(repoRoot, "docker/internal/bin/pi-web-reconcile-mise")], {
+      ...cleanProcessEnv(),
+      PATH: `${binDir}:${process.env["PATH"] ?? ""}`,
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("requires a nonroot service user");
   });
 
   dockerCommandIt("reuses the recorded Docker host setup when the installer runs inside a container", async () => {
@@ -1030,6 +1117,14 @@ case "\${1:-}" in
     if [ "\${2:-}" = version ]; then
       exit 0
     fi
+    case "$*" in
+      *"/usr/local/bin/pi-web-reconcile-mise"*)
+        if [ "\${FAKE_RECONCILE_EXIT:-0}" != 0 ]; then
+          echo reconciliation-failed >&2
+          exit "$FAKE_RECONCILE_EXIT"
+        fi
+        ;;
+    esac
     printf 'fake docker'
     for arg in "$@"; do
       printf ' %s' "$arg"
