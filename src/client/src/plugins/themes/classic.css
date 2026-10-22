@@ -14,6 +14,7 @@
   --pi-chat-user-bg: color-mix(in srgb, var(--pi-accent) 6%, var(--pi-bg));
   --pi-chat-user-border: color-mix(in srgb, var(--pi-accent) 55%, var(--pi-bg));
   --pi-chat-system-bg: color-mix(in srgb, var(--pi-surface) 40%, var(--pi-bg));
+  --pi-chat-system-border: transparent;
   --pi-chat-activity-bg: color-mix(in srgb, var(--pi-surface) 40%, var(--pi-bg));
   --pi-chat-compacting-bg: color-mix(in srgb, var(--pi-purple) 5%, var(--pi-bg));
   --pi-bg: #0d1117;
