@@ -1104,8 +1104,13 @@ export class TerminalPanel extends LitElement {
     .terminal-tabs > button:hover:not(:disabled) { background: var(--pi-surface); color: var(--pi-text); }
     .terminal-tabs > button.selected { border-color: var(--pi-border-muted); background: var(--pi-surface); color: var(--pi-text); box-shadow: inset 0 -2px var(--pi-text-secondary); }
     .terminal-tabs > button:focus-visible { outline: 2px solid var(--pi-text-secondary); outline-offset: -3px; }
-    /* Rendering owns accessory visibility so saved choices work at every screen size. */
-    .terminal-soft-keys { display: block; }
+    /* These accessories work around touch input limitations, not small screens.
+       Keep Done reachable if touch availability changes during copy mode. */
+    .copy-mode-toggle:not(.selected), .soft-keys-toggle, .terminal-soft-keys { display: none; }
+    @media (any-pointer: coarse) {
+      .copy-mode-toggle:not(.selected), .soft-keys-toggle { display: inline-flex; }
+      .terminal-soft-keys { display: block; }
+    }
     button { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 180px; border: 1px solid var(--pi-border); border-radius: 7px; background: var(--pi-surface); color: var(--pi-text); padding: 5px 7px; cursor: pointer; }
     button.selected { border-color: var(--pi-accent); background: var(--pi-selection-bg); }
     button.new { flex: 0 0 auto; color: var(--pi-muted); }
