@@ -118,6 +118,17 @@ describe("message action snapshots", () => {
     expect(Object.isFrozen(snapshot)).toBe(true);
     expect(messageActionMessage({ role: "user", parts: [{ type: "text", text: "Optimistic" }] })).toBeUndefined();
   });
+
+  it("marks only user messages with exactly one non-empty text block as editable", () => {
+    const image = { type: "image" as const, mimeType: "image/png", data: "AA==" };
+    const user = (parts: ChatLine["parts"]): ChatLine => ({ role: "user", entryId: "entry", parts });
+    expect(messageActionMessage(user([{ type: "text", text: "Hi" }]))).toMatchObject({ editable: true });
+    expect(messageActionMessage(user([image, { type: "text", text: "Hi" }]))).toMatchObject({ editable: true });
+    expect(messageActionMessage(user([{ type: "text", text: "A" }, { type: "text", text: "B" }]))).not.toHaveProperty("editable");
+    expect(messageActionMessage(user([image]))).not.toHaveProperty("editable");
+    expect(messageActionMessage(user([{ type: "text", text: "  " }]))).not.toHaveProperty("editable");
+    expect(messageActionMessage({ ...user([{ type: "text", text: "Hi" }]), role: "assistant" })).not.toHaveProperty("editable");
+  });
 });
 
 describe("message action availability", () => {

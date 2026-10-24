@@ -100,6 +100,7 @@ export interface SessionRouteService {
   shell(ref: SessionRouteRef, text: string): Promise<void>;
   runCommand(ref: SessionRouteRef, text: string): Promise<ClientCommandResult>;
   respondToCommand(ref: SessionRouteRef, requestId: string, value: string): Promise<ClientCommandResult>;
+  editMessage(ref: SessionRouteRef, input: { targetId: string; expectedText: string; text: string }): Promise<void>;
   navigateTree(ref: SessionRouteRef, request: ClientSessionTreeNavigateRequest): Promise<ClientSessionTreeNavigateResult>;
   forkFromTree(ref: SessionRouteRef, request: ClientSessionTreeForkRequest): Promise<ClientSessionTreeForkResult>;
   abort(ref: SessionRouteRef): Promise<void>;

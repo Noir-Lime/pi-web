@@ -226,6 +226,7 @@ describe("federated route contract", () => {
       ignoreParseFailure(sessionsApi.shell(session, "ls", machineId)),
       ignoreParseFailure(sessionsApi.runCommand(session, "/help", machineId)),
       ignoreParseFailure(sessionsApi.respondToCommand(session, "req 1", "yes", machineId)),
+      ignoreParseFailure(sessionsApi.editMessage(session, { targetId: "entry-1", expectedText: "typo", text: "fixed" }, machineId)),
       ignoreParseFailure(sessionsApi.navigateTree(session, { targetId: "entry-1", expectedLeafId: "leaf-1", summary: { mode: "none" } }, machineId)),
       ignoreParseFailure(sessionsApi.forkTree(session, { entryId: "entry-1", expectedLeafId: "leaf-1" }, machineId)),
       ignoreParseFailure(sessionsApi.abort(session, machineId)),

@@ -169,6 +169,7 @@ export const FEDERATED_HTTP_ROUTES = [
   { method: "POST", path: "/sessions/:sessionId/mcp/auth" },
   { method: "POST", path: "/sessions/:sessionId/commands/run" },
   { method: "POST", path: "/sessions/:sessionId/commands/respond" },
+  { method: "POST", path: "/sessions/:sessionId/messages/edit" },
   { method: "POST", path: "/sessions/:sessionId/tree/navigate", timeoutMs: SESSION_TREE_NAVIGATION_PROXY_TIMEOUT_MS },
   { method: "POST", path: "/sessions/:sessionId/tree/fork", timeoutMs: SESSION_TREE_FORK_PROXY_TIMEOUT_MS },
   { method: "POST", path: "/sessions/:sessionId/abort" },

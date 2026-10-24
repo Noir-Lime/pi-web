@@ -83,7 +83,7 @@ describe("plugin-defined transcript message actions", () => {
     const label = "Clone session from this message";
     const { view, context } = await mount();
     expect(buttons(view).map((button) => button.getAttribute("aria-label"))).toEqual([
-      "Clone session from this message", "Go back to this message", "Copy user message",
+      "Clone session from this message", "Go back to this message", "Edit message", "Copy user message",
     ]);
     const confirm = vi.fn(() => false);
     vi.stubGlobal("confirm", confirm);
@@ -316,7 +316,7 @@ describe("plugin-defined transcript message actions", () => {
     const { view } = await mount();
     view.messageActions = view.messageActions.filter((action) => action.id !== "core:message.copy");
     await settle(view);
-    expect(buttons(view).map((button) => button.title)).toEqual(["Clone session from this message", "Go back to this message"]);
+    expect(buttons(view).map((button) => button.title)).toEqual(["Clone session from this message", "Go back to this message", "Edit message"]);
   });
 
   it("lets Copy run while an entry workflow is pending and reports clipboard failure without success feedback", async () => {

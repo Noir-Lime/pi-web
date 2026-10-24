@@ -78,6 +78,8 @@ export type SessionLabelContextV5 = SessionLabelContext & PluginDiscoveryContext
 export interface MessageActionMessageV5 extends MessageActionMessage {
   /** This entry contains an ask_user question request, not an answer record. */
   readonly isQuestion?: boolean;
+  /** A user message with exactly one non-empty text block; the host can edit its text in place. */
+  readonly editable?: boolean;
 }
 export interface MessageActionAvailabilityContextV5 extends Omit<MessageActionAvailabilityContext, "message"> {
   readonly message: MessageActionMessageV5;
@@ -552,6 +554,8 @@ export interface MessageActionContext extends MessageActionAvailabilityContext {
   readonly history: {
     readonly fork: () => Promise<void>;
     readonly goBack: () => Promise<void>;
+    /** Opens the in-place text editor for this message. Absent on hosts without edit support. */
+    readonly edit?: () => Promise<void>;
   };
 }
 

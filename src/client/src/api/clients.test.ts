@@ -432,6 +432,16 @@ describe("session API compatibility", () => {
     expect(JSON.parse(requestBody(cancelInit))).toEqual({ cwd: "/repo with spaces", dialogId: "dialog 1" });
   });
 
+  it("saves an in-place message edit with exact text through an encoded machine route", async () => {
+    const fetchMock = stubJsonFetch({ accepted: true });
+    const input = { targetId: "entry /?", expectedText: "  old typo\n", text: "  corrected text\n" };
+    await expect(sessionsApi.editMessage({ id: "s /?", cwd: "/repo with spaces" }, input, "remote /?")).resolves.toBeUndefined();
+    const [url, init] = fetchCall(fetchMock, 0);
+    expect(url).toBe("https://pi.example.test/api/machines/remote%20%2F%3F/sessions/s%20%2F%3F/messages/edit");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(requestBody(init))).toEqual({ cwd: "/repo with spaces", ...input });
+  });
+
   it("posts exact-entry session tree navigation without retainCheckpoint through an encoded machine route", async () => {
     const fetchMock = stubJsonFetch({ cancelled: false, editorText: "edit this" });
     const navigation = { targetId: "entry /?", expectedLeafId: "leaf-1", summary: { mode: "custom" as const, instructions: "focus on tests" } };

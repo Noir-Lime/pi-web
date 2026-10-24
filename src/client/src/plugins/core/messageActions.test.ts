@@ -52,6 +52,34 @@ describe("core question history actions", () => {
   });
 });
 
+describe("core Edit message action", () => {
+  const edit = () => {
+    const action = createCoreMessageActions().find((candidate) => candidate.id === "message.edit");
+    if (action === undefined || action.target === "display") throw new Error("Expected an entry-targeted core Edit action");
+    return action;
+  };
+  const message = { entryId: "entry", role: "user" as const, text: "Hello", editable: true };
+
+  it("is visible only for editable user messages and follows the history enablement policy", () => {
+    const actions = [{ ...edit(), binding: { registrationPluginId: "core", sourcePluginId: "core" } }];
+    const ids = (context: MessageActionAvailabilityContext) => availableMessageActions(actions, context).map(({ enabled }) => enabled);
+    expect(ids({ ...input, message })).toEqual([true]);
+    expect(ids({ ...input, message: { entryId: "entry", role: "user", text: "Hello" } })).toEqual([]);
+    expect(ids({ ...input, message: { ...message, role: "assistant" } })).toEqual([]);
+    for (const flags of [{ busy: true }, { archived: true }, { pending: true }]) {
+      expect(ids({ ...input, session: { ...input.session, ...flags }, message })).toEqual([false]);
+    }
+  });
+
+  it("opens the host editor, and fails explicitly when the host has no edit support", async () => {
+    const open = vi.fn(() => Promise.resolve());
+    const base = { ...invocation("user"), message, history: { fork: vi.fn(), goBack: vi.fn() } };
+    await edit().run({ ...base, history: { ...base.history, edit: open } });
+    expect(open).toHaveBeenCalledOnce();
+    await expect(Promise.resolve().then(() => edit().run(base))).rejects.toThrow("does not support editing");
+  });
+});
+
 describe("core display Copy action", () => {
   it.each([
     { state: "ready", flags: { busy: false, archived: false, pending: false } },

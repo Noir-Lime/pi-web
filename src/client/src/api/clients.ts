@@ -281,6 +281,9 @@ export const sessionsApi = {
   shell: (session: SessionRef, text: string, machineId = "local") => request(sessionPath(session, "shell", machineId), parseAccepted, { method: "POST", body: sessionBody(session, { text }) }),
   runCommand: (session: SessionRef, text: string, machineId = "local") => request(sessionPath(session, "commands/run", machineId), parseCommandResult, { method: "POST", body: sessionBody(session, { text }) }),
   respondToCommand: (session: SessionRef, requestId: string, value: string, machineId = "local") => request(sessionPath(session, "commands/respond", machineId), parseCommandResult, { method: "POST", body: sessionBody(session, { requestId, value }) }),
+  editMessage: async (session: SessionRef, input: { targetId: string; expectedText: string; text: string }, machineId = "local"): Promise<void> => {
+    await request(sessionPath(session, "messages/edit", machineId), parseAccepted, { method: "POST", body: sessionBody(session, input) });
+  },
   navigateTree: (session: SessionRef, navigation: SessionTreeNavigateRequest, machineId = "local") => request(sessionPath(session, "tree/navigate", machineId), parseSessionTreeNavigateResult, {
     method: "POST",
     body: sessionBody(session, {

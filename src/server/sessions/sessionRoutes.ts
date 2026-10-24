@@ -460,6 +460,20 @@ export function registerSessionRoutes(app: FastifyInstance, sessions: SessionRou
     }
   });
 
+  app.post<{ Params: { sessionId: string }; Body: unknown }>(`${prefix}/sessions/:sessionId/messages/edit`, async (request, reply) => {
+    try {
+      const body = requireRecord(request.body);
+      await sessions.editMessage(sessionRefFromBody(request.params.sessionId, body), {
+        targetId: requireString(body, "targetId"),
+        expectedText: requireString(body, "expectedText"),
+        text: requireString(body, "text"),
+      });
+      return { accepted: true };
+    } catch (error) {
+      return reply.code(mutationErrorStatus(error)).send({ error: errorMessage(error) });
+    }
+  });
+
   app.post<{ Params: { sessionId: string }; Body: unknown }>(`${prefix}/sessions/:sessionId/tree/navigate`, async (request, reply) => {
     try {
       const body = requireRecord(request.body);

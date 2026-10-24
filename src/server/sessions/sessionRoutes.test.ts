@@ -60,6 +60,27 @@ afterEach(async () => {
 });
 
 describe("session routes", () => {
+  it("routes in-place edits without trimming and rejects malformed input before mutation", async () => {
+    const routeApp = Fastify({ logger: false });
+    await routeApp.register(fastifyWebsocket);
+    const eventHub = new SessionEventHub();
+    const routeService = new CapturingRouteSessionService();
+    registerSessionRoutes(routeApp, routeService, eventHub);
+    try {
+      const input = { cwd: "/repo", targetId: "entry-1", expectedText: "  typo\n", text: "  fixed\n" };
+      const response = await routeApp.inject({ method: "POST", url: "/sessions/session-1/messages/edit", payload: input });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ accepted: true });
+      expect(routeService.editMessageCalls).toEqual([{ lookup: { id: "session-1", cwd: resolve("/repo") }, input: { targetId: input.targetId, expectedText: input.expectedText, text: input.text } }]);
+      for (const field of ["targetId", "expectedText", "text"]) {
+        const invalid = await routeApp.inject({ method: "POST", url: "/sessions/session-1/messages/edit", payload: { ...input, [field]: 42 } });
+        expect(invalid.statusCode).toBe(400);
+      }
+      expect(routeService.editMessageCalls).toHaveLength(1);
+    } finally {
+      await routeApp.close();
+    }
+  });
   it("returns notification catalog and selected-inbox snapshots with required cwd context", async () => {
     const routeApp = Fastify({ logger: false });
     await routeApp.register(fastifyWebsocket);
@@ -1469,6 +1490,7 @@ class CapturingRouteSessionService implements SessionRouteService {
   readonly cleanupCalls: NormalizedSessionCleanupRequest[] = [];
   readonly bulkArchiveCalls: SessionBulkMutationRef[][] = [];
   readonly bulkDeleteCalls: SessionBulkMutationRef[][] = [];
+  readonly editMessageCalls: { lookup: SessionRouteRef; input: { targetId: string; expectedText: string; text: string } }[] = [];
   readonly navigateTreeCalls: { lookup: SessionRouteRef; request: SessionTreeNavigateRequest }[] = [];
   readonly forkFromTreeCalls: { lookup: SessionRouteRef; request: SessionTreeForkRequest }[] = [];
   forkFromTreeError: Error | undefined;
@@ -1693,6 +1715,11 @@ class CapturingRouteSessionService implements SessionRouteService {
   shell(): never { throw unusedRouteMethod("shell"); }
   runCommand(): never { throw unusedRouteMethod("runCommand"); }
   respondToCommand(): never { throw unusedRouteMethod("respondToCommand"); }
+  editMessage(lookup: SessionRouteRef, input: { targetId: string; expectedText: string; text: string }): Promise<void> {
+    this.editMessageCalls.push({ lookup, input });
+    return Promise.resolve();
+  }
+
   navigateTree(lookup: SessionRouteRef, request: SessionTreeNavigateRequest): Promise<SessionTreeNavigateResult> {
     this.navigateTreeCalls.push({ lookup, request });
     return Promise.resolve({ cancelled: false, editorText: "edit this" });

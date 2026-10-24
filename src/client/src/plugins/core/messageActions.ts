@@ -23,6 +23,16 @@ export function createCoreMessageActions(writeText = writeClipboardText): Messag
     icon: renderGoBackIcon(),
     run: ({ history }) => history.goBack(),
   }, {
+    ...historyAction,
+    id: "message.edit",
+    title: "Edit message",
+    icon: html`<span aria-hidden="true">✎</span>`,
+    visible: ({ message }: MessageActionAvailabilityContext) => message.role === "user" && message.editable === true,
+    run: async ({ history }) => {
+      if (history.edit === undefined) throw new Error("This host does not support editing messages.");
+      await history.edit();
+    },
+  }, {
     target: "display",
     id: "message.copy",
     title: "Copy message",

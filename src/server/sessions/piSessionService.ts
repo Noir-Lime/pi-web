@@ -414,6 +414,7 @@ export interface PiSessionManager {
   getHeader?(): { parentSession?: string; timestamp?: string } | null | undefined;
   appendCustomEntry?(customType: string, data?: unknown): string;
   appendSessionInfo?(name: string): string;
+  editUserMessageText?(targetId: string, expectedText: string, text: string): void;
 }
 
 export interface PiSessionManagerGateway {
@@ -520,6 +521,7 @@ export interface PiAgentSession {
   getSessionStats(): { sessionId: string; totalMessages: number; userMessages: number; assistantMessages: number; toolCalls: number; tokens: ClientSessionStatus["tokens"]; cost: number; contextUsage?: ClientSessionStatus["contextUsage"] };
   reload(options?: { beforeSessionStart?: () => void | Promise<void> }): Promise<void>;
   waitForIdle(): Promise<void>;
+  refreshContext?(): void;
   getContextUsage(): ClientSessionStatus["contextUsage"] | undefined;
   prompt(text: string, options?: { streamingBehavior?: "steer" | "followUp"; images?: ImageContent[]; expandPromptTemplates?: boolean }): Promise<void>;
   sendCustomMessage(message: { customType: string; content: string; display: boolean; details?: unknown }, options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" }): Promise<void>;
@@ -3372,6 +3374,41 @@ export class PiSessionService implements SessionRouteService {
     await this.assertWritable(ref);
     const active = await this.getActive(ref);
     return this.commandService.respond(active.runtime.session.sessionId, requestId, value);
+  }
+
+  async editMessage(ref: PiSessionRef, request: { targetId: string; expectedText: string; text: string }): Promise<void> {
+    if (typeof request.targetId !== "string" || request.targetId.trim() === "" ||
+      typeof request.expectedText !== "string" || typeof request.text !== "string" || request.text.trim() === "") {
+      throw new Error("A target, expected text, and non-empty replacement text are required");
+    }
+    await this.assertWritable(ref);
+    const session = await this.getOrOpen(ref);
+    await this.runTreeExclusiveOperation(
+      [{ sessionId: session.sessionId, session }],
+      "Stop current session activity before editing a message",
+      () => {
+        const entry = session.sessionManager.getBranch().find((candidate) => isRecord(candidate) && candidate["id"] === request.targetId);
+        const message = isRecord(entry) && entry["type"] === "message" ? entry["message"] : undefined;
+        if (!isRecord(message) || message["role"] !== "user") throw new Error("Only user messages on the active branch can be edited");
+        const content = message["content"];
+        const textBlocks = Array.isArray(content) ? content.filter((block: unknown): block is Record<string, unknown> => isRecord(block) && block["type"] === "text") : undefined;
+        if (typeof content !== "string" && (textBlocks?.length !== 1 || !isRecord(textBlocks[0]) || typeof textBlocks[0]["text"] !== "string")) {
+          throw new Error("Editing requires exactly one user text block");
+        }
+        const currentText: unknown = typeof content === "string" ? content : textBlocks?.[0]?.["text"];
+        if (currentText !== request.expectedText) throw new Error("Message text changed; reload before editing");
+        const edit = session.sessionManager.editUserMessageText?.bind(session.sessionManager);
+        const refresh = session.refreshContext?.bind(session);
+        if (edit === undefined || refresh === undefined) throw new Error("In-place message editing is not supported by this Pi runtime");
+        edit(request.targetId, request.expectedText, request.text);
+        refresh();
+        const sessionFile = session.sessionFile ?? session.sessionManager.getSessionFile();
+        if (sessionFile !== undefined) this.sessionManager.invalidateSessionFile(sessionFile);
+        this.events.publish(session.sessionId, { type: "session.tree.changed" });
+        this.publishStatus(session);
+        return Promise.resolve();
+      },
+    );
   }
 
   async navigateTree(ref: PiSessionRef, request: ClientSessionTreeNavigateRequest): Promise<ClientSessionTreeNavigateResult> {

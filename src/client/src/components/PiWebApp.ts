@@ -85,6 +85,7 @@ import "./ActionPalette";
 import "./AuthDialog";
 import "./ProjectDialog";
 import "./MachineDialog";
+import "./MessageEditDialog";
 import type { MachineDialogSubmit } from "./MachineDialog";
 import { deepActiveElement, focusElement, hasRenderedModal } from "./modalLayerRegistry";
 import "./SettingsDialog";
@@ -117,6 +118,14 @@ const ROUTE_SELECTION_SCOPE = ["machine", "project", "workspace", "session"] as 
 const WORKSPACE_SURFACE_SCOPE = ["tool", "view"] as const;
 
 type WorkspaceRouteUrlPublication = "current-url" | "deferred";
+
+/** Identity and original text captured when the edit dialog opens; Save is checked against it. */
+interface MessageEditTarget {
+  readonly machineId: string;
+  readonly session: { readonly id: string; readonly cwd: string };
+  readonly entryId: string;
+  readonly expectedText: string;
+}
 
 interface WorkspaceRouteFinishOptions {
   updateUrl: boolean;
@@ -165,6 +174,7 @@ export class PiWebApp extends LitElement {
   private readonly handleChatNavigationChange = (controls: TemplateResult) => { this.chatNavigation = controls; };
   @query("prompt-editor") private promptEditor?: PromptEditor;
   @state() private messageRevertTarget: PromptChipTarget | undefined;
+  @state() private messageEditTarget: MessageEditTarget | undefined;
   @state() private queuedMessageActionTarget: QueuedMessageActionTarget | undefined;
   @query("app-navigation-panel") private navigationPanel?: AppNavigationPanel;
   @query("#navigation-panel") private navigationPanelFrame?: HTMLElement;
@@ -3747,10 +3757,44 @@ export class PiWebApp extends LitElement {
       return {
         ...input,
         ...this.messageActionHelpers(binding, input),
-        history: { fork: () => actOnHistory("fork"), goBack: () => actOnHistory("back") },
+        history: {
+          fork: () => actOnHistory("fork"),
+          goBack: () => actOnHistory("back"),
+          edit: () => {
+            if (!isCurrent()) throw new Error("This message's conversation is no longer available.");
+            if (this.messageEditTarget !== undefined) throw new Error("Another message edit is already open.");
+            this.messageEditTarget = {
+              machineId: input.machine.id,
+              session: { id: input.session.id, cwd: input.session.cwd },
+              entryId: input.message.entryId,
+              expectedText: input.message.text,
+            };
+            return Promise.resolve();
+          },
+        },
       };
     });
   };
+
+  /**
+   * Saves an edit in place. The server publishes `session.tree.changed`, which
+   * discards the transcript cache and reloads history; no refresh happens here.
+   */
+  private async saveMessageEdit(target: MessageEditTarget, text: string): Promise<void> {
+    const state = this.state;
+    const context = this.messageActionContext(state);
+    if (context?.machine.id !== target.machineId || context.session.id !== target.session.id || context.session.cwd !== target.session.cwd) throw new Error("This message's conversation is no longer selected. Cancel and reopen the edit.");
+    if (context.session.archived || context.session.pending || context.session.busy) throw new Error("This session is busy or archived. Try again when it is idle.");
+    const current = state.messages.find((item) => item.entryId === target.entryId);
+    const snapshot = current === undefined ? undefined : messageActionMessage(current, "user");
+    if (snapshot?.text !== target.expectedText) throw new Error("This message changed since you opened the editor. Cancel and reopen the edit.");
+    await sessionsApi.editMessage(target.session, { targetId: target.entryId, text, expectedText: target.expectedText }, target.machineId);
+    if (this.messageEditTarget === target) this.messageEditTarget = undefined;
+  }
+
+  private renderMessageEditDialog(target: MessageEditTarget) {
+    return html`<message-edit-dialog .initialText=${target.expectedText} .onSave=${(text: string) => this.saveMessageEdit(target, text)} .onCancel=${() => { if (this.messageEditTarget === target) this.messageEditTarget = undefined; }}></message-edit-dialog>`;
+  }
 
   private isRevertingMessage(state: AppState): boolean {
     return (this.messageRevertTarget?.machineId === selectedMachineId(state)
@@ -4042,6 +4086,7 @@ export class PiWebApp extends LitElement {
         ${state.actionPaletteOpen ? html`<action-palette .actions=${this.getActions()} .onRun=${(action: AppAction) => { this.setState({ actionPaletteOpen: false }); this.runAction(action); }} .onCancel=${() => { this.setState({ actionPaletteOpen: false }); }}></action-palette>` : null}
         ${this.renderSessionTreeNavigator(state)}
         ${state.projectDialogOpen ? html`<project-dialog .machineId=${selectedMachineId(state)} .onSubmit=${(path: string, create: boolean, trust: ProjectTrustChoice | undefined) => this.projects.addProject(path, create, trust)} .onCancel=${() => { this.setState({ projectDialogOpen: false }); }}></project-dialog>` : null}
+        ${this.messageEditTarget === undefined ? null : this.renderMessageEditDialog(this.messageEditTarget)}
         ${state.machineDialogOpen ? html`<machine-dialog .error=${state.error} .onSubmit=${(input: MachineDialogSubmit) => this.submitMachineDialog(input)} .onCancel=${() => { this.setState({ machineDialogOpen: false }); }}></machine-dialog>` : null}
         ${this.sessionCleanupDialog !== undefined ? html`<session-cleanup-dialog .preview=${this.sessionCleanupDialog.preview} .previewRequest=${this.sessionCleanupDialog.previewRequest} .result=${this.sessionCleanupDialog.result} .loading=${this.sessionCleanupDialog.loading === true} .running=${this.sessionCleanupDialog.running === true} .error=${this.sessionCleanupDialog.error ?? ""} .onPreview=${(request: SessionCleanupRequest) => { void this.previewSessionCleanup(request); }} .onRun=${(request: SessionCleanupRequest) => { void this.runSessionCleanup(request); }} .onClose=${() => { this.closeSessionCleanupDialog(); }}></session-cleanup-dialog>` : null}
         ${this.settingsSection !== undefined ? html`<settings-dialog .section=${this.settingsSection} .mcpContext=${state.selectedSession !== undefined && state.selectedSession.archived !== true ? { session: { id: state.selectedSession.id, cwd: state.selectedSession.cwd }, machineId: selectedMachineId(state) } : undefined} .onMcpAuth=${(mode: "login" | "logout", serverName: string, context: { session: { id: string; cwd: string }; machineId: string }) => { this.closeSettings(); void this.auth.openMcpAuth(mode, serverName, context); }} .machine=${state.selectedMachine} .machineRuntime=${this.selectedMachineRuntime()} .machines=${state.machines} .machineStatuses=${state.machineStatuses} .machineRuntimes=${state.machineRuntimes} .actions=${this.getDefaultActions()} .themes=${this.plugins.getThemes()} .themePreference=${this.themePreference} .activeThemeId=${this.activeThemeId} .hasLocalThemeOverride=${this.localThemePreference !== undefined} .onUseLocalTheme=${(preference: ThemePreference) => { this.pickTheme(preference); }} .onUseDefaultTheme=${() => { this.useDefaultTheme(); }} .onNavigate=${(section: SettingsSection) => { this.navigateSettings(section); }} .onClose=${() => { this.closeSettings(); }} .onConfigSaved=${(config: PiWebConfigValues) => { this.applyClientConfig(config); }} .onRefreshMachineRuntime=${async (machineId: string) => { await this.machines.refreshMachineRuntime(machineId); }}></settings-dialog>` : null}

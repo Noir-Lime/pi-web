@@ -15,11 +15,14 @@ export interface AvailableMessageAction {
 
 export function messageActionMessage(message: ChatLine, role = message.role): MessageActionMessage | undefined {
   if (message.entryId === undefined) return undefined;
+  const isQuestion = message.parts.some((part) => part.type === "askUserQuestion");
+  const textParts = message.parts.filter((part) => part.type === "text");
   return Object.freeze({
     entryId: message.entryId,
-    ...(message.parts.some((part) => part.type === "askUserQuestion") ? { isQuestion: true } : {}),
+    ...(isQuestion ? { isQuestion: true } : {}),
+    ...(role === "user" && !isQuestion && textParts.length === 1 && textParts[0]?.text.trim() !== "" ? { editable: true } : {}),
     role,
-    text: message.parts.filter((part) => part.type === "text").map((part) => part.text).join("\n\n"),
+    text: textParts.map((part) => part.text).join("\n\n"),
   });
 }
 
