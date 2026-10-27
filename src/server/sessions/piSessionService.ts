@@ -452,6 +452,8 @@ export interface PiSessionManager {
   branch(branchFromId: string): void;
   resetLeaf(): void;
   getHeader?(): { parentSession?: string; timestamp?: string } | null | undefined;
+  /** Lazy store: drop the header's parentSession and shift every entry offset; no-op when absent. */
+  detachParentSession?(): void;
   appendCustomEntry?(customType: string, data?: unknown): string;
   appendSessionInfo?(name: string): string;
   editUserMessageText?(targetId: string, expectedText: string, text: string): void;
@@ -3951,13 +3953,21 @@ export class PiSessionService implements SessionRouteService {
     const session = await this.getOrOpen(ref);
     const sessionFile = session.sessionFile;
     if (sessionFile === undefined || sessionFile === "") throw new Error("Session is not persisted");
-    await clearParentSession(sessionFile);
-    // The header rewrite keeps the inode, and whenever it leaves the file's
-    // size unchanged it is invisible to the gateway's summary memo, which
-    // cannot detect such rewrites from identity + size alone and would keep
-    // listing the old parent link until restart.
+    const manager = session.sessionManager;
+    if (manager.detachParentSession !== undefined) {
+      // A lazy store indexes entries by byte offset: only the manager itself can
+      // splice the header and shift those offsets, so the file is never rewritten
+      // underneath it.
+      manager.detachParentSession();
+    } else {
+      // Managers without a byte-offset index keep entries in memory; the file
+      // can be rewritten directly and the shared header object is left alone.
+      await clearParentSession(sessionFile);
+      clearParentSessionHeader(manager);
+    }
+    // The gateway's summary memo cannot detect a header rewrite from identity +
+    // size alone and would keep listing the old parent link until restart.
     this.sessionManager.invalidateSessionFile(sessionFile);
-    clearParentSessionHeader(session.sessionManager);
     this.unregisterSubsession(session.sessionId);
     await this.forgetUnreadSessions([{ sessionId: session.sessionId, cwd: session.sessionManager.getCwd() }]);
   }
