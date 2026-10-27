@@ -2,7 +2,9 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { join } from "node:path";
-import { readFile, writeFile } from "node:fs/promises";
+import { createReadStream, createWriteStream } from "node:fs";
+import { open as openFile, rename, rm } from "node:fs/promises";
+import { pipeline } from "node:stream/promises";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
 import type { McpAuthServerOption, McpAuthServersResponse, OAuthFlowState, SessionQueueMessageMutation } from "../../shared/apiTypes.js";
@@ -401,12 +403,50 @@ interface SessionModelScopeCache {
   catalogKey: string;
 }
 
+/** Body-free index facts for one session entry (lazy store Contract A). */
+export interface PiEntryDescriptor {
+  id: string;
+  parentId: string | null;
+  type: string;
+  role?: string;
+  customType?: string;
+  timestamp: string;
+  bytes: number;
+  textChars: number;
+  imageCount: number;
+  hasThinkingSignature: boolean;
+  hasThinking?: boolean;
+  toolResultId?: string;
+  targetId?: string;
+  omitted?: boolean;
+  firstKeptEntryId?: string;
+  /** custom_message entries only. */
+  display?: boolean;
+  /** thinking_level_change entries only. */
+  thinkingLevel?: string;
+}
+
+export interface PiBranchCounts {
+  entries: number;
+  byType: Record<string, number>;
+  byRole: Record<string, number>;
+  byCustomType: Record<string, number>;
+  displayable: number;
+}
+
 export interface PiSessionManager {
   getCwd(): string;
   getSessionId(): string;
   getSessionFile(): string | undefined;
   getBranch(): unknown[];
   getEntries?(): readonly unknown[];
+  getEntry?(id: string): unknown;
+  getDescriptor?(id: string): PiEntryDescriptor | undefined;
+  getDescriptors?(): PiEntryDescriptor[];
+  getBranchDescriptors?(fromId?: string): PiEntryDescriptor[];
+  getContextDescriptors?(): PiEntryDescriptor[];
+  getBranchCounts?(fromId?: string): PiBranchCounts;
+  getBranchRevision?(): string;
   getTree?(): readonly ProjectableSessionTreeNode[];
   getLeafId(): string | null;
   branch(branchFromId: string): void;
@@ -1080,7 +1120,7 @@ function createDefaultRuntimeFactory(
     });
     const modelOptions = await resolveSessionModelOptions({
       services,
-      hasExistingSession: sessionManager.buildSessionContext().messages.length > 0,
+      hasExistingSession: hasExistingSessionContext(sessionManager),
       ...(initialModel === undefined ? {} : { initialModel }),
       ...(initialThinkingLevel === undefined ? {} : { initialThinkingLevel }),
     });
@@ -2208,11 +2248,16 @@ export class PiSessionService implements SessionRouteService {
   }
 
   private restoreSubsessionReceipts(session: PiAgentSession, releaseClaims = true): void {
-    this.subsessionInbox(session.sessionId, session.sessionFile).restoreReceipts(session.sessionManager.getBranch(), releaseClaims);
+    this.subsessionInbox(session.sessionId, session.sessionFile).restoreReceipts(entriesWhere(
+      session.sessionManager,
+      "branch",
+      (descriptor) => descriptor.role === "toolResult" || descriptor.customType === SUBSESSION_RECEIPT_ENTRY_TYPE || descriptor.customType === SUBSESSION_NOTIFICATION_CUSTOM_TYPE,
+      (entry) => isRecord(entry) && ((entry["type"] === "message" && isRecord(entry["message"]) && entry["message"]["role"] === "toolResult") || entry["customType"] === SUBSESSION_RECEIPT_ENTRY_TYPE || entry["customType"] === SUBSESSION_NOTIFICATION_CUSTOM_TYPE),
+    ), releaseClaims);
   }
 
   private subsessionCompletionForOutput(parentId: string, parentFile: string | undefined, child: PiAgentSession, messages: readonly unknown[]): SubsessionCompletion | undefined {
-    const branch = persistedSubsessionCompletions(child.sessionManager.getBranch(), (field) => {
+    const branch = persistedSubsessionCompletions(customEntriesOfType(child.sessionManager, SUBSESSION_COMPLETION_ENTRY_TYPE, "branch"), (field) => {
       this.logger.info({ sessionId: child.sessionId, field }, "Dropped present-but-invalid subsession completion metadata field");
     }).filter(({ sessionId }) => sessionId === child.sessionId);
     // A child can be rewound independently of its parent. Never acknowledge an
@@ -2660,7 +2705,7 @@ export class PiSessionService implements SessionRouteService {
     const armed = this.subsessionNotifyArmed.get(childId);
     if (agentStarted) {
       if (armed === undefined || armed === false) {
-        this.subsessionNotifyArmed.set(childId, { startedAt: this.now().toISOString(), startEntryCount: session.sessionManager.getBranch().length });
+        this.subsessionNotifyArmed.set(childId, { startedAt: this.now().toISOString(), startEntryCount: branchEntryCount(session.sessionManager) });
       }
       return;
     }
@@ -2669,8 +2714,7 @@ export class PiSessionService implements SessionRouteService {
     if (!agentSettled && this.hasActiveWork(session)) return;
     if (armed === undefined || armed === false) return;
     const activity = this.activities.get(childId);
-    const branch = session.sessionManager.getBranch();
-    const runEntries = branch.length >= armed.startEntryCount ? branch.slice(armed.startEntryCount) : [];
+    const runEntries = branchEntriesFrom(session.sessionManager, armed.startEntryCount);
     const messages = historyMessagesFromEntries(runEntries);
     const observed = this.subsessionObservation(session);
     const runSnapshot: Pick<SubsessionObservation, "model" | "thinkingLevel" | "tokens" | "contextUsage"> = {
@@ -2687,7 +2731,7 @@ export class PiSessionService implements SessionRouteService {
       completionId: randomUUID(), sessionId: childId, cwd: session.sessionManager.getCwd(),
       status: activity?.phase === "error" || providerError !== undefined ? "error" : "idle",
       startedAt: armed.startedAt, completedAt: this.now().toISOString(),
-      finalText: finalAssistantText(messages), messageCount: historyMessages(session).length,
+      finalText: finalAssistantText(messages), messageCount: displayableBranchCount(session.sessionManager) ?? historyMessages(session).length,
       ...(backgroundJobs === undefined ? {} : { backgroundJobs }),
       ...(session.sessionName === undefined ? {} : { name: session.sessionName }),
       ...runSnapshot,
@@ -2808,12 +2852,23 @@ export class PiSessionService implements SessionRouteService {
     const session = await this.getOrOpen(ref);
     const seqBeforeRead = this.events.currentSeq(session.sessionId);
     const activeAtCapture = this.hasActiveWork(session);
-    const diskBranch = activeAtCapture ? undefined : await this.readableSessionBranch(ref, session);
+    const source = activeAtCapture ? runtimeTranscriptSource(session) : await this.readableSessionBranchSource(ref, session);
     // Disk reads yield, even if a whole turn starts AND ends while they run.
     // From the final runtime read through the watermark capture nothing may yield.
-    const branch = diskBranch === undefined || this.hasActiveWork(session) || this.events.currentSeq(session.sessionId) !== seqBeforeRead
-      ? session.sessionManager.getBranch()
-      : diskBranch;
+    const useRuntime = source.kind === "descriptors" || this.hasActiveWork(session) || this.events.currentSeq(session.sessionId) !== seqBeforeRead;
+    if (useRuntime && hasDescriptorApi(session.sessionManager)) {
+      const counts = branchCounts(session.sessionManager);
+      if (counts === undefined) throw new Error("Session descriptor index is unavailable");
+      const echoes = (this.pendingPromptEchoes.get(session) ?? []).filter((echo) => echo.userIndex >= counts.user);
+      const messagePage = pageFromDescriptors(session.sessionManager, page, echoes.map((echo) => echo.message));
+      return {
+        page: { ...messagePage, messages: messagePage.messages.map((message) => this.browserTranscriptMessage(session, message)) },
+        status: this.statusFromSession(session, counts.messages + echoes.length),
+        seq: this.events.currentSeq(session.sessionId),
+        partial: this.publishedAssistantPartials.get(session) ?? null,
+      };
+    }
+    const branch = useRuntime ? session.sessionManager.getBranch() : source.entries;
     const messages = historyMessagesFromEntries(branch);
     const userCount = messages.filter((message) => isRecord(message) && message["role"] === "user").length;
     const echoes = (this.pendingPromptEchoes.get(session) ?? []).filter((echo) => echo.userIndex >= userCount);
@@ -2829,7 +2884,10 @@ export class PiSessionService implements SessionRouteService {
 
   async messages(ref: PiSessionRef, page?: { before?: number; limit?: number }): Promise<ClientMessagePage> {
     const session = await this.getOrOpen(ref);
-    const result = pageMessagesAtSafeBoundary(historyMessagesFromEntries(await this.readableSessionBranch(ref, session)), page);
+    const source = await this.readableSessionBranchSource(ref, session);
+    const result = source.kind === "descriptors"
+      ? pageFromDescriptors(session.sessionManager, page, [])
+      : pageMessagesAtSafeBoundary(historyMessagesFromEntries(source.entries), page);
     return { ...result, messages: result.messages.map((message) => this.browserTranscriptMessage(session, message)) };
   }
 
@@ -2871,8 +2929,9 @@ export class PiSessionService implements SessionRouteService {
     const session = await this.sessionForStatusOrDialogClose(ref);
     await this.activityMarker.refresh(session.sessionFile, this.hasActiveWork(session));
     if (this.hasActiveWork(session)) return this.statusFromSession(session);
-    const branch = await this.readableSessionBranch(ref, session);
-    return this.statusFromSession(session, this.snapshotMessageCount(branch));
+    const source = await this.readableSessionBranchSource(ref, session);
+    if (source.kind === "descriptors") return this.statusFromSession(session);
+    return this.statusFromSession(session, this.snapshotMessageCount(source.entries));
   }
 
   /**
@@ -3216,7 +3275,7 @@ export class PiSessionService implements SessionRouteService {
   private beginPromptSubmission(session: PiAgentSession, text: string, behavior: QueuedPromptKind | undefined, images: ImageContent[] = [], echoUserMessage = true, expandPromptTemplates = true): Promise<void> {
     this.publishActivity(session, behavior === "steer" ? "steering queued" : behavior === "followUp" ? "message queued" : "prompt accepted", "active");
     const echoes = this.pendingPromptEchoes.get(session) ?? [];
-    const userCount = historyMessagesFromEntries(session.sessionManager.getBranch()).filter((message) => isRecord(message) && message["role"] === "user").length;
+    const userCount = branchCounts(session.sessionManager)?.user ?? historyMessagesFromEntries(session.sessionManager.getBranch()).filter((message) => isRecord(message) && message["role"] === "user").length;
     const echo = behavior === undefined && echoUserMessage
       ? { userIndex: Math.max(userCount, ...echoes.map((pending) => pending.userIndex + 1)), message: userMessage(text, images) }
       : undefined;
@@ -3387,7 +3446,7 @@ export class PiSessionService implements SessionRouteService {
       [{ sessionId: session.sessionId, session }],
       "Stop current session activity before editing a message",
       () => {
-        const entry = session.sessionManager.getBranch().find((candidate) => isRecord(candidate) && candidate["id"] === request.targetId);
+        const entry = branchEntryById(session.sessionManager, request.targetId);
         const message = isRecord(entry) && entry["type"] === "message" ? entry["message"] : undefined;
         if (!isRecord(message) || message["role"] !== "user") throw new Error("Only user messages on the active branch can be edited");
         const content = message["content"];
@@ -4260,32 +4319,37 @@ export class PiSessionService implements SessionRouteService {
    * runtimes remain authoritative and are never replaced, reloaded, or aborted.
    */
   private async readableSessionBranch(ref: PiSessionRef, session: PiAgentSession): Promise<unknown[]> {
-    if (this.hasActiveWork(session) || this.sessionManager.readBranch === undefined) return session.sessionManager.getBranch();
+    const source = await this.readableSessionBranchSource(ref, session);
+    return source.kind === "entries" ? source.entries : session.sessionManager.getBranch();
+  }
+
+  /**
+   * Same authority rules as {@link readableSessionBranch}, but the runtime
+   * fallback is reported as descriptors instead of hydrating the whole
+   * branch: transcript paging then reads only the page's bodies. This is
+   * also the path for files over the gateway snapshot limit, which used to
+   * fall back to a full runtime branch.
+   */
+  private async readableSessionBranchSource(ref: PiSessionRef, session: PiAgentSession): Promise<TranscriptSource> {
+    if (this.hasActiveWork(session) || this.sessionManager.readBranch === undefined) return runtimeTranscriptSource(session);
     const sessionFile = session.sessionFile ?? session.sessionManager.getSessionFile();
     const resolvedPath = sessionFile === undefined ? await this.idleSessionFilePath(ref, session) : undefined;
-    if (this.hasActiveWork(session)) return session.sessionManager.getBranch();
+    if (this.hasActiveWork(session)) return runtimeTranscriptSource(session);
     const path = sessionFile ?? resolvedPath;
-    if (path === undefined) return session.sessionManager.getBranch();
+    if (path === undefined) return runtimeTranscriptSource(session);
     const snapshot = await this.sessionManager.readBranch(path);
-    // No snapshot exists when the transcript file is absent (a session known
-    // by path but never persisted, or externally removed): the runtime branch
-    // is the only readable branch then.
-    if (snapshot === undefined) return session.sessionManager.getBranch();
-    // Reading also yields. A prompt that started meanwhile must still win over
-    // the completed disk snapshot and its potentially older event watermark.
-    if (this.hasActiveWork(session)) return session.sessionManager.getBranch();
+    if (snapshot === undefined) return runtimeTranscriptSource(session);
+    if (this.hasActiveWork(session)) return runtimeTranscriptSource(session);
     const selectedLeafId = this.unpersistedTreeBranchLeaves.get(session);
     if (selectedLeafId !== undefined) {
       const runtimeLeafId = session.sessionManager.getLeafId();
       const selectedBranchIsAnchored = runtimeLeafId !== null
         && runtimeLeafId !== selectedLeafId
         && transcriptBranchIncludesEntry(snapshot, runtimeLeafId);
-      if (!selectedBranchIsAnchored) return session.sessionManager.getBranch();
-      // A later runtime append now anchors the live selection in this persisted
-      // branch. Resume ordinary idle snapshots, including external descendants.
+      if (!selectedBranchIsAnchored) return runtimeTranscriptSource(session);
       this.unpersistedTreeBranchLeaves.delete(session);
     }
-    return snapshot;
+    return { kind: "entries", entries: snapshot };
   }
 
   /**
@@ -5457,7 +5521,7 @@ export class PiSessionService implements SessionRouteService {
   }
 
   private reconcileRuntimeMessageCount(session: PiAgentSession): number {
-    const count = transcriptMessageCount(session.sessionManager.getBranch());
+    const count = branchCounts(session.sessionManager)?.messages ?? transcriptMessageCount(session.sessionManager.getBranch());
     this.runtimeMessageCounts.set(session, count);
     return count;
   }
@@ -5627,13 +5691,21 @@ function notificationIdentityForSession(session: PiAgentSession): { sessionId: s
 }
 
 function metadataFromActiveSession(session: PiAgentSession): SessionUiMetadata | undefined {
-  return readSessionUiMetadata(session.sessionManager.getEntries?.() ?? session.sessionManager.getBranch());
+  const manager = session.sessionManager;
+  if (manager.getDescriptors !== undefined && manager.getEntry !== undefined) {
+    const bodies = manager.getDescriptors()
+      .filter((descriptor) => descriptor.type === "custom" && descriptor.customType === SESSION_UI_METADATA_CUSTOM_TYPE)
+      .map((descriptor) => manager.getEntry?.(descriptor.id));
+    return readSessionUiMetadata(bodies);
+  }
+  return readSessionUiMetadata(manager.getEntries?.() ?? manager.getBranch());
 }
 
 function clientSessionFromActiveSession(session: PiAgentSession): ClientSession {
   const header = session.sessionManager.getHeader?.();
   const created = header?.timestamp ?? new Date().toISOString();
   const metadata = metadataFromActiveSession(session);
+  const parentSessionPath = parentSessionPathOf(session.sessionManager);
   return {
     id: session.sessionId,
     path: session.sessionFile ?? "",
@@ -5641,11 +5713,11 @@ function clientSessionFromActiveSession(session: PiAgentSession): ClientSession 
     persisted: sessionFileExists(session.sessionFile),
     created,
     modified: created,
-    messageCount: transcriptMessageCount(session.sessionManager.getBranch()),
+    messageCount: branchCounts(session.sessionManager)?.messages ?? transcriptMessageCount(session.sessionManager.getBranch()),
     firstMessage: "",
     ...(metadata === undefined ? {} : { metadata }),
     ...(session.sessionName === undefined ? {} : { name: session.sessionName }),
-    ...(header?.parentSession === undefined ? {} : { parentSessionPath: header.parentSession }),
+    ...(parentSessionPath === undefined ? {} : { parentSessionPath }),
   };
 }
 
@@ -5684,7 +5756,7 @@ function archiveInputFromListEntry(session: PiSessionListEntry): ArchiveSessionI
 function archiveInputFromActiveSession(session: PiAgentSession): ArchiveSessionInput {
   const sessionFile = session.sessionFile;
   if (sessionFile === undefined || sessionFile === "") throw new Error("Session is not persisted");
-  const parentSessionPath = session.sessionManager.getHeader?.()?.parentSession;
+  const parentSessionPath = parentSessionPathOf(session.sessionManager);
   const metadata = metadataFromActiveSession(session);
   return {
     sessionId: session.sessionId,
@@ -5692,7 +5764,7 @@ function archiveInputFromActiveSession(session: PiAgentSession): ArchiveSessionI
     path: sessionFile,
     created: new Date().toISOString(),
     modified: new Date().toISOString(),
-    messageCount: transcriptMessageCount(session.sessionManager.getBranch()),
+    messageCount: branchCounts(session.sessionManager)?.messages ?? transcriptMessageCount(session.sessionManager.getBranch()),
     firstMessage: "",
     ...(metadata === undefined ? {} : { metadata }),
     ...(session.sessionName === undefined ? {} : { name: session.sessionName }),
@@ -5728,7 +5800,7 @@ function archiveCandidateFromArchivedRecord(record: ArchivedSessionRecord, fallb
 function archiveCandidateFromActiveSession(session: PiAgentSession, archived: boolean): WorkspaceArchiveCandidate {
   const sessionFile = session.sessionFile;
   if (sessionFile === undefined || sessionFile === "") throw new Error("Session is not persisted");
-  const parentSessionPath = session.sessionManager.getHeader?.()?.parentSession;
+  const parentSessionPath = parentSessionPathOf(session.sessionManager);
   return {
     id: session.sessionId,
     path: sessionFile,
@@ -5819,7 +5891,7 @@ async function verifiedTrackedSubsessionLink(
 ): Promise<TrackedSubsessionLink | undefined> {
   // Child markers are only hints; the current child header and reciprocal
   // parent custom link must agree on the exact ids and files before relinking.
-  const entries = session.sessionManager.getEntries?.() ?? session.sessionManager.getBranch();
+  const entries = customEntriesOfType(session.sessionManager, SUBSESSION_CHILD_LINK_CUSTOM_TYPE);
   let marker: PersistedChildSubsessionLink | undefined;
   for (const entry of entries) {
     const parsed = parsePersistedChildSubsessionLink(entry);
@@ -5866,7 +5938,7 @@ function findReciprocalParentSubsessionLink(
   } catch {
     return undefined;
   }
-  const entries = parentManager.getEntries?.() ?? parentManager.getBranch();
+  const entries = customEntriesOfType(parentManager, SUBSESSION_LINK_CUSTOM_TYPE);
   for (const entry of entries) {
     const link = parsePersistedParentSubsessionLink(entry);
     if (link === undefined) continue;
@@ -5947,20 +6019,50 @@ async function sessionFileHeaderMatches(sessionFile: string, expected: { session
 }
 
 async function clearParentSession(sessionFile: string): Promise<void> {
-  const content = await readFile(sessionFile, "utf8");
-  const newlineIndex = content.indexOf("\n");
-  const firstLine = newlineIndex === -1 ? content : content.slice(0, newlineIndex);
-  const rest = newlineIndex === -1 ? "" : content.slice(newlineIndex);
-  const header: unknown = JSON.parse(firstLine);
+  const handle = await openFile(sessionFile, "r");
+  let headerLine: string;
+  let headerBytes: number;
+  try {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let newlineAt = -1;
+    const buffer = Buffer.alloc(64 * 1024);
+    while (newlineAt === -1) {
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, total);
+      if (bytesRead === 0) break;
+      const chunk = Buffer.from(buffer.subarray(0, bytesRead));
+      const at = chunk.indexOf(0x0a);
+      if (at !== -1) newlineAt = total + at;
+      chunks.push(chunk);
+      total += bytesRead;
+    }
+    const head = Buffer.concat(chunks);
+    headerBytes = newlineAt === -1 ? head.length : newlineAt + 1;
+    headerLine = head.subarray(0, newlineAt === -1 ? head.length : newlineAt).toString("utf8");
+  } finally {
+    await handle.close();
+  }
+  const header: unknown = JSON.parse(headerLine);
   if (!isRecord(header) || header["type"] !== "session") throw new Error("Invalid session file header");
   if (header["parentSession"] === undefined) return;
-  delete header["parentSession"];
-  await writeFile(sessionFile, `${JSON.stringify(header)}${rest}`, "utf8");
+  const detached: Record<string, unknown> = { ...header };
+  delete detached["parentSession"];
+  const temporary = `${sessionFile}.detach-${String(process.pid)}`;
+  try {
+    const out = createWriteStream(temporary, "utf8");
+    out.write(`${JSON.stringify(detached)}\n`);
+    const rest = pipeline(createReadStream(sessionFile, { start: headerBytes }), out);
+    await rest;
+    await rename(temporary, sessionFile);
+  } catch (error) {
+    await rm(temporary, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
+/** The manager's getHeader() object is shared SDK state: record the detach here instead of deleting from it. */
 function clearParentSessionHeader(sessionManager: PiSessionManager): void {
-  const header = sessionManager.getHeader?.();
-  if (header !== undefined && header !== null) delete header.parentSession;
+  detachedSessionManagers.add(sessionManager);
 }
 
 function clearSessionQueue(session: PiAgentSession): void {
@@ -6027,6 +6129,164 @@ function historyMessages(session: PiAgentSession): unknown[] {
   return historyMessagesFromEntries(session.sessionManager.getBranch());
 }
 
+type TranscriptSource = { kind: "entries"; entries: unknown[] } | { kind: "descriptors" };
+
+function hasDescriptorApi(manager: PiSessionManager): boolean {
+  return manager.getBranchDescriptors !== undefined && manager.getEntry !== undefined;
+}
+
+function runtimeTranscriptSource(session: PiAgentSession): TranscriptSource {
+  return hasDescriptorApi(session.sessionManager)
+    ? { kind: "descriptors" }
+    : { kind: "entries", entries: session.sessionManager.getBranch() };
+}
+
+function descriptorRole(descriptor: PiEntryDescriptor): string | undefined {
+  if (descriptor.type === "message") return descriptor.role;
+  if (descriptor.type === "compaction" || descriptor.type === "branch_summary") return "system";
+  if (descriptor.type === "custom_message") return "custom";
+  return undefined;
+}
+
+/** Same display set as historyMessagesFromEntries; a custom_message without its display flag is a hard error, not a branch hydration. */
+function isDisplayableDescriptor(descriptor: PiEntryDescriptor): boolean {
+  if (descriptor.type === "message" || descriptor.type === "compaction" || descriptor.type === "branch_summary") return true;
+  if (descriptor.type !== "custom_message") return false;
+  if (descriptor.display === undefined) throw new Error(`Session descriptor ${descriptor.id} is missing its display flag`);
+  return descriptor.display;
+}
+
+interface BranchCountFacts {
+  entries: number;
+  messages: number;
+  user: number;
+  displayable: number;
+}
+
+/** Index-only branch counts; undefined when the manager has no descriptor API. */
+function branchCounts(manager: PiSessionManager): BranchCountFacts | undefined {
+  const counts = manager.getBranchCounts?.();
+  if (counts !== undefined) {
+    return { entries: counts.entries, messages: counts.byType["message"] ?? 0, user: counts.byRole["user"] ?? 0, displayable: counts.displayable };
+  }
+  const descriptors = manager.getBranchDescriptors?.();
+  if (descriptors === undefined) return undefined;
+  const facts: BranchCountFacts = { entries: descriptors.length, messages: 0, user: 0, displayable: 0 };
+  for (const descriptor of descriptors) {
+    if (descriptor.type === "message") facts.messages += 1;
+    if (descriptor.role === "user") facts.user += 1;
+    if (isDisplayableDescriptor(descriptor)) facts.displayable += 1;
+  }
+  return facts;
+}
+
+function branchEntryCount(manager: PiSessionManager): number {
+  return branchCounts(manager)?.entries ?? manager.getBranch().length;
+}
+
+function displayableBranchCount(manager: PiSessionManager): number | undefined {
+  return branchCounts(manager)?.displayable;
+}
+
+/** Entries from a branch position onward, hydrating only that interval when the index is available. */
+function branchEntriesFrom(manager: PiSessionManager, start: number): unknown[] {
+  const descriptors = manager.getBranchDescriptors?.();
+  if (descriptors === undefined || manager.getEntry === undefined) {
+    const branch = manager.getBranch();
+    return branch.length >= start ? branch.slice(start) : [];
+  }
+  if (descriptors.length < start) return [];
+  return descriptors.slice(start).map((descriptor) => {
+    const entry = manager.getEntry?.(descriptor.id);
+    if (entry === undefined) throw new Error(`Session entry ${descriptor.id} could not be read`);
+    return entry;
+  });
+}
+
+/** One branch entry by id: membership from the index, body only for the target. */
+function branchEntryById(manager: PiSessionManager, targetId: string): unknown {
+  const descriptors = manager.getBranchDescriptors?.();
+  if (descriptors === undefined || manager.getEntry === undefined) {
+    return manager.getBranch().find((candidate) => isRecord(candidate) && candidate["id"] === targetId);
+  }
+  return descriptors.some((descriptor) => descriptor.id === targetId) ? manager.getEntry(targetId) : undefined;
+}
+
+/** Bodies matching an index predicate, in branch/file order; falls back only on managers without the index. */
+function entriesWhere(manager: PiSessionManager, scope: "all" | "branch", match: (descriptor: PiEntryDescriptor) => boolean, fallbackMatch: (entry: unknown) => boolean): unknown[] {
+  const descriptors = scope === "branch" ? manager.getBranchDescriptors?.() : manager.getDescriptors?.();
+  if (descriptors !== undefined && manager.getEntry !== undefined) {
+    return descriptors.filter(match).map((descriptor) => manager.getEntry?.(descriptor.id)).filter((entry) => entry !== undefined);
+  }
+  const entries = scope === "branch" ? manager.getBranch() : (manager.getEntries?.() ?? manager.getBranch());
+  return entries.filter(fallbackMatch);
+}
+
+/** Bodies of one custom entry type only: candidate ids from the index, never a whole-history read. */
+function customEntriesOfType(manager: PiSessionManager, customType: string, scope: "all" | "branch" = "all"): unknown[] {
+  return entriesWhere(manager, scope, (descriptor) => descriptor.customType === customType, (entry) => isRecord(entry) && entry["customType"] === customType);
+}
+
+function hasExistingSessionContext(manager: PiSessionManager & { buildSessionContext?: () => { messages: readonly unknown[] } }): boolean {
+  const descriptors = manager.getContextDescriptors?.();
+  if (descriptors !== undefined) return descriptors.some((descriptor) => isDisplayableDescriptor(descriptor));
+  return (manager.buildSessionContext?.().messages.length ?? 0) > 0;
+}
+
+/**
+ * Page the transcript from descriptors: boundaries and totals come from the
+ * index, and only the page's entry bodies are read (plus the thinking-level
+ * change in effect at the page start, so assistant annotation stays exact).
+ */
+function pageFromDescriptors(manager: PiSessionManager, page: { before?: number; limit?: number } | undefined, echoMessages: readonly unknown[]): { messages: unknown[]; start: number; total: number } {
+  const descriptors = manager.getBranchDescriptors?.();
+  if (descriptors === undefined || manager.getEntry === undefined) throw new Error("Session descriptor index is unavailable");
+  const displayable: { descriptor: PiEntryDescriptor; branchIndex: number }[] = [];
+  descriptors.forEach((descriptor, branchIndex) => {
+    if (isDisplayableDescriptor(descriptor)) displayable.push({ descriptor, branchIndex });
+  });
+  const stubs: unknown[] = [...displayable.map(({ descriptor }) => ({ role: descriptorRole(descriptor) })), ...echoMessages.map(() => ({ role: "user" }))];
+  const selected = pageMessagesAtSafeBoundary(stubs, page);
+  const end = selected.start + selected.messages.length;
+  const descriptorSlice = displayable.slice(selected.start, Math.min(end, displayable.length));
+  const messages: unknown[] = [];
+  if (descriptorSlice.length > 0) {
+    const first = descriptorSlice[0]?.branchIndex ?? 0;
+    const last = descriptorSlice.at(-1)?.branchIndex ?? first;
+    const hydrate: unknown[] = [];
+    for (let index = first - 1; index >= 0; index -= 1) {
+      const prior = descriptors[index];
+      if (prior?.type === "thinking_level_change") {
+        hydrate.push(prior.thinkingLevel === undefined ? manager.getEntry(prior.id) : { type: "thinking_level_change", thinkingLevel: prior.thinkingLevel });
+        break;
+      }
+    }
+    for (let index = first; index <= last; index += 1) {
+      const descriptor = descriptors[index];
+      if (descriptor === undefined) continue;
+      if (!isDisplayableDescriptor(descriptor) && descriptor.type !== "thinking_level_change") continue;
+      if (descriptor.type === "thinking_level_change" && descriptor.thinkingLevel !== undefined) {
+        hydrate.push({ type: "thinking_level_change", thinkingLevel: descriptor.thinkingLevel });
+        continue;
+      }
+      const entry = manager.getEntry(descriptor.id);
+      if (entry === undefined) throw new Error(`Session entry ${descriptor.id} could not be read`);
+      hydrate.push(entry);
+    }
+    messages.push(...historyMessagesFromEntries(hydrate));
+  }
+  if (end > displayable.length) messages.push(...echoMessages.slice(Math.max(0, selected.start - displayable.length), end - displayable.length));
+  return { messages, start: selected.start, total: selected.total };
+}
+
+const detachedSessionManagers = new WeakSet<PiSessionManager>();
+
+/** Parent link as Pi Web should report it after a detach, without mutating the manager's shared header object. */
+function parentSessionPathOf(manager: PiSessionManager): string | undefined {
+  if (detachedSessionManagers.has(manager)) return undefined;
+  return manager.getHeader?.()?.parentSession;
+}
+
 function transcriptMessageCount(entries: readonly unknown[]): number {
   let count = 0;
   for (const entry of entries) {
@@ -6041,7 +6301,7 @@ function activeEditableTreeTargetParentId(
   activeLeafId: string | null,
 ): string | null | undefined {
   if (activeLeafId !== targetId) return undefined;
-  const entry = manager.getBranch().at(-1);
+  const entry = manager.getEntry?.(targetId) ?? manager.getBranch().at(-1);
   if (!isRecord(entry) || entry["id"] !== targetId) return undefined;
   const isUserMessage = entry["type"] === "message"
     && isRecord(entry["message"])

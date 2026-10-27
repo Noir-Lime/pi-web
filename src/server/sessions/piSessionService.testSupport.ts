@@ -26,7 +26,7 @@ import { InMemoryCredentialStore, type Credential, type CredentialStore } from "
 import type { GlobalSessionEvent, SessionNotificationSummaryEvent, SessionUiEvent } from "../../shared/apiTypes.js";
 import { SessionEventHub } from "../realtime/sessionEventHub.js";
 import { canonicalizeStoredCwd, cwdPathsEqual } from "../workingDirectory.js";
-import type { PiAgentSession, PiSessionListEntry, PiSessionManager, PiSessionRuntime, PiSessionServiceDependencies, ResolvedSessionFile } from "./piSessionService.js";
+import type { PiAgentSession, PiEntryDescriptor, PiSessionListEntry, PiSessionManager, PiSessionRuntime, PiSessionServiceDependencies, ResolvedSessionFile } from "./piSessionService.js";
 
 export class CapturingSessionEventHub extends SessionEventHub {
   readonly sessionEvents: { sessionId: string; event: SessionUiEvent }[] = [];
@@ -72,8 +72,37 @@ export interface TestSession extends PiAgentSession {
   getFollowUpMessages: () => readonly string[];
 }
 
-export function fakeSessionManager(cwd = "/workspace", patch: Partial<PiSessionManager> = {}): PiSessionManager {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function descriptorFromEntry(entry: unknown, index = 0): PiEntryDescriptor {
+  const record: Record<string, unknown> = isRecord(entry) ? entry : {};
+  const message = isRecord(record["message"]) ? record["message"] : undefined;
+  const content = message?.["content"];
+  const imageCount = Array.isArray(content) ? content.filter((block) => isRecord(block) && block["type"] === "image").length : 0;
   return {
+    id: typeof record["id"] === "string" && record["id"] !== "" ? record["id"] : `fake-entry-${String(index)}`,
+    parentId: typeof record["parentId"] === "string" ? record["parentId"] : null,
+    type: typeof record["type"] === "string" ? record["type"] : "",
+    ...(typeof message?.["role"] === "string" ? { role: message["role"] } : {}),
+    ...(typeof record["customType"] === "string" ? { customType: record["customType"] } : {}),
+    timestamp: typeof record["timestamp"] === "string" ? record["timestamp"] : "",
+    bytes: JSON.stringify(entry).length,
+    textChars: 0,
+    imageCount,
+    hasThinkingSignature: false,
+    ...(record["type"] === "custom_message" ? { display: record["display"] === true } : {}),
+    ...(record["type"] === "thinking_level_change" && typeof record["thinkingLevel"] === "string" ? { thinkingLevel: record["thinkingLevel"] } : {}),
+  };
+}
+
+export function fakeSessionManager(cwd = "/workspace", patch: Partial<PiSessionManager> = {}): PiSessionManager {
+  // Descriptor API derived from whatever branch the patch supplies, so tests
+  // exercise the lazy paths without a real store. The arrows read `manager`
+  // lazily, after the patch has been applied.
+  const indexed = (entries: readonly unknown[]) => entries.map((entry, index) => descriptorFromEntry(entry, index));
+  const manager: PiSessionManager = {
     getCwd: () => cwd,
     getSessionId: () => "session-1",
     getSessionFile: () => undefined,
@@ -82,8 +111,29 @@ export function fakeSessionManager(cwd = "/workspace", patch: Partial<PiSessionM
     branch: () => undefined,
     resetLeaf: () => undefined,
     appendSessionInfo: () => "/tmp/session.jsonl",
+    getDescriptors: () => indexed(manager.getEntries?.() ?? manager.getBranch()),
+    getBranchDescriptors: () => indexed(manager.getBranch()),
+    getContextDescriptors: () => indexed(manager.getBranch()),
+    getDescriptor: (id) => indexed(manager.getEntries?.() ?? manager.getBranch()).find((d) => d.id === id),
+    getEntry: (id) => {
+      const sources = [...(manager.getEntries === undefined ? [] : [manager.getEntries()]), manager.getBranch()];
+      for (const source of sources) {
+        const found = source.find((e) => isRecord(e) && e["id"] === id);
+        if (found !== undefined) return found;
+      }
+      const synthetic = /^fake-entry-(\d+)$/.exec(id);
+      if (synthetic === null) return undefined;
+      const index = Number(synthetic[1]);
+      for (const source of sources) {
+        const candidate = source[index];
+        if (candidate !== undefined && descriptorFromEntry(candidate, index).id === id) return candidate;
+      }
+      return undefined;
+    },
+    getBranchRevision: () => `fake:${String(manager.getBranch().length)}`,
     ...patch,
   };
+  return manager;
 }
 
 export function sessionRecord(id: string, cwd = "/workspace") {
